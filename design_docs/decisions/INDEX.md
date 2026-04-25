@@ -17,4 +17,4 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0006 | Database schema default neomagi | accepted | 2026-04-24 | `design_docs/decisions/0006-database-schema-default-neomagi.md` |
 | 0007 | Database hard dependency fail fast | accepted | 2026-04-24 | `design_docs/decisions/0007-database-hard-dependency-fail-fast.md` |
 | 0008 | Memory truth & workspace projection | accepted | 2026-04-25 | `design_docs/decisions/0008-memory-truth-closure-postgres-with-workspace-projection.md` |
-| 0009 | Use Pi Agent principles as agent engine | accepted | 2026-04-25 | `design_docs/decisions/0009-use-pi-agent-principles-as-agent-engine.md` |
+| 0009 | Pi CLI product equivalence contract | accepted | 2026-04-25 | `design_docs/decisions/0009-pi-cli-product-equivalence-contract.md` |
