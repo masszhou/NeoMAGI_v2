@@ -1,0 +1,2 @@
+{"type":"tool_execution_start","toolCallId":"call_read_1","toolName":"read","args":{"path":"src/main.py"}}
+{"type":"tool_execution_end","toolCallId":"call_read_1","toolName":"read","result":{"content":[{"type":"text","text":"def main(): pass\n"}],"details":{"truncation":null}},"isError":false}

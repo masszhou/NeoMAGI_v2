@@ -1,0 +1,1 @@
+{"message":{"role":"assistant","content":[{"type":"text","text":"OK."}],"api":"openai-completions","provider":"zai","model":"glm-4.6","usage":{"input":200000,"output":12,"cacheRead":10000,"cacheWrite":0,"totalTokens":210012,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1714060820000},"contextWindow":128000}

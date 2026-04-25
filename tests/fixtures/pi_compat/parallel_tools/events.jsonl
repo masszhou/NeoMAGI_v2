@@ -1,0 +1,4 @@
+{"type":"tool_execution_start","toolCallId":"call_read_a","toolName":"read","args":{"path":"a.py"}}
+{"type":"tool_execution_start","toolCallId":"call_grep_foo","toolName":"grep","args":{"pattern":"foo","path":"src/"}}
+{"type":"tool_execution_end","toolCallId":"call_grep_foo","toolName":"grep","result":{"content":[{"type":"text","text":"src/foo.py:1:foo()\n"}],"details":{"matchLimit":null,"truncation":null}},"isError":false}
+{"type":"tool_execution_end","toolCallId":"call_read_a","toolName":"read","result":{"content":[{"type":"text","text":"a = 1\n"}],"details":{"truncation":null}},"isError":false}

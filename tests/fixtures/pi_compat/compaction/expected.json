@@ -1,0 +1,1 @@
+{"type":"compaction","id":"01abc100","parentId":"01abc003","timestamp":"2026-04-25T10:00:03Z","summary":"## Goal\nUser asked to start and continue.\n## Progress\n### Done\nInitial response sent.\n## Next Steps\nContinue work.\n","firstKeptEntryId":"01abc003","tokensBefore":80120,"details":{"readFiles":["src/main.py"],"modifiedFiles":[]},"fromHook":false}
