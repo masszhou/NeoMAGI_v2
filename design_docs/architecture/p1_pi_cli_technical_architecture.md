@@ -655,30 +655,35 @@ All tools, built-in or extension-provided, are wrapped into the same runtime sha
 
 ### Built-In Tools
 
-Borrow Pi schemas for:
+Pi mono ships seven coding tools across two profiles (`packages/coding-agent/src/core/tools/index.ts`):
+
+Coding profile (`createCodingTools`, default for the LLM-facing toolset):
 
 | Tool | Params | Details |
 | --- | --- | --- |
 | `read` | `path`, `offset?`, `limit?` | `truncation?`; supports text and images |
-| `grep` | `pattern`, `path?`, `glob?`, `ignoreCase?`, `literal?`, `context?`, `limit?` | truncation, match limit, line truncation |
-| `find` | `pattern`, `path?`, `limit?` | truncation, result limit |
-| `ls` | `path?`, `limit?` | truncation, entry limit |
-| `write` | `path`, `content` | no details on success |
-| `edit` | `path`, `edits: [{oldText, newText}]` | unified diff, first changed line |
 | `bash` | `command`, `timeout?` | truncation, full output path |
+| `edit` | `path`, `edits: [{oldText, newText}]` | unified diff, first changed line |
+| `write` | `path`, `content` | no details on success |
 
-NeoMAGI P1 adds:
+Read-only profile (`createReadOnlyTools`, opt-in for read-only sessions):
 
 | Tool | Params | Details |
 | --- | --- | --- |
-| `download` | `url`, `path`, `sha256?`, `timeout?` | bytes, mime type, checksum, truncation/error metadata |
+| `read` | (same as above) | (same as above) |
+| `grep` | `pattern`, `path?`, `glob?`, `ignoreCase?`, `literal?`, `context?`, `limit?` | truncation, match limit, line truncation |
+| `find` | `pattern`, `path?`, `limit?` | truncation, result limit |
+| `ls` | `path?`, `limit?` | truncation, entry limit |
+
+In the default coding profile the model reaches `grep` / `find` / `ls` semantics through `bash`; the dedicated tools are only injected when an entrypoint opts into the read-only profile.
+
+NeoMAGI P1 does not add new built-in tools beyond Pi's seven. In particular, NeoMAGI deliberately refuses to ship a built-in `download` (or other network-fetch) tool: bringing bytes into the workspace must go through `bash` so it inherits one shell-policy boundary instead of forking a second mutation surface. See § I in `pi_behavior_matrix.md` for this anti-feature.
 
 Policy baseline:
 
 - `read/grep/find/ls` are read actions and still audited.
-- `write/edit/download` are file mutation actions and require path allow/deny evaluation.
-- `bash` uses non-sudo default policy; sudo, destructive commands, privileged paths, and long-running commands are blocked or require explicit confirmation depending on policy mode.
-- network download must only write into allowed paths and should reject non-public or unsupported schemes by default.
+- `write/edit` are file mutation actions and require path allow/deny evaluation.
+- `bash` uses non-sudo default policy; sudo, destructive commands, privileged paths, and long-running commands are blocked or require explicit confirmation depending on policy mode. Network fetches (`curl` / `wget` / package managers) ride on this same policy — there is no separate network-tool policy lane.
 - all tools support abort signal and timeout.
 - output truncation metadata must be recorded in `ToolResultMessage.details` and `agent_tool_executions.truncation`.
 - full untruncated output may be stored according to policy, but the model receives trimmed content.
