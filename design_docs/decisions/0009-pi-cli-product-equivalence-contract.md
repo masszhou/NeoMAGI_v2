@@ -7,6 +7,8 @@ doc_id_assigned_at: 2026-04-25T17:22:38+02:00
 
 - Status: accepted
 - Date: 2026-04-25
+- Roadmap: `design_docs/roadmap/p1_engine_pi.md`
+- Architecture: `design_docs/architecture/p1_pi_cli_technical_architecture.md`
 
 ## 选了什么
 
@@ -14,7 +16,7 @@ doc_id_assigned_at: 2026-04-25T17:22:38+02:00
 - 产品体验等价：NeoMAGI CLI 应覆盖 Pi CLI 的核心用户工作流，包括 TUI 对话、slash commands、代码库工具、session、compaction、extensions、skills、settings 和 structured session export。
 - Contract-stable：优先保持 Pi mono 的核心 contract 可对照、可测试、可迁移，包括 message、content block、assistant stream event、agent event、tool schema、extension hook、session entry、usage/cost schema 和 opaque continuation fields。
 - 不追求逐行实现兼容，不承诺跟随 pi-mono 主线每个 commit 的实现细节或 UI 细节。
-- `main@97a38bf6` 作为 P1 初始阅读和 fixture 基线，不作为永久兼容承诺。
+- `main@97a38bf6`（fetch 时间 2026-04-25）作为 P1 初始阅读和 fixture 基线，不作为永久兼容承诺；升级基线需要独立 ADR 评审，不在主分支上自动跟随。
 - `pi-package` install/update/remove 子系统不进入 P1 core；可作为 P1 stretch 或后续阶段。
 - `pi-share-hf` 不在 pi-mono 内，P1 不内建 Hugging Face 上传或外部发布流程；P1 只提供可被类似工具消费的 structured export schema。
 
@@ -42,3 +44,4 @@ doc_id_assigned_at: 2026-04-25T17:22:38+02:00
 - 架构文档必须把 Pi-compatible contract 与 NeoMAGI-native 实现分开描述。
 - JSONL、Postgres、export/import 必须保留 opaque continuation fields，例如 `thinkingSignature`、`thoughtSignature`、`responseId`。
 - NeoMAGI 可以增强 Pi 默认行为，例如 shell policy、audit、Postgres session truth，但这些增强项必须标注为 NeoMAGI-specific，不写成 Pi 原生能力。
+- 子决策由独立 ADR 承担，不并入本 ADR：协议层 Python 类型选型、auth credential 存储位置、Pi 基线升级策略、Anthropic stealth tool naming 是否复刻、provider routing schema 复刻范围。
