@@ -1,12 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "neomagi-v2"
 version = "0.1.0"
-description = "Add your description here"
+description = "NeoMAGI v2 — local-first personal agent CLI"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "pydantic>=2,<3",
+]
 
 [dependency-groups]
 dev = [
     "ruff==0.15.11",
+    "pytest>=8",
+    "hypothesis>=6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/ai_provider",
+    "src/agent_core",
+    "src/cli",
+    "src/tui",
+    "src/storage",
+    "src/policy",
+    "src/infra",
 ]

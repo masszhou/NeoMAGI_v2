@@ -1,7 +1,7 @@
 """
 Complexity governance guard for tracked code files.
 看 CLI 帮助
-uv run python -m src.infra.complexity_guard --help
+uv run python -m infra.complexity_guard --help
 """
 
 from __future__ import annotations
