@@ -7,7 +7,7 @@ doc_id_assigned_at: 2026-04-25T17:04:59+02:00
 
 ## 状态
 
-- Status: draft
+- Status: accepted
 - Date: 2026-04-25
 - Roadmap: `design_docs/roadmap/p1_engine_pi.md`
 - Reference repo: `/Users/zhiliangzhou/devel/pi-mono`
@@ -22,7 +22,7 @@ doc_id_assigned_at: 2026-04-25T17:04:59+02:00
 | --- | --- |
 | message / content block / assistant stream | `packages/ai/src/types.ts`, `packages/ai/src/stream.ts`, `packages/ai/src/utils/event-stream.ts` |
 | provider / model registry | `packages/ai/src/models.ts`, `packages/ai/src/api-registry.ts`, `packages/coding-agent/src/core/model-registry.ts` |
-| prompt cache | `packages/ai/src/types.ts`, `packages/ai/src/providers/anthropic.ts`, `packages/ai/src/providers/openai-responses.ts`, `packages/ai/src/providers/openai-completions.ts`, `packages/ai/src/providers/amazon-bedrock.ts`, `packages/ai/src/providers/faux.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, `packages/coding-agent/src/core/sdk.ts` |
+| prompt cache / overflow | `packages/ai/src/types.ts`, `packages/ai/src/providers/anthropic.ts`, `packages/ai/src/providers/openai-responses.ts`, `packages/ai/src/providers/openai-completions.ts`, `packages/ai/src/providers/amazon-bedrock.ts`, `packages/ai/src/providers/faux.ts`, `packages/ai/src/utils/overflow.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts`, `packages/coding-agent/src/core/sdk.ts` |
 | agent state / event / loop | `packages/agent/src/types.ts`, `packages/agent/src/agent.ts`, `packages/agent/src/agent-loop.ts` |
 | coding session / SDK | `packages/coding-agent/src/core/agent-session.ts`, `packages/coding-agent/src/core/sdk.ts`, `packages/coding-agent/src/core/agent-session-runtime.ts` |
 | session JSONL schema | `packages/coding-agent/src/core/session-manager.ts`, `packages/coding-agent/docs/session.md` |
@@ -214,7 +214,7 @@ AssistantMessageEvent =
 
 Rules:
 
-- stream emits `start` before deltas whenever the provider supports partial messages.
+- stream always emits `start` before any delta, thinking, or tool-call event. A provider with no partial output emits `start` then `done` directly. Consumers may rely on `start` being the first event of every assistant turn.
 - `partial` is the full current assistant message snapshot, not only the delta.
 - final event is exactly one of `done` or `error`.
 - `result()` / equivalent async finalizer returns the same final `AssistantMessage` carried by `done.message` or `error.error`.
@@ -231,7 +231,7 @@ Model = {
     "reasoning": bool,
     "input": list["text" | "image"],
     "cost": {"input": float, "output": float, "cacheRead": float, "cacheWrite": float},
-    "contextWindow": int,
+    "contextWindow": int,  # required for silent overflow recovery and auto compaction
     "maxTokens": int,
     "headers"?: dict[str, str],
     "compat"?: dict,
@@ -244,13 +244,22 @@ Prompt cache contract:
 
 - `cacheRetention` is `none | short | long`; default is `short`. A compatibility env/config value equivalent to Pi's `PI_CACHE_RETENTION=long` may promote default retention to `long`.
 - Pi `sessionId` is the provider cache affinity parameter passed from `AgentSession` through `Agent` / agent loop into each provider call. NeoMAGI should distinguish the durable Postgres `session_id` from the provider `cache_affinity_id`; the default mapping may be the durable id only if it satisfies provider length/charset rules, otherwise use a stable sanitized or hashed value. `resume` keeps the affinity id; `new` / `fork` / `clone` must explicitly define whether they keep or mint it.
+- `cacheRetention == "none"` disables all provider cache/session propagation: do not pass `sessionId`, `prompt_cache_key`, `cache_control`, `cachePoint`, `prompt_cache_retention`, or affinity headers. This is a stronger contract than merely omitting provider-specific cache annotations.
 - OpenAI Responses and direct OpenAI Chat Completions map `sessionId` to `prompt_cache_key`; `long` maps to provider retention such as `24h` where supported.
+- OpenAI-compatible providers may also receive session affinity through HTTP headers when `compat.sendSessionAffinityHeaders == true`: `session_id`, `x-client-request-id`, and `x-session-affinity` all carry the provider cache affinity id. This header path coexists with field-based `prompt_cache_key` where the provider supports both.
 - Anthropic maps retention to `cache_control` on system prompt, last tool definition, and last user/assistant text block; direct Anthropic `long` maps to a longer TTL where supported.
 - OpenAI-compatible providers may opt into Anthropic-style `cache_control` through model/provider compat metadata.
 - Bedrock Converse maps retention to `cachePoint` blocks for supported Claude models.
 - Faux/test provider should simulate prompt cache by stable `sessionId` and common-prefix accounting so cache fixtures run without real provider calls.
 - Prompt cache state remains provider-side optimization. NeoMAGI persists settings, affinity ids, request metadata, and returned usage/cost only; it must not treat provider cache contents as durable truth.
-- Usage normalization must keep Pi semantics: `input` excludes `cacheRead` and `cacheWrite`; `totalTokens = input + output + cacheRead + cacheWrite`; OpenAI-compatible providers that report cached tokens as read+write must be normalized to avoid double counting.
+- Usage normalization must keep Pi semantics: `input` excludes `cacheRead` and `cacheWrite`; `totalTokens = input + output + cacheRead + cacheWrite`. Provider adapters must subtract cached tokens before adding `cacheRead` / `cacheWrite`, because OpenAI-compatible and proxy providers often report `prompt_tokens_details.cached_tokens` while also including those tokens in `prompt_tokens`. Lock this with one raw-usage-to-normalized-usage fixture per provider family.
+
+Overflow and context-window contract:
+
+- `model.contextWindow` is required for custom models. It drives auto compaction thresholds and silent overflow detection; leaving it unset or inaccurate disables one of Pi's recovery paths.
+- Overflow detection has two paths: provider error messages matching Pi's overflow pattern set, and silent overflow when `AssistantMessage.stopReason == "stop"` while `usage.input + usage.cacheRead > model.contextWindow`.
+- Non-overflow errors such as rate limits, throttling, and temporary service availability are explicitly excluded from overflow matching; otherwise retry logic can compact forever on transient capacity failures.
+- Python must mirror Pi's `OVERFLOW_PATTERNS` and `NON_OVERFLOW_PATTERNS` sets as versioned fixtures, including Anthropic, OpenAI, Google, xAI, Groq, OpenRouter, Bedrock, llama.cpp, LM Studio, Copilot, MiniMax, Kimi, Mistral, Cerebras, Ollama, and z.ai variants.
 
 Provider registry contract:
 
@@ -293,6 +302,11 @@ AgentState = {
 - `compactionSummary`
 
 `transform_context(messages, signal)` runs at `AgentMessage` level. `convert_to_llm(messages)` converts to `Message[]` at provider boundary.
+
+Default boundary behavior:
+
+- `neomagi_agent_core` should use Pi's safe default: `convert_to_llm()` only forwards `user`, `assistant`, and `toolResult` messages.
+- `neomagi_cli.core` / coding-agent layer owns product-specific conversion for `bashExecution`, `custom`, `branchSummary`, and `compactionSummary`, usually by turning them into synthetic user-visible context or dropping them when they should not reach the model.
 
 ### Agent API
 
@@ -457,7 +471,7 @@ Built-in commands to carry over:
 | `/reload` | reload keybindings/resources/extensions |
 | `/quit` | exit |
 
-Extension commands execute before skill/template expansion and may run immediately even while streaming. Skill/template commands are expanded before prompt/steer/follow-up delivery. Queued messages must reject extension commands unless called via `prompt()`.
+Command resolution priority is `builtin > extension > prompt template > skill namespace`. `/skill:name` is an independent namespace and does not conflict with built-ins or extension commands; `enableSkillCommands` is the global switch for registering skills as slash commands and defaults to `true`. Extension commands may run immediately even while streaming. Skill/template commands are expanded before prompt/steer/follow-up delivery. Queued messages must reject extension commands unless called via `prompt()`.
 
 ## Durable Session Architecture
 
@@ -469,7 +483,7 @@ Keep Pi entry names for import/export:
 SessionHeader = {
     "type": "session",
     "version": 3,
-    "id": uuid,
+    "id": uuid,          # Pi session id is uuidv7-shaped
     "timestamp": iso8601,
     "cwd": str,
     "parentSession"?: str,
@@ -482,6 +496,13 @@ SessionEntryBase = {
     "timestamp": iso8601,
 }
 ```
+
+Timestamp units must stay Pi-compatible:
+
+- `SessionHeader.timestamp` and `SessionEntryBase.timestamp` are ISO8601 strings.
+- `AgentMessage.timestamp` is Unix milliseconds.
+- `BashExecutionMessage.timestamp` is also Unix milliseconds even when wrapped by a `SessionEntry` with an ISO8601 timestamp.
+- serializers must preserve this dual-unit shape so exported JSONL remains readable by Pi-compatible tooling.
 
 Entry types:
 
@@ -531,7 +552,8 @@ agent_session_entries(
   occurred_at timestamptz not null,
   payload jsonb not null,
   context_participates boolean not null,
-  created_at timestamptz not null
+  created_at timestamptz not null,
+  unique(session_id, pi_export_id)
 )
 
 agent_messages(
@@ -594,9 +616,12 @@ Recommended additional tables:
 Storage rules:
 
 - every persisted entry has a canonical DB UUID and a Pi-compatible `pi_export_id`.
+- `pi_export_id` is unique only within a session. It is not globally unique because Pi's 8-hex entry ids are session-local.
+- new NeoMAGI entries should generate a session-local 8-hex export id with collision retry to match Pi's short-entry-id behavior; the DB UUID remains the internal identity.
 - `payload` stores exact import/export-compatible entry JSON minus DB-only metadata.
 - write DB first; JSONL export/projection is generated later.
-- import validates JSONL, allocates DB UUIDs, preserves Pi IDs in `pi_export_id`, and reconstructs parent links.
+- import validates JSONL, migrates v1/v2 entries to the current Pi v3 shape in memory, then writes only v3-shaped entries to DB.
+- import allocates DB UUIDs, preserves Pi IDs in `pi_export_id`, reconstructs parent links, and uses `(session_id, pi_export_id)` for idempotent upsert when re-importing the same logical session. Short id collisions across different sessions do not conflict.
 - production and development main paths fail fast when DB is unavailable.
 
 ## Tool Registry, Policy, Sandbox, Audit
@@ -623,6 +648,8 @@ ToolDefinition = {
 ```
 
 All tools, built-in or extension-provided, are wrapped into the same runtime shape and exposed through `Agent.state.tools`.
+
+`prepareArguments` runs before schema validation. Its return value must still pass the tool parameter schema; the hook exists to repair non-canonical argument shapes produced by an LLM, not to bypass validation.
 
 ### Built-In Tools
 
@@ -653,6 +680,7 @@ Policy baseline:
 - all tools support abort signal and timeout.
 - output truncation metadata must be recorded in `ToolResultMessage.details` and `agent_tool_executions.truncation`.
 - full untruncated output may be stored according to policy, but the model receives trimmed content.
+- file mutation tools such as `write` and `edit` should share a wrapper-level mutation queue, matching Pi's `file-mutation-queue.ts`, so parallel tool batches cannot race multiple writes into the same working tree. This queue is a separate concurrency safety layer from `executionMode`.
 
 ### Policy Contract
 
@@ -710,24 +738,67 @@ Command context additionally exposes:
 - `switch_session(path)`
 - `reload()`
 
+### ExtensionAPI Surface
+
+Python naming may use snake_case, but the exposed protocol must cover Pi's complete API surface:
+
+| Pi API | Python mirror | Contract |
+| --- | --- | --- |
+| `on(event, handler)` | `on(event, handler)` | subscribe to typed extension events |
+| `registerTool(tool)` | `register_tool(tool)` | add LLM-callable tool through policy/audit wrapper |
+| `registerCommand(name, options)` | `register_command(name, options)` | add slash command after builtin priority |
+| `registerShortcut(keyId, {description?, handler})` | `register_shortcut(key_id, ...)` | register runtime keybinding |
+| `registerFlag(name, {description?, type, default?})` | `register_flag(name, ...)` | register CLI/runtime flag |
+| `getFlag(name)` | `get_flag(name)` | read registered flag value |
+| `registerMessageRenderer(customType, renderer)` | `register_message_renderer(custom_type, renderer)` | render `CustomMessageEntry`; separate from tool renderers |
+| `sendMessage(message, options?)` | `send_message(message, options)` | append custom message; may trigger or queue a turn depending options |
+| `sendUserMessage(content, {deliverAs?})` | `send_user_message(content, deliver_as)` | send real user message and always trigger a full turn; streaming delivery is `steer` or `followUp` |
+| `appendEntry(customType, data?)` | `append_entry(custom_type, data)` | append durable extension state that is not sent to the LLM |
+| `setSessionName(name)` / `getSessionName()` | `set_session_name()` / `get_session_name()` | session display metadata |
+| `setLabel(entryId, label?)` | `set_label(entry_id, label)` | bookmark or clear an entry label |
+| `exec(command, args, options?)` | `exec(command, args, options)` | extension shell helper; still policy/audit mediated and distinct from user bash/tool bash |
+| `getActiveTools()` / `setActiveTools(toolNames)` | `get_active_tools()` / `set_active_tools()` | runtime active tool set |
+| `getAllTools()` | `get_all_tools()` | inspect all configured tools and schemas |
+| `getCommands()` | `get_commands()` | inspect slash commands visible in this session |
+| `setModel(model)` / `getThinkingLevel()` / `setThinkingLevel(level)` | `set_model()` / `get_thinking_level()` / `set_thinking_level()` | runtime model and thinking controls |
+| `registerProvider(name, config)` / `unregisterProvider(name)` | `register_provider()` / `unregister_provider()` | add, override, or remove model provider integrations |
+| `events: EventBus` | `events` | shared event bus for extension-to-extension communication |
+
+### Module-Level Helpers
+
+These helpers are not methods on the `ExtensionAPI` object:
+
+- `createAssistantMessageEventStream` is a `pi-ai` package helper for building Pi-compatible assistant streams. Python should expose it from `neomagi_ai`, not as `pi.create_assistant_message_event_stream(...)`.
+- `defineTool` is an extension package helper that preserves static typing/generic inference for top-level tool definitions. Python may expose `neomagi_cli.extensions.define_tool(...)`, but it must not imply an ExtensionAPI instance method unless a deliberate compatibility alias is introduced.
+
 ### UI Primitives
 
-Mirror Pi:
+Mirror Pi's full `ExtensionUIContext`:
 
-- `select(title, options, opts?)`
-- `confirm(title, message, opts?)`
-- `input(title, placeholder?, opts?)`
-- `notify(message, type?)`
-- `set_status(key, text?)`
-- `set_working_message(message?)`
-- `set_widget(key, content?, placement?)`
-- `set_footer(factory?)`
-- `set_header(factory?)`
-- `set_title(title)`
-- `custom(factory, options?)`
-- `editor(title, prefill?)`
-- `set_editor_text(text)`
-- `get_editor_text()`
+| Pi UI API | Python mirror | Notes |
+| --- | --- | --- |
+| `select(title, options, opts?)` | `select(...)` | selection dialog |
+| `confirm(title, message, opts?)` | `confirm(...)` | confirmation dialog |
+| `input(title, placeholder?, opts?)` | `input(...)` | text input dialog |
+| `notify(message, type?)` | `notify(...)` | `info | warning | error` |
+| `onTerminalInput(handler)` | `on_terminal_input(handler)` | raw stdin listener; returns unsubscribe |
+| `setStatus(key, text?)` | `set_status(key, text)` | status/footer text |
+| `setWorkingMessage(message?)` | `set_working_message(message)` | streaming working text |
+| `setWorkingIndicator(options?)` | `set_working_indicator(options)` | custom spinner; `frames: []` hides indicator |
+| `setHiddenThinkingLabel(label?)` | `set_hidden_thinking_label(label)` | hidden thinking block label |
+| `setWidget(key, content?, options?)` | `set_widget(...)` | above/below editor widget |
+| `setFooter(factory?)` | `set_footer(factory)` | custom footer component |
+| `setHeader(factory?)` | `set_header(factory)` | startup/header component |
+| `setTitle(title)` | `set_title(title)` | terminal/tab title |
+| `custom(factory, options?)` | `custom(factory, options)` | focused custom component / overlay |
+| `pasteToEditor(text)` | `paste_to_editor(text)` | paste semantics, including large paste collapse behavior |
+| `setEditorText(text)` | `set_editor_text(text)` | replace editor buffer |
+| `getEditorText()` | `get_editor_text()` | read editor buffer |
+| `editor(title, prefill?)` | `editor(title, prefill)` | multi-line editor dialog |
+| `setEditorComponent(factory?)` | `set_editor_component(factory)` | replace the core editor, e.g. vim mode or form editor |
+| `theme` | `theme` | current theme |
+| `getAllThemes()` / `getTheme(name)` / `setTheme(theme)` | `get_all_themes()` / `get_theme()` / `set_theme()` | theme discovery and switching |
+| `getToolsExpanded()` / `setToolsExpanded(expanded)` | `get_tools_expanded()` / `set_tools_expanded()` | query/toggle tool output expansion state |
 
 RPC and print modes must provide non-interactive or remote equivalents instead of silently dropping requests.
 
@@ -747,10 +818,14 @@ Result semantics:
 
 - `input` can `continue`, `transform`, or `handled`.
 - `context` can replace message list for this provider call only.
-- `before_agent_start` can append a persistent custom message and/or replace the system prompt for the turn.
-- `tool_call` can mutate input in place and can block.
+- `before_agent_start` can append persistent custom messages and/or replace the system prompt for the turn. Multiple returned `message` values append into the pending list; `systemPrompt` is chained in extension load order, so each later handler receives the previous handler's replacement.
+- `tool_call` / `tool_result` are discriminated unions by `toolName`: `bash`, `read`, `edit`, `write`, `grep`, `find`, `ls`, plus `custom`. Built-in branches expose typed input/details schemas and should have Python type guards equivalent to `isToolCallEventType("bash", event)`.
+- `tool_call.event.input` is mutable in place. Later handlers see earlier mutations, handlers run in extension load order, and no second schema validation is performed after mutation. Blocking still returns `{block, reason}`.
 - `tool_result` can replace content, details, or error flag.
-- session-before events can cancel or customize compaction/tree summary.
+- `session_before_switch` returns `{cancel?: boolean}`.
+- `session_before_fork` returns `{cancel?: boolean, skipConversationRestore?: boolean}`.
+- `session_before_compact` returns `{cancel?: boolean, compaction?: CompactionResult}`; providing `compaction` fully replaces Pi's default compaction behavior.
+- `session_before_tree` returns `{cancel?: boolean, summary?: {summary: string, details?: unknown}, customInstructions?: string, replaceInstructions?: boolean, label?: string}`.
 
 Failure isolation:
 
@@ -822,11 +897,20 @@ Settings schema should mirror Pi fields where useful:
 - retry: `enabled`, `maxRetries`, `baseDelayMs`, `maxDelayMs`
 - terminal: `showImages`, `imageWidthCells`, `clearOnShrink`
 - images: `autoResize`, `blockImages`
+- skills: `enableSkillCommands`
 - shell: `shellPath`, `shellCommandPrefix`
 - resources: `packages`, `extensions`, `skills`, `prompts`, `themes`
 - model cycling: `enabledModels`
 - TUI: `doubleEscapeAction`, `treeFilterMode`, `showHardwareCursor`, `editorPaddingX`, `autocompleteMaxVisible`, markdown settings
 - `sessionDir` only controls projection/export/import location; it does not replace DB truth.
+
+Important defaults and behavioral settings:
+
+- retry defaults are `enabled=true`, `maxRetries=3`, `baseDelayMs=2000`, `maxDelayMs=60000`; Pi uses exponential backoff `delayMs = baseDelayMs * 2 ** (attempt - 1)` and passes `maxDelayMs` down to provider retry delay handling.
+- `enableSkillCommands` defaults to `true` and is the product-level switch for exposing skills through the `/skill:name` namespace.
+- image behavior has three distinct controls: `terminal.showImages` gates inline terminal image capability, `terminal.imageWidthCells` sets rendered image width, and `terminal.clearOnShrink` controls resize redraw behavior.
+- model input image behavior is separate: `images.autoResize` defaults to `true` and resizes outbound images to a 2000x2000 max where Pi does so; `images.blockImages` defaults to `false` and prevents all images from being sent to providers when enabled.
+- settings parity backlog includes lower-priority Pi fields such as `lastChangelogVersion`, `hideThinkingBlock`, `quietStartup`, `npmCommand`, `collapseChangelog`, `enableInstallTelemetry`, and `thinkingBudgets`. P1 does not need to honor all of them for the demo, but a Pi-compatible settings importer should preserve unknown fields.
 
 Config layering:
 
@@ -922,7 +1006,10 @@ Compaction rules:
 - repeated compaction includes previous summary and surviving messages.
 - split-turn compaction is supported when one turn exceeds keep budget.
 - append `compaction` entry with `summary`, `firstKeptEntryId`, `tokensBefore`, `details`, `fromHook`.
-- context overflow recovery retries once after compaction; if the compacted context still overflows, or the safe compression budget is below threshold, return a clear fail-fast error instead of looping.
+- context overflow recovery covers both explicit provider overflow errors and silent overflow detected from usage exceeding `model.contextWindow`.
+- overflow recovery tracks the retry budget for the current LLM call: first overflow detection triggers compaction plus one retry; if that retry still overflows, fail fast. The next successful non-overflow LLM call resets the budget. A long session can enter overflow recovery multiple times, but each new recovery must be separated by a successful call.
+- if the compacted context still overflows, or the safe compression budget is below threshold, return a clear fail-fast error.
+- `<read-files>` and `<modified-files>` are accumulated from historical `read`, `edit`, and `write` tool-call arguments. NeoMAGI policy/audit wrappers must preserve those args for the extractor, otherwise compaction loses file context.
 
 Branch summary rules:
 
@@ -960,14 +1047,15 @@ Commands to carry over:
 
 Response rule:
 
-- command response reports acceptance/rejection only.
-- after acceptance, runtime failures are reported through events/messages, not a second response.
+- synchronous commands such as `get_state`, `get_messages`, `get_session_stats`, `get_commands`, and `get_available_models` return their final result directly in `response.data`.
+- asynchronous commands such as `prompt`, `steer`, `follow_up`, `new_session`, `switch_session`, `fork`, `clone`, `compact`, and `bash` return acceptance/rejection first; runtime progress, completion, and failures are reported through the event/message stream.
+- after an asynchronous command is accepted, the server must not send a second command response for its runtime outcome.
 
 Extension UI over RPC:
 
 - emit `extension_ui_request` with id and method.
 - client returns `extension_ui_response`.
-- supported methods: select, confirm, input, editor, notify, setStatus, setWidget, setTitle, set_editor_text.
+- method names should cover the same `ExtensionUIContext` surface as interactive mode where meaningful: dialogs, editor text/paste operations, status/widget/title updates, theme/tool expansion controls, and custom component fallbacks.
 
 JSON mode outputs session header first, then `AgentSessionEvent` objects.
 
@@ -1035,7 +1123,18 @@ P1-M0 should create fixture directories for:
 - `model_change`
 - `thinking_level_change`
 - `extension_custom_message`
+- `extension_api_surface`
+- `extension_tool_event_mutation`
 - `rpc_prompt_flow`
+- `rpc_sync_response`
+- `cache_retention_none`
+- `session_affinity_headers`
+- `usage_cache_normalization`
+- `overflow_error_patterns`
+- `silent_overflow`
+- `prepare_arguments_repair`
+- `before_agent_start_chained_systemprompt`
+- `session_before_compact_extension_replace`
 
 Fixtures should be Pi-compatible JSON objects, not mock-only Python objects. TUI mock playback and runtime tests must share them.
 
@@ -1044,7 +1143,10 @@ Fixtures should be Pi-compatible JSON objects, not mock-only Python objects. TUI
 - Python extension packaging: use Python modules first, then optionally support Pi package manifest compatibility for resource discovery.
 - DB schema physical normalization: whether to keep all entry payloads in one append-only table only, or also materialize role/tool-specific tables from day one.
 - shell sandbox backend: local subprocess policy first, with future container/SSH adapters.
-- JSONL import conflict handling: preserve original Pi IDs as `pi_export_id`; decide whether duplicate imported sessions create new sessions or merge with known `source_hash`.
+- JSONL duplicate import UX: the storage contract is `(session_id, pi_export_id)` upsert after v3 migration; still decide whether the UI offers "merge into existing", "new copy", or "replace projection" when `source_hash` matches.
+- Anthropic compatibility: decide whether NeoMAGI should reproduce Pi's Claude Code stealth tool-name mapping for Anthropic, or expose canonical tool names without that compatibility shim.
+- Auth credential storage: keep Pi-style local `auth.json` plus file lock, or store credentials in Postgres to match NeoMAGI session truth. This interacts with the database hard-dependency fail-fast ADR boundary.
+- Provider routing schema: fully mirror OpenRouter and Vercel AI Gateway routing options, or keep those compat fields as opaque pass-through until provider-routing UX is in scope.
 - UI framework choice: implement Pi-style TUI natively or wrap an existing Python TUI library while keeping Pi event contract unchanged.
 
 ## P1 Implementation Acceptance
