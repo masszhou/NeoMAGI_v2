@@ -1154,7 +1154,7 @@ Fixtures should be Pi-compatible JSON objects, not mock-only Python objects. TUI
 - Anthropic compatibility: decide whether NeoMAGI should reproduce Pi's Claude Code stealth tool-name mapping for Anthropic, or expose canonical tool names without that compatibility shim.
 - Auth credential storage: keep Pi-style local `auth.json` plus file lock, or store credentials in Postgres to match NeoMAGI session truth. This interacts with the database hard-dependency fail-fast ADR boundary.
 - Provider routing schema: fully mirror OpenRouter and Vercel AI Gateway routing options, or keep those compat fields as opaque pass-through until provider-routing UX is in scope.
-- UI framework choice: implement Pi-style TUI natively or wrap an existing Python TUI library while keeping Pi event contract unchanged.
+- UI framework choice: resolved by ADR-0015; implement native ANSI Pi-style TUI runtime with `wcwidth`, not a Python TUI framework.
 
 ## P1 Implementation Acceptance
 

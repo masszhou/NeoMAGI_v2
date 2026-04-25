@@ -23,3 +23,4 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0012 | Python-native extension MVP boundary | accepted | 2026-04-25 | `design_docs/decisions/0012-python-native-extension-mvp-boundary.md` |
 | 0013 | Python async for Pi Promise extension methods | accepted | 2026-04-25 | `design_docs/decisions/0013-python-async-for-pi-promise-extension-methods.md` |
 | 0014 | Extend async protocol rule to extension UI context | accepted | 2026-04-25 | `design_docs/decisions/0014-extend-async-protocol-rule-to-extension-ui-context.md` |
+| 0015 | Native ANSI TUI runtime | accepted | 2026-04-25 | `design_docs/decisions/0015-native-ansi-tui-runtime.md` |
