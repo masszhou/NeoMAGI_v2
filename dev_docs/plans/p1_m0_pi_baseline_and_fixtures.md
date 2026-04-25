@@ -27,7 +27,7 @@ In scope:
 
 - 按 ADR-0011 落实 pi-mono `97a38bf6` 基线的文件级路径与行号索引。
 - 产出完整 Pi CLI behavior matrix。
-- 建立 Python 包骨架（`neomagi_ai` / `neomagi_agent_core` / `neomagi_cli.core` / `neomagi_cli.tools` / `neomagi_cli.extensions` / `neomagi_tui` / `neomagi_storage` / `neomagi_policy`）。
+- 建立 Python 包骨架（`ai_provider` / `agent_core` / `cli.core` / `cli.tools` / `cli.extensions` / `tui` / `storage` / `policy`）。
 - 按 ADR-0010 用 pydantic v2 实现 Pi 协议类型（content block / message / event / session entry / extension types）。
 - 复刻 `OVERFLOW_PATTERNS` / `NON_OVERFLOW_PATTERNS` 与 usage 归一化常量。
 - 在 `tests/fixtures/pi_compat/` 建 26 条兼容性 fixture 目录骨架，并交付至少 8 条核心 fixture 含 `input` + `expected`。
@@ -45,10 +45,10 @@ Out of scope（属于 M1+）:
 
 | ID | 工作项 | 产出 |
 | --- | --- | --- |
-| W0 | 包骨架 + lint gate | `src/neomagi_*/__init__.py` + `pyproject.toml` 注册 + `just lint` 通过 |
+| W0 | 包骨架 + lint gate | `src/<pkg>/__init__.py` + `pyproject.toml` 注册 + `just lint` 通过 |
 | W1 | Behavior matrix | `design_docs/architecture/pi_behavior_matrix.md` |
-| W2 | 协议类型声明 | `src/neomagi_ai/types.py`、`src/neomagi_agent_core/types.py`、`src/neomagi_cli/core/session_types.py`、`src/neomagi_cli/extensions/types.py` |
-| W3 | Overflow + usage 常量 | `src/neomagi_ai/overflow.py`、`src/neomagi_ai/usage.py` + 单测 |
+| W2 | 协议类型声明 | `src/ai_provider/types.py`、`src/agent_core/types.py`、`src/cli/core/session_types.py`、`src/cli/extensions/types.py` |
+| W3 | Overflow + usage 常量 | `src/ai_provider/overflow.py`、`src/ai_provider/usage.py` + 单测 |
 | W4 | 26 条 compatibility fixture | `tests/fixtures/pi_compat/<scene>/` |
 | W5 | Pi 基线文件索引（实现 ADR-0011） | `dev_docs/plans/p1_m0/pi_mono_baseline.md` |
 | W6 | TUI mock playback 协议 | `design_docs/architecture/tui_playback_format.md` |
@@ -56,33 +56,33 @@ Out of scope（属于 M1+）:
 
 ### W0. 包骨架
 
-**Build backend 选型**：W0 显式选用 **hatchling** 作为 build backend，与 ADR-0002 选定的 uv 默认行为一致。当前 `pyproject.toml` 没有 `[build-system]`，靠 uv editable fallback 工作；W0 必须把它补上，否则 `uv sync` + `import neomagi_*` 验收会随 uv 行为漂移。
+**Build backend 选型**：W0 显式选用 **hatchling** 作为 build backend，与 ADR-0002 选定的 uv 默认行为一致。当前 `pyproject.toml` 没有 `[build-system]`，靠 uv editable fallback 工作；W0 必须把它补上，否则 `uv sync` + 顶级包 import 验收会随 uv 行为漂移。
 
 新增目录与 `__init__.py`：
 
 ```
 src/
-  neomagi_ai/__init__.py
-  neomagi_agent_core/__init__.py
-  neomagi_cli/__init__.py
-  neomagi_cli/core/__init__.py
-  neomagi_cli/tools/__init__.py
-  neomagi_cli/extensions/__init__.py
-  neomagi_tui/__init__.py
-  neomagi_storage/__init__.py
-  neomagi_policy/__init__.py
-  neomagi_infra/__init__.py
+  ai_provider/__init__.py
+  agent_core/__init__.py
+  cli/__init__.py
+  cli/core/__init__.py
+  cli/tools/__init__.py
+  cli/extensions/__init__.py
+  tui/__init__.py
+  storage/__init__.py
+  policy/__init__.py
+  infra/__init__.py
 ```
 
 每个 `__init__.py` 顶部 docstring 必须引用 architecture 章节 + pi-mono 文件路径，便于回查。
 
-**目录迁移**（在 W0 内一次性完成，避免后续 import 路径再变）：
+**现有目录处理**（在 W0 内一次性完成，避免后续 import 路径再变）：
 
-- `src/infra/` → `src/neomagi_infra/`（搬 `complexity_guard.py`），并更新 `justfile`：
-  - `python -m src.infra.complexity_guard check` → `python -m neomagi_infra.complexity_guard check`
-  - `python -m src.infra.complexity_guard report` → `python -m neomagi_infra.complexity_guard report`
-  - `python -m src.infra.complexity_guard write-baseline` → `python -m neomagi_infra.complexity_guard write-baseline`
-- `src/tui/`（当前空目录）→ 删除；位置由 `src/neomagi_tui/` 取代。
+- `src/infra/` 已存在但没有 `__init__.py`（当前以 PEP 420 namespace + `python -m src.infra.complexity_guard` 形式运行）。W0 增加 `src/infra/__init__.py`，把它正式作为 hatchling 顶级包，并更新 `justfile`：
+  - `python -m src.infra.complexity_guard check` → `python -m infra.complexity_guard check`
+  - `python -m src.infra.complexity_guard report` → `python -m infra.complexity_guard report`
+  - `python -m src.infra.complexity_guard write-baseline` → `python -m infra.complexity_guard write-baseline`
+- `src/tui/` 当前是空目录，W0 加上 `src/tui/__init__.py` 即可正式启用，无需删建。
 
 **`pyproject.toml`** 显式增加：
 
@@ -93,13 +93,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = [
-  "src/neomagi_ai",
-  "src/neomagi_agent_core",
-  "src/neomagi_cli",
-  "src/neomagi_tui",
-  "src/neomagi_storage",
-  "src/neomagi_policy",
-  "src/neomagi_infra",
+  "src/ai_provider",
+  "src/agent_core",
+  "src/cli",
+  "src/tui",
+  "src/storage",
+  "src/policy",
+  "src/infra",
 ]
 ```
 
@@ -146,7 +146,7 @@ packages = [
 
 **输出文件**：
 
-- `src/neomagi_ai/types.py`：
+- `src/ai_provider/types.py`：
   - `TextContent` / `ThinkingContent` / `ImageContent` / `ToolCall`
   - `UserMessage` / `AssistantMessage` / `ToolResultMessage`
   - `Usage`（5 维 + cost 子结构）
@@ -155,13 +155,13 @@ packages = [
   - `Model`（含 `contextWindow` 必填注释）
   - `StopReason` / `ThinkingLevel` / `CacheRetention` / `Transport` 枚举
 
-- `src/neomagi_agent_core/types.py`（与 pi-mono `packages/agent/src/types.ts` 边界一致，**只覆盖 core 层**）：
-  - `AgentMessage` = `UserMessage | AssistantMessage | ToolResultMessage`，并通过 Python 端的 union 扩展点（如 `Annotated` + `Field(discriminator="role")` + `TypeAdapter` 重新构造）支持 `neomagi_cli.core` 注入新 role；**4 个 coding 自定义 role（bashExecution / custom / branchSummary / compactionSummary）不在此层声明**。
+- `src/agent_core/types.py`（与 pi-mono `packages/agent/src/types.ts` 边界一致，**只覆盖 core 层**）：
+  - `AgentMessage` = `UserMessage | AssistantMessage | ToolResultMessage`，并通过 Python 端的 union 扩展点（如 `Annotated` + `Field(discriminator="role")` + `TypeAdapter` 重新构造）支持 `cli.core` 注入新 role；**4 个 coding 自定义 role（bashExecution / custom / branchSummary / compactionSummary）不在此层声明**。
   - `AgentState`、`AgentEvent`（**10 帧 union**：`agent_start` / `agent_end` / `turn_start` / `turn_end` / `message_start` / `message_update` / `message_end` / `tool_execution_start` / `tool_execution_update` / `tool_execution_end`）。
   - `AgentTool`、`AgentToolResult`、`ToolExecutionMode`
   - `BeforeToolCallContext` / `AfterToolCallContext`、各 `Result` shape
 
-- `src/neomagi_cli/core/session_types.py`（coding-agent 产品层，扩展 core 类型）：
+- `src/cli/core/session_types.py`（coding-agent 产品层，扩展 core 类型）：
   - `SessionHeader`、`SessionEntryBase`
   - 9 种 entry：`message` / `thinking_level_change` / `model_change` / `compaction` / `branch_summary` / `custom` / `custom_message` / `label` / `session_info`
   - `SessionContext`、`SessionTreeNode`、`SessionInfo`
@@ -170,7 +170,7 @@ packages = [
   - `AgentSessionEvent` = core `AgentEvent`（10 帧）∪ **5 个 session-level 帧**：`queue_update` / `compaction_start` / `compaction_end` / `auto_retry_start` / `auto_retry_end`，共 15 个 variant
   - `CURRENT_SESSION_VERSION = 3` 常量
 
-- `src/neomagi_cli/extensions/types.py`：
+- `src/cli/extensions/types.py`：
   - `ExtensionContext` / `ExtensionCommandContext` / `ExtensionUIContext` 协议接口（用 `typing.Protocol`）
   - `ExtensionAPI` 协议接口：覆盖 W1.D 列出的全部 method 与 property，包含 `register_provider` / `unregister_provider` 与 `events: EventBus`
   - `ProviderConfig`（registerProvider 入参 schema：`base_url` / `api_key` / `api` / `models` / `oauth` / `headers` / `auth_header` / `stream_simple`）
@@ -181,18 +181,18 @@ packages = [
   - `BeforeAgentStartEventResult`（含 `message` append + `systemPrompt` 链式语义注释）
   - `ToolCallEvent` / `ToolResultEvent` 按 toolName 的 discriminated union
 
-时序：W2 内部按 `neomagi_ai` → `neomagi_agent_core` → `neomagi_cli.core` → `neomagi_cli.extensions` 顺序，因为后者依赖前者。
+时序：W2 内部按 `ai_provider` → `agent_core` → `cli.core` → `cli.extensions` 顺序，因为后者依赖前者。
 
 ### W3. Overflow 与 Usage 归一化
 
-`src/neomagi_ai/overflow.py`：
+`src/ai_provider/overflow.py`：
 
 - `OVERFLOW_PATTERNS: tuple[re.Pattern, ...]` —— 复刻 pi `packages/ai/src/utils/overflow.ts` 的 19 条正则，逐条标注 provider 来源与 sample error message 出处。
 - `NON_OVERFLOW_PATTERNS: tuple[re.Pattern, ...]` —— 3 条排除模式（throttling / rate limit / too-many-requests）。
 - `is_context_overflow(message: AssistantMessage, context_window: int | None = None) -> bool`：与 pi 同行为。
 - 单测：`tests/test_overflow.py` 用 16 个 provider 的真实 error message sample 跑断言（sample 来自 pi-mono 注释内的 quoted error 文本）。
 
-`src/neomagi_ai/usage.py`：
+`src/ai_provider/usage.py`：
 
 - `calculate_cost(model, usage) -> Cost`：按 `cost.input * input/1e6` 等 5 维计算（含 total = sum）。
 - `normalize_provider_usage(raw: dict, provider: str) -> Usage`：占位实现 —— W3 只解决"避免 cacheRead 双计"的归一化，对每个 provider 留一个 hook。完整实现在 M2，但本轮要先写 fixture（见 W4）。
@@ -293,10 +293,10 @@ ADR-0011 已锁定基线为 `97a38bf6`，并规定升级须经独立 ADR + diff 
 
 M0 视为完成需同时满足：
 
-1. `just lint` 通过（justfile 已切到 `neomagi_infra.complexity_guard`），complexity ratchet 无回退。
-2. `pyproject.toml` 含显式 `[build-system]` = hatchling、列出 7 个 `src/neomagi_*` 包、把 `pydantic>=2,<3` 列为生产依赖；`uv sync` 成功；`uv run python -c "import neomagi_ai, neomagi_agent_core, neomagi_cli.core, neomagi_cli.extensions, neomagi_tui, neomagi_storage, neomagi_policy, neomagi_infra"` 不报错。
+1. `just lint` 通过（justfile 已切到 `infra.complexity_guard`），complexity ratchet 无回退。
+2. `pyproject.toml` 含显式 `[build-system]` = hatchling、列出 7 个 `src/` 顶级包、把 `pydantic>=2,<3` 列为生产依赖；`uv sync` 成功；`uv run python -c "import ai_provider, agent_core, cli.core, cli.extensions, tui, storage, policy, infra"` 不报错。
 3. `pi_behavior_matrix.md` 覆盖 9 大区块（A–I），且每条 entry 都有 pi-mono 文件路径引用；ExtensionAPI 区块逐行枚举所有 method 与 property，包含 `register_provider` / `unregister_provider` / `events: EventBus`。
-4. `neomagi_ai.types`、`neomagi_agent_core.types`、`neomagi_cli.core.session_types`、`neomagi_cli.extensions.types` 全部按 ADR-0010 实施约束暴露 pydantic v2 模型与 `TypeAdapter`；Pi-compatible 模型默认 `extra="allow"`、alias 序列化往返保真；`AgentEvent` 在 core 层 10 帧、`AgentSessionEvent` 在 cli 层 15 帧；4 个 coding 自定义 role 只在 `neomagi_cli.core` 层声明。
+4. `ai_provider.types`、`agent_core.types`、`cli.core.session_types`、`cli.extensions.types` 全部按 ADR-0010 实施约束暴露 pydantic v2 模型与 `TypeAdapter`；Pi-compatible 模型默认 `extra="allow"`、alias 序列化往返保真；`AgentEvent` 在 core 层 10 帧、`AgentSessionEvent` 在 cli 层 15 帧；4 个 coding 自定义 role 只在 `cli.core` 层声明。
 5. `is_context_overflow` 对 16 个 provider 的 sample error message 全部返回正确判定（`pytest tests/test_overflow.py` green）。
 6. `tests/fixtures/pi_compat/` 26 个目录全部存在；其中 8 条核心 fixture 含完整 `input` + `expected` 并通过 `test_fixture_round_trip.py`，opaque 字段透传不丢、timestamp 字段类型保持原状（int 仍是 int，ISO8601 仍是 str）。
 7. `pi_mono_baseline.md`、`tui_playback_format.md`、`progress/p1_m0.md` 三份文档存在并入库；`pi_mono_baseline.md` 引用 ADR-0011 并与 behavior matrix 的 entry 双向链接；`tui_playback_format.md` 明确 `events.jsonl` 是纯 `AgentSessionEvent` / `AssistantMessageEvent` 流，所有 harness 控制位于 `playback.json` sidecar。
@@ -329,9 +329,9 @@ W5、W0、W1 三件事彼此独立，可以并行起手；W2 是 critical path �
 
 M0 完成后立刻把以下 artifact 交给 M1–M3：
 
-- `neomagi_ai.types.AssistantMessageEvent` → M1 mock playback、M2 真实 provider stream output。
-- `neomagi_agent_core.types.AgentEvent` → M1 TUI 渲染契约、M3 agent loop 输出。
-- `neomagi_cli.core.session_types.SessionEntry` → M6 Postgres schema、M10 export。
+- `ai_provider.types.AssistantMessageEvent` → M1 mock playback、M2 真实 provider stream output。
+- `agent_core.types.AgentEvent` → M1 TUI 渲染契约、M3 agent loop 输出。
+- `cli.core.session_types.SessionEntry` → M6 Postgres schema、M10 export。
 - `tests/fixtures/pi_compat/` → 全 milestone 的回归测试基线。
 - `tui_playback_format.md` → M1 mock harness 直接实现。
 - `pi_behavior_matrix.md` → M5/M8/M9 的产品验收清单。

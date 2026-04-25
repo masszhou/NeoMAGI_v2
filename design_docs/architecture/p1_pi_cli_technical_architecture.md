@@ -42,10 +42,10 @@ P1 是 NeoMAGI 的本地终端主产品，不只是底层 agent engine。架构�
 
 ```mermaid
 flowchart TB
-  TUI["neomagi_tui\nterminal UI + renderers"]
-  PRODUCT["neomagi_cli\nAgentSession + commands + resources"]
-  CORE["neomagi_agent_core\nAgent loop + tools + events"]
-  AI["neomagi_ai\nmessages + providers + stream"]
+  TUI["tui\nterminal UI + renderers"]
+  PRODUCT["cli\nAgentSession + commands + resources"]
+  CORE["agent_core\nAgent loop + tools + events"]
+  AI["ai_provider\nmessages + providers + stream"]
   DB["Postgres\nsession + audit + memory ledger"]
   JSONL["Pi-compatible JSONL\nexport/import/projection"]
   EXT["extensions / skills / prompts"]
@@ -63,14 +63,14 @@ Recommended Python package layout:
 
 | Package | Responsibility |
 | --- | --- |
-| `neomagi_ai` | Pi-compatible message/content/tool/model/provider/stream types, provider adapters, faux provider, credential resolution boundary |
-| `neomagi_agent_core` | `Agent`, `AgentState`, turn loop, tool execution, event subscription, steering/follow-up queues |
-| `neomagi_cli.core` | `AgentSession`, session lifecycle, resource loader, settings/auth/model registry, commands, compaction |
-| `neomagi_cli.tools` | built-in coding tools and tool render metadata |
-| `neomagi_cli.extensions` | Python extension API mirroring Pi semantics |
-| `neomagi_tui` | terminal lifecycle, editor, overlays, selectors, markdown, tool/message rendering |
-| `neomagi_storage` | Postgres repositories, JSONL import/export, audit writer |
-| `neomagi_policy` | path/shell/network/memory permission evaluation and sandbox adapters |
+| `ai_provider` | Pi-compatible message/content/tool/model/provider/stream types, provider adapters, faux provider, credential resolution boundary |
+| `agent_core` | `Agent`, `AgentState`, turn loop, tool execution, event subscription, steering/follow-up queues |
+| `cli.core` | `AgentSession`, session lifecycle, resource loader, settings/auth/model registry, commands, compaction |
+| `cli.tools` | built-in coding tools and tool render metadata |
+| `cli.extensions` | Python extension API mirroring Pi semantics |
+| `tui` | terminal lifecycle, editor, overlays, selectors, markdown, tool/message rendering |
+| `storage` | Postgres repositories, JSONL import/export, audit writer |
+| `policy` | path/shell/network/memory permission evaluation and sandbox adapters |
 
 ## Compatibility Strategy
 
@@ -93,7 +93,7 @@ Adapt for NeoMAGI:
 - provider-hosted thread state is cache only; it never becomes NeoMAGI truth.
 - extensions cannot get unmediated access to privileged actions. Their registered tools go through the same registry, policy, timeout, sandbox, truncation, and audit path.
 
-## `neomagi_ai` Protocol
+## `ai_provider` Protocol
 
 ### Content Blocks
 
@@ -278,7 +278,7 @@ Credential resolution order should mirror Pi while respecting NeoMAGI secret han
 4. environment variable;
 5. custom provider fallback resolver.
 
-## `neomagi_agent_core` Protocol
+## `agent_core` Protocol
 
 ### Agent State
 
@@ -307,8 +307,8 @@ AgentState = {
 
 Default boundary behavior:
 
-- `neomagi_agent_core` should use Pi's safe default: `convert_to_llm()` only forwards `user`, `assistant`, and `toolResult` messages.
-- `neomagi_cli.core` / coding-agent layer owns product-specific conversion for `bashExecution`, `custom`, `branchSummary`, and `compactionSummary`, usually by turning them into synthetic user-visible context or dropping them when they should not reach the model.
+- `agent_core` should use Pi's safe default: `convert_to_llm()` only forwards `user`, `assistant`, and `toolResult` messages.
+- `cli.core` / coding-agent layer owns product-specific conversion for `bashExecution`, `custom`, `branchSummary`, and `compactionSummary`, usually by turning them into synthetic user-visible context or dropping them when they should not reach the model.
 
 ### Agent API
 
@@ -401,7 +401,7 @@ Errors:
 - tool errors are returned to the model; they do not abort the loop.
 - provider/runtime errors become assistant messages with `stopReason: "error"` or `"aborted"`.
 
-## `neomagi_cli.core` Product Contract
+## `cli.core` Product Contract
 
 ### AgentSession
 
@@ -770,8 +770,8 @@ Python naming may use snake_case, but the exposed protocol must cover Pi's compl
 
 These helpers are not methods on the `ExtensionAPI` object:
 
-- `createAssistantMessageEventStream` is a `pi-ai` package helper for building Pi-compatible assistant streams. Python should expose it from `neomagi_ai`, not as `pi.create_assistant_message_event_stream(...)`.
-- `defineTool` is an extension package helper that preserves static typing/generic inference for top-level tool definitions. Python may expose `neomagi_cli.extensions.define_tool(...)`, but it must not imply an ExtensionAPI instance method unless a deliberate compatibility alias is introduced.
+- `createAssistantMessageEventStream` is a `pi-ai` package helper for building Pi-compatible assistant streams. Python should expose it from `ai_provider`, not as `pi.create_assistant_message_event_stream(...)`.
+- `defineTool` is an extension package helper that preserves static typing/generic inference for top-level tool definitions. Python may expose `cli.extensions.define_tool(...)`, but it must not imply an ExtensionAPI instance method unless a deliberate compatibility alias is introduced.
 
 ### UI Primitives
 
@@ -1156,8 +1156,8 @@ Fixtures should be Pi-compatible JSON objects, not mock-only Python objects. TUI
 Architecture is ready for implementation when:
 
 - TUI mock playback consumes only `AgentSessionEvent` / `AssistantMessageEvent`.
-- `neomagi_ai` faux provider can produce text, thinking, tool calls, error, and abort streams.
-- `neomagi_agent_core` can run multi-turn tool loops with sequential and parallel execution.
+- `ai_provider` faux provider can produce text, thinking, tool calls, error, and abort streams.
+- `agent_core` can run multi-turn tool loops with sequential and parallel execution.
 - session writes are durable in Postgres and export back to Pi-compatible JSONL.
 - built-in tools produce audited `ToolResultMessage` with policy and truncation metadata.
 - extension-registered tools/commands/events cannot bypass policy.
