@@ -1,0 +1,33 @@
+{
+    "generated_at": "2026-04-20T22:31:27+00:00",
+    "policy_version": 1,
+    "thresholds": {
+        "prod": {
+            "file_target": 500,
+            "file_block": 800,
+            "function_target": 30,
+            "function_block": 50,
+            "branches_target": 3,
+            "branches_block": 6,
+            "nesting_block": 3
+        },
+        "scripts": {
+            "file_target": 500,
+            "file_block": 800,
+            "function_target": 30,
+            "function_block": 50,
+            "branches_target": 3,
+            "branches_block": 6,
+            "nesting_block": 3
+        },
+        "tests": {
+            "file_target": 1200,
+            "file_block": 1200,
+            "function_target": 30,
+            "function_block": 50,
+            "branches_target": 3,
+            "branches_block": 6,
+            "nesting_block": 3
+        }
+    }
+}
