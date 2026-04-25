@@ -10,13 +10,15 @@ doc_id_assigned_at: 2026-04-25T17:04:59+02:00
 - Status: accepted
 - Date: 2026-04-25
 - Roadmap: `design_docs/roadmap/p1_engine_pi.md`
-- Reference repo: `/Users/zhiliangzhou/devel/pi-mono`
-- Reference baseline: `main@97a38bf6`
+- Reference repo: [badlogic/pi-mono](https://github.com/badlogic/pi-mono)
+- Reference baseline: [main@97a38bf6](https://github.com/badlogic/pi-mono/tree/97a38bf6)
 - Scope: Python 复刻 Pi CLI 产品语义，不绑定 Node.js runtime。
 
 本文件把 P1 路线图中“后续 Architecture 文档待拆分”的内容先收敛成一个可执行的技术架构基线。P1 实现应优先复刻 Pi mono 中已经被真实项目验证过的协议、接口和事件顺序；只有在 NeoMAGI 的 Postgres truth、policy、audit、memory 约束需要时才做语义改造。
 
 ## Source Map
+
+Pi mono source paths below are repository-relative paths under [badlogic/pi-mono](https://github.com/badlogic/pi-mono/tree/97a38bf6), not local filesystem paths.
 
 | 主题 | Pi mono 来源 |
 | --- | --- |

@@ -5,12 +5,18 @@ doc_id_assigned_at: 2026-04-25T09:18:54+02:00
 ---
 # P1 Pi CLI Product Roadmap
 
+## 状态
+
 - Status: accepted
 - Date: 2026-04-25
+- Roadmap: `design_docs/roadmap/p1_engine_pi.md`
+- Reference repo: [badlogic/pi-mono](https://github.com/badlogic/pi-mono)
+- Reference baseline: [main@97a38bf6](https://github.com/badlogic/pi-mono/tree/97a38bf6)
+- Scope: Python 复刻 Pi CLI 产品语义，不绑定 Node.js runtime。
 
 ## 目标
 
-用 Python 复刻 Pi CLI 的核心产品体验，把 `/Users/zhiliangzhou/devel/pi-mono` 中的 Pi coding agent 体系迁移为 NeoMAGI 的本地终端智能体产品。
+用 Python 复刻 Pi CLI 的核心产品体验，把 [badlogic/pi-mono](https://github.com/badlogic/pi-mono) 中的 Pi coding agent 体系迁移为 NeoMAGI 的本地终端智能体产品。
 
 P1 采用 **产品体验等价 + contract-stable** 路线：
 
@@ -21,8 +27,7 @@ P1 采用 **产品体验等价 + contract-stable** 路线：
 参考来源：
 
 - Pi monorepo: https://github.com/badlogic/pi-mono
-- 本地参考 clone: `/Users/zhiliangzhou/devel/pi-mono`
-- 当前阅读基线：`main@97a38bf6`
+- 当前阅读基线：[main@97a38bf6](https://github.com/badlogic/pi-mono/tree/97a38bf6)
 - 基线核对时间：2026-04-25
 - 优先复刻包：`pi-tui`、`pi-ai`、`pi-agent-core`、`pi-coding-agent`
 - 第一阶段暂不复刻：`pi-web-ui`、`pi-mom`、`pi-pods`
