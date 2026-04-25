@@ -50,9 +50,9 @@ Out of scope（属于 M1+）:
 | W2 | 协议类型声明 | `src/ai_provider/types.py`、`src/agent_core/types.py`、`src/cli/core/session_types.py`、`src/cli/extensions/types.py` |
 | W3 | Overflow + usage 常量 | `src/ai_provider/overflow.py`、`src/ai_provider/usage.py` + 单测 |
 | W4 | 26 条 compatibility fixture | `tests/fixtures/pi_compat/<scene>/` |
-| W5 | Pi 基线文件索引（实现 ADR-0011） | `dev_docs/plans/p1_m0/pi_mono_baseline.md` |
+| W5 | Pi 基线文件索引（实现 ADR-0011） | `design_docs/architecture/pi_mono_baseline.md` |
 | W6 | TUI mock playback 协议 | `design_docs/architecture/tui_playback_format.md` |
-| W7 | 进度归档 | `dev_docs/progress/progress.md` 追加 + `dev_docs/plans/p1_m0/closeout.md` |
+| W7 | 进度归档 | `dev_docs/progress/progress.md` 追加 + `dev_docs/logs/p1_m0_closeout.md` |
 
 ### W0. 包骨架
 
@@ -117,7 +117,7 @@ packages = [
 
 - **A. Slash 命令全表**：25 条内建 + dynamic（`/skill:` / prompt template / extension），每条标注 P1 Core / Stretch / Optional 与 pi-mono 源文件行号。
 - **B. Run modes**：interactive / print / json / rpc / SDK，列出每个 mode 入口、输出协议、测试 harness。
-- **C. Built-in tools**：8 条（read/grep/find/ls/write/edit/bash + neomagi `download`），含参数 schema、details schema、policy 标签。
+- **C. Built-in tools**：pi-mono 共 7 条工具，分两个 profile —— coding profile 4 条（`read` / `bash` / `edit` / `write`，`createCodingTools`）+ read-only profile 4 条（`read` / `grep` / `find` / `ls`，`createReadOnlyTools`，`read` 与 coding profile 共享）。NeoMAGI 不增加任何内建工具；下载需求一律走 `bash`。matrix 列出每条参数 schema、details schema、policy 标签，并显式标注"anti-feature: no built-in download tool"作为项目理念强化项。
 - **D. ExtensionAPI surface**：完整列出 architecture §`ExtensionAPI Surface` 表格中的每一项 method 与 property，**逐行核对**，不靠行号区间引用。必须显式覆盖：`on` / `registerTool` / `registerCommand` / `registerShortcut` / `registerFlag` / `getFlag` / `registerMessageRenderer` / `sendMessage` / `sendUserMessage` / `appendEntry` / `setSessionName` / `getSessionName` / `setLabel` / `exec` / `getActiveTools` / `setActiveTools` / `getAllTools` / `getCommands` / `setModel` / `getThinkingLevel` / `setThinkingLevel` / **`registerProvider` / `unregisterProvider` / `events: EventBus`**。再加 22 项 ExtensionUIContext primitive、§`Module-Level Helpers` 的 `createAssistantMessageEventStream` / `defineTool`。
 - **E. Extension events**：6 类 × 25+ 事件名，含 result shape。
 - **F. Settings**：分组列出 Core P1 必须支持的字段（compaction / retry / images / shell / skills / TUI 等）+ parity backlog。
@@ -245,10 +245,10 @@ events.jsonl         # 时序事件流（适用于 stream/replay 场景）
 
 ADR-0011 已锁定基线为 `97a38bf6`，并规定升级须经独立 ADR + diff review。W5 不重复政策决策，只把 ADR-0011 落到一份**可被 W1 / W4 / 后续 milestone 反向引用的文件级索引**。
 
-`dev_docs/plans/p1_m0/pi_mono_baseline.md`：
+`design_docs/architecture/pi_mono_baseline.md`（与 `pi_behavior_matrix.md` 配对放在 architecture/，长寿命引用资料；不是 plan 工件）：
 
 - 引用 ADR-0011 作为权威基线声明。
-- pi-mono commit `97a38bf6`、本地 clone 路径、fetch 时间。
+- pi-mono commit `97a38bf6`、远程 tree URL、fetch 时间（本地 clone 路径不入库）。
 - 关键文件 + line range 索引，与 W1 behavior matrix 的每一条 entry 双向引用：
   - `packages/ai/src/types.ts`（types / events / Usage / Model）
   - `packages/ai/src/utils/event-stream.ts`、`utils/overflow.ts`
@@ -283,7 +283,7 @@ ADR-0011 已锁定基线为 `97a38bf6`，并规定升级须经独立 ADR + diff 
 按 `dev_docs/progress/README.md` 的 append-only 单文件政策，M0 收尾不新增 phase 文件，分两件落地：
 
 - **canonical 进度账**：在 `dev_docs/progress/progress.md` 末尾追加一条 P1-M0 closeout 条目，按 README 模板写 `Status / Done / Evidence / Next / Risk`，`Evidence` 至少含 closeout 文档路径与 W0–W6 关键 commit。
-- **里程碑 closeout**：在 `dev_docs/plans/p1_m0/closeout.md` 放 M0 内部追踪细节，避免污染全局账：
+- **里程碑 closeout**：在 `dev_docs/logs/p1_m0_closeout.md` 放 M0 内部追踪细节（按 `dev_docs/logs/README.md` 的 logs 约定），避免污染全局账：
   - 每条 W0–W6 的状态、commit hash、PR 编号。
   - 已知偏离与原因（例如某个 fixture 推迟到 M2）。
   - "Upstream observed but deferred" 段：M0 期间发现的 pi-mono `97a38bf6` 之后的行为变化，按 ADR-0011 默认 deferred，记录线索供未来 baseline 升级 ADR 引用。
@@ -299,7 +299,7 @@ M0 视为完成需同时满足：
 4. `ai_provider.types`、`agent_core.types`、`cli.core.session_types`、`cli.extensions.types` 全部按 ADR-0010 实施约束暴露 pydantic v2 模型与 `TypeAdapter`；Pi-compatible 模型默认 `extra="allow"`、alias 序列化往返保真；`AgentEvent` 在 core 层 10 帧、`AgentSessionEvent` 在 cli 层 15 帧；4 个 coding 自定义 role 只在 `cli.core` 层声明。
 5. `is_context_overflow` 对 16 个 provider 的 sample error message 全部返回正确判定（`pytest tests/test_overflow.py` green）。
 6. `tests/fixtures/pi_compat/` 26 个目录全部存在；其中 8 条核心 fixture 含完整 `input` + `expected` 并通过 `test_fixture_round_trip.py`，opaque 字段透传不丢、timestamp 字段类型保持原状（int 仍是 int，ISO8601 仍是 str）。
-7. `pi_mono_baseline.md`、`tui_playback_format.md`、`progress/p1_m0.md` 三份文档存在并入库；`pi_mono_baseline.md` 引用 ADR-0011 并与 behavior matrix 的 entry 双向链接；`tui_playback_format.md` 明确 `events.jsonl` 是纯 `AgentSessionEvent` / `AssistantMessageEvent` 流，所有 harness 控制位于 `playback.json` sidecar。
+7. `design_docs/architecture/pi_mono_baseline.md`、`design_docs/architecture/tui_playback_format.md`、`dev_docs/logs/p1_m0_closeout.md` 三份文档存在并入库（progress.md 末尾追加一条 closeout 条目）；`pi_mono_baseline.md` 引用 ADR-0011 并与 behavior matrix 的 entry 双向链接；`tui_playback_format.md` 明确 `events.jsonl` 是纯 `AgentSessionEvent` / `AssistantMessageEvent` 流，所有 harness 控制位于 `playback.json` sidecar。
 
 ## 顺序与依赖
 
@@ -323,7 +323,7 @@ W5、W0、W1 三件事彼此独立，可以并行起手；W2 是 critical path �
 - **pydantic 默认配置回退**：ADR-0010 规定 Pi-compatible 模型必须 `extra="allow"` + alias 透传，否则 `thinkingSignature` / `thoughtSignature` / `responseId` 等会被悄悄丢弃。W2 模板代码必须把这一 ConfigDict 默认值固化到 mixin 或 base class，避免后续模型作者忘配置。
 - **alias 序列化回环**：`model_dump(by_alias=True)` 与 `model_validate` 必须配对正确；fixture round-trip 需要断言完全字节级稳定（去除 key 顺序差异），否则 cross-provider handoff 会失败。
 - **复杂度 ratchet**：W2 引入大量类型声明会触发 complexity_guard。建议提前 `just complexity-baseline` 在干净状态下刷一次。
-- **基线漂移诱惑**：开发期间发现 pi-mono upstream 修复了缺陷或新增了行为，按 ADR-0011 默认入 backlog，不在 implementation PR 内静默吸收。M0 closeout（`dev_docs/plans/p1_m0/closeout.md`）必须留一段记录"upstream observed but deferred"，作为未来 baseline 升级 ADR 的证据来源。
+- **基线漂移诱惑**：开发期间发现 pi-mono upstream 修复了缺陷或新增了行为，按 ADR-0011 默认入 backlog，不在 implementation PR 内静默吸收。M0 closeout（`dev_docs/logs/p1_m0_closeout.md`）必须留一段记录"upstream observed but deferred"，作为未来 baseline 升级 ADR 的证据来源。
 
 ## 后续移交
 
