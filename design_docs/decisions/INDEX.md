@@ -21,3 +21,4 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0010 | Use pydantic v2 for protocol types | accepted | 2026-04-25 | `design_docs/decisions/0010-use-pydantic-v2-for-protocol-types.md` |
 | 0011 | Freeze pi-mono baseline at 97a38bf6 | accepted | 2026-04-25 | `design_docs/decisions/0011-freeze-pi-mono-baseline-at-97a38bf6.md` |
 | 0012 | Python-native extension MVP boundary | accepted | 2026-04-25 | `design_docs/decisions/0012-python-native-extension-mvp-boundary.md` |
+| 0013 | Python async for Pi Promise extension methods | accepted | 2026-04-25 | `design_docs/decisions/0013-python-async-for-pi-promise-extension-methods.md` |
