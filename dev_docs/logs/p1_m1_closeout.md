@@ -416,3 +416,57 @@ messages → editor）—— 一裁就把 editor 也带走了。
   导航）。
 - 自动测试 179 → **180 passed**；`just lint` green、`complexity_guard`
   re-baseline 后 regressions=0。
+
+## 手测追加：abort_during_tool 视觉像"完成后再 abort"（2026-04-26）
+
+§5.3（手测说明书 §4.9 表格里的 `/play abort_during_tool` 一行）反馈
+"看到的是 tool 走完整 result + 最后追加 `[aborted]`，不像是中途中断"。
+确认 fixture 设计本身不对，加上 renderer 也把 abort 后的 tool 当成
+"已结束"在画。
+
+### 根因（两层耦合）
+
+1. **Fixture**：`tests/fixtures/pi_compat/abort_during_tool/events.jsonl`
+   原本含三个事件：start → update（partial）→ **end** with
+   `{"content":[...,"text":"aborted by user"],"isError":true}`。
+   playback inject 在 update 之后触发 abort，但 end event 仍然紧接着到达。
+   结果：组件先收到 `tool_execution_end` 走 `end()` → 设置 `_result`、
+   `_is_error=True`、`_ended_at_ms`；然后 `mark_aborted()` 把 `_aborted=True`
+   叠上去。从用户视角看就是"tool 完成了一个 error 结果，又额外被打了
+   `[aborted]` 标"——和"中途中断"语义反过来。
+2. **Renderer**：即使 fixture 砍掉 end event，`mark_aborted()` 自己
+   仍会合成 `_result = {"aborted": True}` + `_is_error=True` + `_ended_at_ms`。
+   `generic_tool_renderer` 的分支判断 `is_partial = ended_at is None`，
+   abort 后变 False → 走 result 分支显示 `result [error]: {aborted: true}`，
+   依然不显示 partial。
+
+### 解决办法（commit `<本次>`）
+
+- **Fixture**：`abort_during_tool/events.jsonl` 砍到 2 个事件
+  （start + update），`playback.json` `delays_ms` 同步改成 `[0, 40]`。
+  `inject: abort` 仍在 `after_event_index=1`。从此 fixture 真的"在 update
+  后中断、没有 end event"。
+- **`ToolExecutionComponent.mark_aborted`**：只设 `_aborted=True` +
+  `_ended_at_ms`（用于算 duration），**不再**伪造 `_result` / `_is_error`。
+- **`ToolRenderContext`**：增 `aborted: bool = False` 字段。组件 render
+  时把 `self._aborted` 传进去。
+- **`generic_tool_renderer`**：新增 aborted 分支，优先走，保留 partial
+  显示 + 追加 `[aborted after N ms]`。原 partial / completed 两条路径
+  不变。组件的 render 方法不再额外追加 `[aborted]` 行（避免和 renderer
+  里的 `[aborted after N ms]` 重复）。
+
+### Acceptance 影响
+
+- §5.3 fixture 视觉现在是 `⚙ read(...) + partial: # partial bytes so far +
+  [aborted after N ms]`，看一眼就知道"中途被切了"，没有误导性的
+  `result [error]: ...` 行。
+- `tests/cli/interactive/test_playback_harness.py::test_abort_during_tool_marks_tool_aborted_and_returns_editor_to_idle`
+  加严：断言 `tool._result is None`（mark_aborted 不再合成假 result）、
+  渲染含 "partial bytes so far" + "aborted after"、且**没有** `result [`
+  开头的行。
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §4.9 abort_during_tool
+  那行重写：列明应该看到 partial 和 `[aborted after N ms]`，**不应**看到
+  `result [...]` 行。
+- 自动测试 180 passed（数量不变，强化既有用例 + fixture round-trip 仍 pass，
+  因为 abort_during_tool 不在 CORE_SCENES）；`just lint` green、
+  `complexity_guard regressions=0`（renderer aborted 分支拆出后整体在阈值内）。

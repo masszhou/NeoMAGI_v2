@@ -58,9 +58,13 @@ class ToolExecutionComponent(Component):
     def mark_aborted(self) -> None:
         self._aborted = True
         if self._ended_at_ms is None:
+            # Record the abort instant so the renderer can show
+            # "[aborted after N ms]". Do NOT synthesise a fake
+            # `_result` / `_is_error` — the renderer takes the
+            # `aborted` path and keeps the last `_partial` visible
+            # instead, which is what the W5 plan asks for and what
+            # users intuitively expect from a mid-execution abort.
             self._ended_at_ms = self._clock()
-            self._is_error = True
-            self._result = {"aborted": True}
         self.request_render()
 
     @property
@@ -83,11 +87,13 @@ class ToolExecutionComponent(Component):
             started_at_ms=self._started_at_ms,
             last_update_at_ms=self._last_update_at_ms,
             ended_at_ms=self._ended_at_ms,
+            aborted=self._aborted,
         )
         rows = self._registry.render(ctx, width)
+        # The aborted marker is now the renderer's responsibility
+        # (`[aborted after N ms]`) — appending an extra `[aborted]`
+        # here would print the same signal twice.
         rows = [pad_to_width(line, width) for line in rows]
-        if self._aborted:
-            rows.append(pad_to_width("  \x1b[33m[aborted]\x1b[0m", width))
         rows.append(pad_to_width("", width))
         return self.enforce_width(rows, width)
 

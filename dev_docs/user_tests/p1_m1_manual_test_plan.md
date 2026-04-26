@@ -495,7 +495,7 @@ stdin（驱动/IME 层问题）。Ctrl+C 之前在 macOS Terminal.app 上的 bug
 | `/play parallel_tools` | 出现两条并行 tool 行（`read` + `grep`） |
 | `/play compaction` | 出现 `▎ compaction summary  (tokensBefore=80120)` 段 |
 | `/play abort_during_stream` | 出现 partial 文本 `This is the first half of the answer.` + 黄色 `[aborted — partial output kept]` |
-| `/play abort_during_tool` | tool 行加 `[aborted]` 标记 |
+| `/play abort_during_tool` | tool 行**仍显示** `partial: # partial bytes so far`（abort 切断时已经收到的部分），紧接一行 `[aborted after N ms]`。**不应该**看到 `result [ok/error]: ...` 行 —— 那是结束事件的产物，被中途切断的 tool 没有走到那一步 |
 | `/play nonexistent` | 红色错误通知 `fixture 'nonexistent' not found` |
 
 **关于"重复跑同一个 fixture 像没累加"**：M1 不进 alt-screen，画面在终端

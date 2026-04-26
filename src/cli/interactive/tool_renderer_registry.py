@@ -33,6 +33,13 @@ class ToolRenderContext:
     started_at_ms: int
     last_update_at_ms: int | None
     ended_at_ms: int | None
+    aborted: bool = False
+    """``True`` when the controller's ``handle_abort`` cut the tool off
+    before a ``tool_execution_end`` event arrived. Renderers should keep
+    showing the last ``partial_result`` (if any) plus an unmistakable
+    abort marker, NOT a synthesised "result [error]: aborted" line —
+    that visually conflates an interrupted tool with one that completed
+    with an error response. Manual P1-M1 §5.3 caught this."""
 
 
 def _truncate(text: str, limit: int = 200) -> str:
@@ -53,7 +60,16 @@ def _summarise(value: Any, *, limit: int = 200) -> str:
 
 
 def generic_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
-    """Default renderer: name + args + (partial|final) result + state.
+    """Default renderer: name + args + (partial|final|aborted) state.
+
+    Three visual modes:
+      - **In-flight** (``is_partial`` and not aborted): show the most
+        recent ``partial_result`` snapshot.
+      - **Completed** (``result`` populated, not aborted): show the
+        result summary tagged ``[ok]`` or ``[error]`` + duration.
+      - **Aborted** (``aborted``): keep the last partial visible so the
+        user can see how far the tool got, append
+        ``[aborted after N ms]`` so it's unmistakable.
 
     No truncation indicator is emitted — that field doesn't exist on
     :class:`ToolExecutionEndEvent` yet (plan W4 explicitly defers this to
@@ -64,6 +80,23 @@ def generic_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
     head = head[:width]
 
     rows: list[str] = [head]
+
+    if ctx.aborted:
+        # Aborted mid-flight: keep the last partial visible (if any),
+        # then make the abort unambiguous. Don't render a synthetic
+        # ``result [error]: ...`` line — that would visually conflate
+        # an interrupted tool with one that returned an error response.
+        if ctx.partial_result is not None:
+            partial = _summarise(ctx.partial_result, limit=180)
+            rows.append(f"  partial: {partial}"[:width])
+        else:
+            rows.append("  partial: (no output before abort)"[:width])
+        if ctx.ended_at_ms is not None:
+            duration = max(0, ctx.ended_at_ms - ctx.started_at_ms)
+            rows.append(f"  [aborted after {duration} ms]"[:width])
+        else:
+            rows.append("  [aborted]"[:width])
+        return rows
 
     if ctx.is_partial:
         if ctx.partial_result is not None:

@@ -1,3 +1,2 @@
 {"type":"tool_execution_start","toolCallId":"call_long_read_1","toolName":"read","args":{"path":"src/very_large.py"}}
 {"type":"tool_execution_update","toolCallId":"call_long_read_1","toolName":"read","args":{"path":"src/very_large.py"},"partialResult":{"content":[{"type":"text","text":"# partial bytes so far\n"}]}}
-{"type":"tool_execution_end","toolCallId":"call_long_read_1","toolName":"read","result":{"content":[{"type":"text","text":"aborted by user"}],"details":{"aborted":true}},"isError":true}

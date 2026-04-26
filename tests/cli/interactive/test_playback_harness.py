@@ -93,13 +93,49 @@ def test_abort_during_stream_keeps_partial_text_and_returns_editor_to_idle() -> 
 
 
 def test_abort_during_tool_marks_tool_aborted_and_returns_editor_to_idle() -> None:
+    """Manual §5.3 caught two coupled fixture/render issues:
+
+    1. The events.jsonl included a ``tool_execution_end`` *after* the
+       abort inject, so visually the tool ran to completion (with an
+       ``aborted by user`` error result) and only THEN got the
+       ``[aborted]`` tag — visually indistinguishable from a normal
+       tool failure. The fixture now stops at ``tool_execution_update``
+       with a partial result.
+    2. ``mark_aborted`` synthesised a fake ``_result = {"aborted": True}``
+       so the renderer's "is_partial = ended_at is None" check classified
+       the tool as completed and showed ``result [error]: {aborted: true}``
+       instead of the partial. ``mark_aborted`` now only sets the abort
+       flag + end timestamp (for duration tracking); ``ToolRenderContext``
+       carries an explicit ``aborted: bool`` and ``generic_tool_renderer``
+       takes a dedicated path that keeps ``partial: ...`` visible and
+       appends ``[aborted after N ms]``."""
+
     c = _play("abort_during_tool")
     tools = [
         child for child in c.messages.children if isinstance(child, ToolExecutionComponent)
     ]
     assert len(tools) == 1
-    assert tools[0].aborted is True
+    tool = tools[0]
+    assert tool.aborted is True
     assert c.editor.state == EditorState.IDLE
+    # No fake result synthesised — abort path leaves _result alone.
+    assert tool._result is None, (  # noqa: SLF001
+        f"mark_aborted should not synthesise a result payload; got {tool._result!r}"
+    )
+    # Partial captured before abort is preserved AND surfaced in render.
+    assert tool._partial is not None  # noqa: SLF001
+    rendered = "\n".join(tool.render(80))
+    assert "partial" in rendered, f"partial line missing: {rendered!r}"
+    assert "partial bytes so far" in rendered, (
+        f"actual partial content lost: {rendered!r}"
+    )
+    assert "aborted after" in rendered, (
+        f"abort marker should include duration: {rendered!r}"
+    )
+    # And the misleading "result [error]: ..." line must NOT appear.
+    assert "result [" not in rendered, (
+        f"aborted tool should not paint a result line: {rendered!r}"
+    )
 
 
 # Removed: a parametrized "at least one component was created" smoke. Each
