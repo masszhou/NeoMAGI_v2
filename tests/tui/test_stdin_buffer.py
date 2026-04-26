@@ -92,6 +92,29 @@ def test_csi_u_modify_other_keys_enter_with_shift() -> None:
     assert "Shift" in events[0].modifiers
 
 
+def test_csi_u_ctrl_letter_is_normalised_to_uppercase() -> None:
+    """Regression: terminals that honour our Kitty/modifyOtherKeys
+    negotiation may encode Ctrl+C as ``CSI 99 ; 5 u`` (lowercase 'c'
+    + Ctrl). The parser must emit the same ``"Ctrl+C"`` (uppercase)
+    keystring that the raw-byte path produces, so the global hook
+    matches and the editor's keymap binding triggers."""
+
+    events = _drain("\x1b[99;5u")  # Ctrl+c via CSI-u
+    assert events and events[0].key == "Ctrl+C"
+    assert "Ctrl" in events[0].modifiers
+
+
+def test_csi_27_modify_other_keys_form_for_ctrl_c() -> None:
+    """Regression: xterm modifyOtherKeys=2 alternate encoding
+    ``CSI 27 ; 5 ; 99 ~`` for Ctrl+C used to fall into the function-key
+    ``~`` branch and get silently dropped (code "27" wasn't in
+    ``_TILDE_NAMES``). Now it emits Ctrl+C with the modifier set."""
+
+    events = _drain("\x1b[27;5;99~")
+    assert events and events[0].key == "Ctrl+C"
+    assert "Ctrl" in events[0].modifiers
+
+
 def test_ctrl_letter_emitted_as_ctrl_modifier() -> None:
     events = _drain("\x03")  # Ctrl+C
     assert events[0].key == "Ctrl+C"

@@ -307,6 +307,23 @@ class StdinBuffer:
             # CSI <code> ; <mod> ~  — function / nav keys.
             parts = params.split(";")
             code = parts[0] if parts else ""
+            # xterm modifyOtherKeys=2 alternate encoding for control
+            # combinations that have no native CSI representation:
+            # ``CSI 27 ; <mod> ; <ascii> ~``. Without this branch we
+            # would silently drop e.g. Ctrl+C on a terminal that honoured
+            # our ``\x1b[>4;2m`` negotiation request.
+            if code == "27" and len(parts) == 3 and parts[2].isdigit():
+                mod_param = int(parts[1]) if parts[1].isdigit() else 1
+                ch_code = int(parts[2])
+                modifiers = _XTERM_MOD_TABLE.get(mod_param, frozenset())
+                if 32 < ch_code < 127:
+                    ch = chr(ch_code)
+                    if "Ctrl" in modifiers and "a" <= ch <= "z":
+                        ch = ch.upper()
+                    return KeyEvent(
+                        _format_key(ch, modifiers), raw=raw, modifiers=modifiers
+                    )
+                return None
             mod_param = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
             name = _TILDE_NAMES.get(code)
             if name is None:
@@ -346,6 +363,15 @@ class StdinBuffer:
         name = name_map.get(code)
         if name is None and 32 < code < 127:
             ch = chr(code)
+            # Normalise Ctrl+letter to uppercase so the event matches the
+            # legacy raw-byte encoding (``\x03`` → ``Ctrl+C``) and the
+            # keymap bindings that always use uppercase letters. Without
+            # this the same logical keystroke would emit different
+            # ``KeyEvent.key`` strings depending on whether the terminal
+            # honoured our Kitty / modifyOtherKeys negotiation, and the
+            # global Ctrl+C hook would silently miss.
+            if "Ctrl" in modifiers and "a" <= ch <= "z":
+                ch = ch.upper()
             name = ch
         if name is None:
             return None
