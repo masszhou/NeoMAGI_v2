@@ -138,8 +138,13 @@ uv run neomagi --help
 ## 2. TUI 启动 / 渲染 / 退出基础
 
 > 提示：进入 TUI 后看不到 `bash` 提示符是正常的；底部最后一行是 editor，前面
-> 是空白消息列。M1 默认**不**进 alt screen，所以退出后你能看到 TUI 渲染过的
-> 字符残留 —— 这是设计选择（方便复制日志），不是 bug。
+> 是空白消息列。
+>
+> **退出时的视觉残留**：M1 默认**不**进 alt screen，所以退出后你看到的不是
+> "原本的 shell 干净屏幕"，而是 TUI 退出前那一帧**还挂在那里**，shell 的
+> 新 prompt 紧贴或写在这些字符旁边/下面。这非常容易让人误以为"Ctrl+C / kill
+> 没反应" —— 实际上进程已经退了。**任何时候不确定，键入 `echo OK<Enter>`：
+> 看到 `OK` 出现就是退了；如果连 `echo` 都没回显，再按 §0.5 应急。**
 
 ### 2.1 启动 TUI（无 args）
 
@@ -162,7 +167,9 @@ uv run python -m cli
    等价路径：`Tab` 切换高亮 → `Enter`。
    提示行已写明 "Tab toggles, Enter confirms, Esc cancels"。
 
-**期望**：终端立刻回到正常 shell；光标可见；下一次输入回显正常。
+**期望**：进程退出，shell 接管。屏幕上会留下退出前最后一帧的字符残留
+（M1 默认不进 alt screen）—— 这是设计选择，不是 bug。键入 `echo OK` 回车
+确认 shell 已经在跑；想要干净屏幕再敲 `clear`。
 
 ### 2.3 退出（`Ctrl+C` idle 路径）
 
@@ -172,8 +179,24 @@ uv run python -m cli
 
 进入 TUI 后**不输入任何字符**，直接按 `Ctrl+C` 一次。
 
-**期望**：立刻退出 TUI，回到 shell；不弹任何对话框。这是 raw mode 下 idle
-时 `Ctrl+C` 的"直接退出"约定。
+**期望**：进程立刻退出，shell 接管。
+
+**怎么确认确实退出了**：M1 默认**不进 alt screen**，所以退出时屏幕**不会
+被清掉** —— 你看到的 `>` editor 行、`[idle] M1 mock ...` footer 仍然挂在
+屏幕上，shell 的新 prompt 会写在这些残留**旁边或下面**，视觉上很像
+"Ctrl+C 没反应"。判断方法：
+
+1. 直接键入 `echo CTRL_C_OK` 后回车。
+2. 看到 `CTRL_C_OK` 输出 + shell prompt 在新行 → Ctrl+C 已经退出。
+3. 想要干净屏幕，再敲 `clear` / `Ctrl+L`。
+
+如果连 `echo` 都没回显（还在 raw mode），说明真的没退 —— 那才是 bug，
+按 §0.5 应急步骤救场，并把这条标 fail。
+
+**raw mode 下 Ctrl+C 的语义**：`tty.setraw` 关掉 `ISIG`，所以内核**不**
+把 Ctrl+C 翻译成 SIGINT；字节 `\x03` 直接进 stdin，由 `InteractiveController.
+_global_input_hook` 处理。idle 时该 hook 调 `self.exit()` 让 loop 退出
+（acceptance #3）。
 
 ### 2.4 退出（外部 `kill`）
 
