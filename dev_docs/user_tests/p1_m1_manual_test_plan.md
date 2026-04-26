@@ -157,8 +157,10 @@ uv run python -m cli
 在 TUI 里：
 
 1. 输入 `/quit`，按 `Enter`。
-2. 弹出 `Quit NeoMAGI?` 确认框。
-3. 按 `Y`（或 Tab 切到 Yes 然后 Enter）。
+2. 弹出 `Quit NeoMAGI?` 确认框（默认高亮 `[N]o`）。
+3. 按 `Y`（高亮切到 `[Y]es`，**还没提交**），再按 `Enter` 确认。
+   等价路径：`Tab` 切换高亮 → `Enter`。
+   提示行已写明 "Tab toggles, Enter confirms, Esc cancels"。
 
 **期望**：终端立刻回到正常 shell；光标可见；下一次输入回显正常。
 
@@ -310,9 +312,16 @@ pgrep -f "cli.__main__" | xargs kill -TERM
 ### 4.3 普通输入直接提交（不走 autocomplete picker）
 
 - 接 4.2 状态，依次输入 `u`、`i`、`t`，按 `Enter`。
-- **期望**：buffer 在每个字符后变长（`/qu`、`/qui`、`/quit`），selector 自动
-  关闭（一旦命令名超出过滤范围）；按 Enter 后弹 `Quit NeoMAGI?` 对话框。
-- 按 `N` 取消 → 回到 editor。
+- **期望**：
+  - buffer 在每个字符后变长：`/qu` → `/qui` → `/quit`。
+  - selector 在整个键入过程中**保持打开** —— `/quit` 始终是有效候选，焦点
+    始终在 editor。selector 不会"提前关闭"；它在 Enter 触发 submit 时由
+    `_close_slash_overlay()` 一次性关掉，紧接着弹出 `Quit NeoMAGI?` 对话框。
+  - 失败模式：键入过程中 selector 突然消失（说明过滤逻辑误判 `/quit` 为不
+    匹配），或者按 Enter 后没弹 Confirm（说明 submit 路径漏走 registry）。
+- 按 `Esc` 取消 Confirm → 回到 editor（Esc 在 Confirm 上等价于"选 No"）。
+  注意：单按 `N` 只是把高亮切到 `[N]o`，**不会**直接关；要么再按 `Enter`，
+  要么直接 `Esc`。
 
 ### 4.4 Tab 进入 picker → 选 → 回填 editor
 
@@ -439,13 +448,14 @@ uv run python -m cli --playback /tmp/no-such-fixture
 
 如果挂超过 10 秒，按 `Ctrl+C` 抢救，并标记此项失败。
 
-### 5.5 全部 6 条 M1 fixture 的 smoke
+### 5.5 全部 7 条 M1 fixture 的 smoke
 
-按顺序跑：
+W5 deliverable 表 + acceptance #7 一起要求 7 条 fixture 全部能播完且自然
+退出。**漏掉任何一条都算 acceptance 不通过**。
 
 ```bash
-for f in assistant_text_delta assistant_thinking_delta parallel_tools \
-         compaction abort_during_stream abort_during_tool; do
+for f in assistant_text_delta assistant_thinking_delta tool_execution_success \
+         parallel_tools compaction abort_during_stream abort_during_tool; do
   echo "=== $f ==="
   uv run python -m cli --playback "tests/fixtures/pi_compat/$f"
   echo "exit=$?"
@@ -534,8 +544,8 @@ done
 
 §1 CLI
 - 1.1 --help: ✅/❌
-- 1.2 -m cli: ✅/❌
-- 1.3 --print: ✅/❌
+- 1.2 --print stub: ✅/❌
+- 1.3 (可选) neomagi shim 仍可调通: ✅/❌/skip
 
 §2 启动 / 退出
 - 2.1: ✅/❌
