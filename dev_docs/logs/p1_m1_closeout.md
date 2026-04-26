@@ -98,3 +98,61 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 复杂度治理：本轮把 `.complexity-baseline.json` 重新刷过 —— W7 提交时新测试文件还未 tracked，complexity_guard 通过 `git ls-files` 扫描漏掉了它们；commit 后这些文件进入 ratchet 视野，于是出现 33 条 "block" 级 finding（`EventRouter.route` 19 分支、`AssistantMessageComponent.apply` 12 分支、parser/renderer/markdown 等都在合理范围）。按 plan §risk "complexity_guard 抖动" 段落要求，此处用 `just complexity-baseline` 锁定 M1 floor，后续 PR 自查 ratchet。
 
 测试结果：`pytest tests/` 共 **170 用例 green**；`just lint` green，`complexity_guard regressions=0`（基准刷新后）。
+
+## 手测发现：macOS Terminal.app 下 Ctrl+C 无效（2026-04-26）
+
+按 `dev_docs/user_tests/p1_m1_manual_test_plan.md` §2.3 在 macOS Terminal.app
+里测试时，Ctrl+C 完全没反应（按下后键入 `echo OK` 也不回显，能确认进程
+没退）。但 `pty.fork()` 起的裸 PTY 测试里 Ctrl+C 立即 exit=0。差异定位到
+`StdinBuffer` 的两个解析漏洞，都跟"我们主动协商了 keyboard protocol，但
+没考虑终端真的接受时会发的替代编码"有关。
+
+### 根因
+
+`TerminalSession.enter()` 进入 raw mode 时无条件下发：
+
+- `\x1b[>4;2m` —— 开 xterm `modifyOtherKeys=2`
+- `\x1b[>1u` —— 开 Kitty keyboard protocol level 1
+
+落地在 macOS Terminal.app 上时，这两个请求至少有一个被部分接受（具体哪
+一个尚不能确证 —— ADR-0015 §影响段已写明 M1 不做 DA 探测，按 best-effort
+处理）。结果终端不再用裸字节 `\x03` 表示 Ctrl+C，而是用以下两种 CSI 编码
+之一：
+
+| 编码 | 含义 | 解析器原行为 |
+| --- | --- | --- |
+| `\x1b[99;5u` | Kitty/CSI-u：code=99 (`c`) + modifier=5 (Ctrl) | `_parse_csi_u` 吐 `KeyEvent(key="Ctrl+c")` —— 小写 `c`，与 keymap binding `"Ctrl+C"` / `_global_input_hook` 的 `event.key == "Ctrl+C"` **大小写不匹配 → silently miss** |
+| `\x1b[27;5;99~` | xterm modifyOtherKeys=2：code=27 占位，第三参才是 ASCII | `~` 分支查 `_TILDE_NAMES["27"]` 返回 None → **直接丢弃事件** |
+
+两条路径都让 Ctrl+C 落不到 hook，即使 `\x03` 同时被发出（实际两种模式
+互斥），也走不同分支。Editor 本身的 keymap 同样命中不了，所以连 Confirm
+overlay 都不会弹。这是为什么截图里 "Ctrl+C 之后没反应" + 按 Enter 仍能
+触发 `M1 mock — no agent runtime` 通知（说明进程还活着、只是 Ctrl+C 的
+事件丢了）。
+
+### 解决办法（commit `72335a9 fix(tui/stdin): ...`）
+
+- `_parse_csi_u`：当 modifier 含 `Ctrl` 且 code 落在 a–z 范围（97–122），
+  先 `ch.upper()` 再走 `_format_key`。这样 `\x1b[99;5u` 现在吐
+  `KeyEvent(key="Ctrl+C")`，与裸字节 `\x03` 路径产物一致。
+- `~` 分支：识别 `code == "27"` + 三段 params 的 modifyOtherKeys=2 替代
+  形式，第三参当 ASCII 还原为 `chr(code)`，复用同一套 Ctrl+letter 大写
+  化逻辑后 emit。`\x1b[27;5;99~` 现在也吐 `KeyEvent(key="Ctrl+C")`。
+
+两条 regression test（`test_csi_u_ctrl_letter_is_normalised_to_uppercase`
++ `test_csi_27_modify_other_keys_form_for_ctrl_c`）锁定。同 commit 还落了
+`scripts/diag_keys.py` —— 8 秒 raw-mode + 同协商序列的字节探针，落盘到
+`/tmp/neomagi-diag-keys.log`，未来再有"某 Ctrl+X 在某终端没反应"报告时
+让用户先跑这个出实证，而不是猜测。
+
+### Acceptance 影响
+
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §2.3 用户复测：`uv run
+  python -m cli` → Ctrl+C → `echo OK` 回显出现，**Ctrl+C 一次成功退出**。
+- M1 acceptance #3「终端可恢复」原本只覆盖 5 条退出路径的 termios 还原，
+  没覆盖"raw-mode 下 Ctrl+C 必须能到 hook"这条隐含前提；本轮把它显式加
+  到 stdin parser regression suite 里，避免后续 protocol negotiation 调
+  整再次回退。
+- 自动测试 167 → **174 passed**（W7 + 评审后回归 + 测试质量轮 + parser
+  case 修复 + CSI-27 form），`just lint` green，`complexity_guard
+  regressions=0`。
