@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .component import Component, CursorMarker
+from .components.spinner import PI_FRAMES, Spinner
 from .keymap import Action, Keymap
 from .stdin_buffer import KeyEvent
 from .width import pad_to_width, truncate_to_width
@@ -57,20 +58,19 @@ class Overlay(Component):
 class Loader(Overlay):
     """Single-line spinner; updates via :meth:`tick` from the run loop."""
 
-    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-    def __init__(self, label: str = "working") -> None:
+    def __init__(
+        self, label: str = "working", frames: Sequence[str] | None = None
+    ) -> None:
         super().__init__()
         self.label: str = label
-        self._frame: int = 0
+        self._spinner = Spinner(label, frames=PI_FRAMES if frames is None else frames)
+        self._spinner.attach(self.request_render)
 
     def tick(self) -> None:
-        self._frame = (self._frame + 1) % len(self._FRAMES)
-        self.request_render()
+        self._spinner.tick()
 
     def render_body(self, width: int) -> list[str]:
-        spinner = self._FRAMES[self._frame]
-        return [pad_to_width(f"{spinner} {self.label}", width)]
+        return self._spinner.render(width)
 
 
 class CancellableLoader(Loader):
@@ -80,12 +80,9 @@ class CancellableLoader(Loader):
         *,
         on_cancel: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(label)
+        super().__init__(f"{label}  (Esc to cancel)")
+        self.label = label
         self.on_cancel: Callable[[], None] | None = on_cancel
-
-    def render_body(self, width: int) -> list[str]:
-        spinner = self._FRAMES[self._frame]
-        return [pad_to_width(f"{spinner} {self.label}  (Esc to cancel)", width)]
 
     def handle_input(self, event: Any) -> None:
         if isinstance(event, KeyEvent) and event.key == "Esc":
