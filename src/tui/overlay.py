@@ -120,12 +120,26 @@ class Selector(Overlay):
         self._keymap: Keymap = keymap or Keymap()
 
     def render_body(self, width: int) -> list[str]:
-        head = pad_to_width(f"▎ {self.title}", width)
+        # Visual focus signal: bold cyan title bar + an `[active]` tag
+        # when the picker has keyboard focus (Tab pressed); plain text
+        # otherwise. The selected row uses inverse video while focused so
+        # the cursor position is unmistakable on terminals where the
+        # default cursor glyph is too subtle (manual §4.4 caught this on
+        # macOS Terminal.app).
+        if self.focused:
+            head_text = f"▎ {self.title}  [active — arrows / Enter / Esc]"
+            head = pad_to_width(f"\x1b[1;36m{head_text}\x1b[0m", width)
+        else:
+            head = pad_to_width(f"▎ {self.title}", width)
         rows: list[str] = [head]
         for i, item in enumerate(self.items):
             cursor = "▶ " if i == self.index else "  "
             text = item.label if item.detail is None else f"{item.label}  ─  {item.detail}"
-            rows.append(pad_to_width(cursor + truncate_to_width(text, width - 2), width))
+            line = cursor + truncate_to_width(text, width - 2)
+            line = pad_to_width(line, width)
+            if i == self.index and self.focused:
+                line = f"\x1b[7m{line}\x1b[0m"  # inverse video on focused row
+            rows.append(line)
         return rows
 
     def cursor_marker(self) -> CursorMarker | None:

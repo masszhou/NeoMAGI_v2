@@ -66,6 +66,12 @@ class Component:
 
     def __init__(self) -> None:
         self._request_render: RequestRender | None = None
+        self.focused: bool = False
+        """Set by ``TUIApp.set_focus`` whenever this component is the
+        keyboard-focus owner. Components that look the same in both
+        states ignore it; overlays / pickers use it to make the focus
+        shift visually obvious — e.g. inverse video on the selected
+        row — so the user knows where their next keystroke will land."""
 
     def attach(self, request_render: RequestRender) -> None:
         """Called by ``TUIApp`` when the component joins the tree."""

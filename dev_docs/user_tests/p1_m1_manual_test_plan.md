@@ -409,11 +409,23 @@ stdin（驱动/IME 层问题）。Ctrl+C 之前在 macOS Terminal.app 上的 bug
 
 - editor 空白，输入 `/`，再输入 `q`。
 - 按 `Tab`。
-- **期望**：焦点切到 selector（光标视觉切走，再按 `↓` 不动 buffer）。
-- 此时按 `Enter`。
-- **期望**：editor buffer 变成 `/quit `（带尾随空格），焦点回到 editor，
-  selector 关闭。
+- **期望**（明显的视觉切换）：
+  - selector 顶部 title 变成**加粗青色**：`▎ Slash commands  [active —
+    arrows / Enter / Esc]`。
+  - 选中行（`▶ /quit  ─  Quit NeoMAGI`）反色高亮（前景背景对调）。
+  - 编辑器输入区不再接收键盘 —— 现在所有按键都路由到 selector。
+- 按 `↑` / `↓`（这里只有一个候选 `/quit`，所以不会有可见 index 移动；
+  键入 `/` 然后 Tab 进 picker 会有完整 22 条可选，能看到反色行随箭头移动）。
+- 按 `Enter`。
+- **期望**：editor buffer 变成 `/quit `（带尾随空格），焦点回到 editor
+  （title / 反色都消失），selector 关闭。
 - 你可以接着按 `Enter` 再走 4.3 的 Confirm 路径，或 `Backspace` 删掉。
+- **失败模式判定**：
+  - 按 Tab 后**没有**看到 title `[active]` 标志 / 选中行反色 → focus
+    没切过去（早期 bug：靠 cursor 那个小方块做唯一指示，太弱）。
+  - 按 Tab 后焦点切了但任何键都"无效" → 你按的可能是 Selector 不识别的
+    键（普通字母不会走过滤，因为 picker 不是搜索框）；用 `↑↓` 移动、
+    `Enter` 选中、`Esc` 关闭。
 
 ### 4.5 Esc 优先关 overlay，不直接 abort
 

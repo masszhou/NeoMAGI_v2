@@ -81,11 +81,27 @@ def test_tab_moves_focus_into_picker_then_enter_inserts_back() -> None:
     app, c = _make_controller()
     _inject(app, "/", "q")  # filter to /quit
     assert app.focused is c.editor
+    assert c.editor.focused is True
     _inject(app, "Tab")
-    assert isinstance(app.focused, Selector)
+    selector = app.focused
+    assert isinstance(selector, Selector)
+    # Visual focus signal — covers the §4.4 macOS Terminal regression
+    # where Tab moved focus but the picker looked identical to the
+    # unfocused state, so the user thought the system had locked up.
+    assert selector.focused is True
+    assert c.editor.focused is False
+    rendered = selector.render(80)
+    body = "\n".join(rendered)
+    assert "[active" in body, (
+        f"focused selector must paint a visible focus marker; got {body!r}"
+    )
+    assert "\x1b[7m" in body, (
+        "focused selector must use inverse video on the selected row"
+    )
     _inject(app, "Enter")
     assert c.editor.buffer.text == "/quit "
     assert app.focused is c.editor
+    assert c.editor.focused is True
     assert c._slash_overlay is None  # noqa: SLF001
 
 

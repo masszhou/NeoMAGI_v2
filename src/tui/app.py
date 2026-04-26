@@ -114,7 +114,16 @@ class TUIApp:
             self.request_render()
 
     def set_focus(self, component: Component | None) -> None:
+        # Maintain a `focused` flag on each Component so render paths can
+        # show a clear visual indicator (inverse video, focus glyph, etc.)
+        # — manual §4.4 reported the prior cursor-only signal was too
+        # subtle on macOS Terminal.app to tell whether Tab actually moved
+        # focus into the picker.
+        if self._focus is not None and self._focus is not component:
+            self._focus.focused = False
         self._focus = component
+        if component is not None:
+            component.focused = True
         self.request_render()
 
     def set_focus_offset_provider(

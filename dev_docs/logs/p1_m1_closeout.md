@@ -322,3 +322,45 @@ duration 字段更新都需要被动唤醒，否则会观感凝固。
   re-baseline 后 regressions=0（baseline fingerprint 是行号锚定，
   `bootstrap` 内多了一行让 `_on_editor_action` 行号下移触发 false-positive
   regression，refresh 一次即可）。
+
+## 手测追加：Tab 进 picker 后视觉无感（2026-04-26）
+
+§4.4 反馈"Tab 后系统好像锁了，什么键都没用，只有 Esc 能退出"。PTY 复现
+确认 Tab **确实**把焦点和 hardware cursor 都从 editor 行 (`(1,5)`) 移到
+了 selector 选中行 (`(4,3)`) —— 但 macOS Terminal 默认 cursor 太弱
+（细横线 / 小方块），用户根本看不出焦点移到 picker 里了，于是按 `↑↓`
+（只有 1 个 `/quit` 候选时不动）、按字母（Selector 不消费）一律"没反应"，
+直到按 Esc 关掉 overlay 才恢复"正常"。
+
+### 根因
+
+`Selector.render_body` 不论 focused / unfocused 渲染完全一致：title 灰色，
+选中行只有一个 `▶` 指示。focus 状态唯一可见的痕迹是 `cursor_marker` 让
+hardware cursor 移过去——这在很多终端配置下根本不显眼。同时 `Component`
+基类没有"我是不是当前焦点"的状态字段，render 时也无从知晓。
+
+### 解决办法（commit `<本次>`）
+
+- `Component` 增 `self.focused: bool` 字段。
+- `TUIApp.set_focus(component)` 维护这个字段：把旧 focus 的 `focused`
+  置 `False`，新 focus 置 `True`，再 `request_render()`。
+- `Selector.render_body` 用 `self.focused`：
+  - focused=True 时 title 加粗青色 + 追加 `[active — arrows / Enter / Esc]`
+    提示词。
+  - 选中行套 inverse video（`\x1b[7m...\x1b[0m`）—— 前景背景对调，任何
+    终端都看得清。
+  - focused=False 时和原来一样，灰 title + `▶` 指示。
+
+回归测试 `test_tab_moves_focus_into_picker_then_enter_inserts_back` 加断言：
+- Tab 后 `selector.focused is True`、`editor.focused is False`。
+- selector.render(80) 输出含 `[active`。
+- 输出含 `\x1b[7m`（inverse video escape）。
+- Enter 选中后焦点回 editor，`editor.focused is True`、selector 关。
+
+### Acceptance 影响
+
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §4.4 重写期望，列出
+  "title 变青色加粗 / 选中行反色"作为视觉判定，并加失败模式表格区分
+  "focus 没切" vs "Selector 不消费当前键"。
+- 自动测试 179 passed（数量不变，强化既有 §4.4 用例）；`just lint`
+  green、`complexity_guard regressions=0`。
