@@ -83,6 +83,13 @@ class TUIApp:
         focus into a row offset so the cursor positions correctly. Set by
         the interactive controller, which composes status / messages /
         editor under a single root node."""
+        self._wake_at: list[float] = []
+        """Sorted-ish list of monotonic timestamps at which the loop must
+        ``request_render()`` even with no input pending. Used by transient
+        components (StatusComponent notifications, future Loader spinners)
+        to ensure passive expiry is reflected on screen — without this,
+        a TTL'd notification would stay painted until the next user
+        keystroke happened to wake the render path."""
 
     # ------------------------------------------------------------------ #
     # Component tree                                                      #
@@ -134,11 +141,33 @@ class TUIApp:
     def request_render(self) -> None:
         self._render_requested = True
 
+    def schedule_wake(self, when: float) -> None:
+        """Register a monotonic timestamp at which the loop must redraw,
+        even with no input pending. Transient components call this to
+        guarantee TTL-style expiry shows up on screen."""
+
+        self._wake_at.append(when)
+
     def _consume_render_request(self) -> bool:
         if not self._render_requested:
             return False
         self._render_requested = False
         return True
+
+    def _check_wakeups(self) -> None:
+        """Promote any scheduled wake-up that has come due into a render
+        request, then drop it from the queue."""
+
+        if not self._wake_at:
+            return
+        import time as _time
+
+        now = _time.monotonic()
+        due = [t for t in self._wake_at if t <= now]
+        if not due:
+            return
+        self._wake_at = [t for t in self._wake_at if t > now]
+        self._render_requested = True
 
     # ------------------------------------------------------------------ #
     # Input                                                               #
@@ -183,6 +212,7 @@ class TUIApp:
                 for event in events:
                     self._dispatch(event)
 
+                self._check_wakeups()
                 if self._consume_render_request():
                     self._draw()
 
@@ -196,6 +226,7 @@ class TUIApp:
 
         for event in self._drain_injected():
             self._dispatch(event)
+        self._check_wakeups()
         if self._consume_render_request():
             self._draw()
 

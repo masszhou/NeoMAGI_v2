@@ -7,6 +7,7 @@ the message column.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -36,6 +37,15 @@ class StatusComponent(Component):
         self._notifications: list[Notification] = []
         self.compacting: bool = False
         self.auto_retry: tuple[int, int] | None = None
+        self._schedule_wake: Callable[[float], None] | None = None
+        """Optional callback supplied by the controller (forwards to
+        ``TUIApp.schedule_wake``). Without it, TTL'd notifications would
+        stay on screen until the next user keystroke happened to wake
+        the render loop, since render is event-driven and the loop never
+        re-evaluates ``_alive_notifications`` on its own."""
+
+    def attach_wake_scheduler(self, schedule: Callable[[float], None]) -> None:
+        self._schedule_wake = schedule
 
     def push_notification(
         self,
@@ -44,10 +54,15 @@ class StatusComponent(Component):
         level: NotificationLevel = "info",
         ttl_seconds: float = 4.0,
     ) -> None:
+        expires_at = time.monotonic() + ttl_seconds
         self._notifications.append(
-            Notification(text=text, level=level, expires_at=time.monotonic() + ttl_seconds)
+            Notification(text=text, level=level, expires_at=expires_at)
         )
         self.request_render()
+        # Tiny buffer past expiry so the render after the wake-up
+        # actually sees ``_alive_notifications`` filter the entry out.
+        if self._schedule_wake is not None:
+            self._schedule_wake(expires_at + 0.05)
 
     def set_queue(self, steering: list[str], follow_up: list[str]) -> None:
         self.queue = QueueState(steering=list(steering), follow_up=list(follow_up))

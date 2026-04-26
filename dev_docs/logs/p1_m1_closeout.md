@@ -277,3 +277,48 @@ through_to_abort` 改成断 status 通知里 *没有* abort。
 - 自动测试 175 → **178 passed**；`just lint` green、`complexity_guard`
   re-baseline 后 regressions=0（`_csi_27_alt_form` 拆出独立 helper 维持
   阈值不变）。
+
+## 手测追加：Status 通知 TTL 不生效（2026-04-26）
+
+§3.8 单 Esc 改成走 status 通知后，手测反馈"青色 `aborted` 三秒后不消失，
+还是永久挂在屏幕上"。
+
+### 根因
+
+`StatusComponent._alive_notifications()` 只在 `render()` 被调用时过滤过期
+通知，但 `TUIApp` 主循环是**事件驱动**的：3 秒后 TTL 到期，没有任何输入
+事件，loop 在 `time.sleep(0.012)` → 没有 `_consume_render_request` → 不
+重画。直到下一次用户键入触发 render 才会过滤掉过期项。视觉上等于"永久挂
+住"。
+
+同类问题潜在影响：未来 `Loader` spinner、`ToolExecutionComponent` 的
+duration 字段更新都需要被动唤醒，否则会观感凝固。
+
+### 解决办法（commit `<本次>`）
+
+- `TUIApp` 增 `_wake_at: list[float]` 队列 + `schedule_wake(when)` 公开
+  方法 + `_check_wakeups()` helper。主循环和 `step()` 在每次 dispatch 之
+  后都调 `_check_wakeups`：到期的 wake-up 转换为 `_render_requested = True`
+  并从队列移除，紧接着 `_draw()` 就会走 `render()` → `_alive_notifications`
+  自动剔除。
+- `StatusComponent` 增 `attach_wake_scheduler(callback)`；
+  `push_notification` 在登记通知时把 `expires_at + 0.05` 推给 callback
+  （tiny buffer 保证唤醒发生**在**过期之后，render 一次性看到没活的通知）。
+- `InteractiveController.bootstrap()` 调
+  `self._status.attach_wake_scheduler(self._app.schedule_wake)` 接通。
+
+回归测试 `test_status_notification_expires_via_scheduled_wake` 用
+`monkeypatch` 注入 fake `time.monotonic`：push 通知 → 断言 `_wake_at`
+非空 → 推进 fake clock 越过 TTL → `app.step()` → 断言 `_wake_at` 已被
+消费、`status.render()` 输出不再含通知文本。
+
+### Acceptance 影响
+
+- 任何使用 `push_notification(ttl_seconds=...)` 的路径（abort、playback
+  完成、unknown command、stub command 等）的 TTL 现在真的生效。
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.8 的"3 秒后自动消失"
+  期望从设计声明变成可观测事实。
+- 自动测试 178 → **179 passed**；`just lint` green、`complexity_guard`
+  re-baseline 后 regressions=0（baseline fingerprint 是行号锚定，
+  `bootstrap` 内多了一行让 `_on_editor_action` 行号下移触发 false-positive
+  regression，refresh 一次即可）。

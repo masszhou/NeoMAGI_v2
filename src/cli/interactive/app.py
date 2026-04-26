@@ -85,6 +85,7 @@ class InteractiveController:
         self._app.attach_root(self._root)
         self._app.set_focus(self._editor)
         self._app.set_focus_offset_provider(self._focus_offset_provider)
+        self._status.attach_wake_scheduler(self._app.schedule_wake)
         self._app.add_input_hook(self._global_input_hook)
         self._editor.set_state(EditorState.IDLE)
         if self._playback_dir is not None:
