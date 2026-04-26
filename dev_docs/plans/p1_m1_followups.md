@@ -5,7 +5,7 @@ doc_id_assigned_at: 2026-04-26T17:27:52+02:00
 ---
 # P1-M1 Follow-up Implementation Plan: Pi-aligned UX increments
 
-- Status: draft
+- Status: approved
 - Date: 2026-04-26
 - Roadmap: `design_docs/roadmap/p1_engine_pi.md` (§ P1-M1)
 - Parent plan: `dev_docs/plans/p1_m1_tui_skeleton_and_mock_playback.md`（已 sign-off）
@@ -54,14 +54,47 @@ ls -a / ll` 输出全部保留，TUI 在它们下方铺开。
 
 **实现要点**：
 
-- `TerminalSession.enter()` 在进入 raw mode 之后、第一次 render 之前，
-  发 DSR 查询（`\x1b[6n`），从 stdin 解析 `\x1b[<row>;<col>R`，得到
-  `anchor_row`。
-  - 超时 100 ms 不响应 → 兜底方案：写 N 个 `\n` 把光标推到屏底，
-    `anchor_row = terminal_rows - reserved_height + 1`，`reserved_height`
-    取 8（editor + status + 一些消息空间，可配置）。
-  - 超时窗口期间 stdin 进来的字节要单独缓存，回响应解析完后再交给
-    `StdinBuffer`，避免吞掉用户首键。
+- Anchor ownership path 明确拆开，避免 `TerminalSession` 反向知道
+  `Renderer` / `StdinBuffer`：
+  - `TerminalSession.enter()` 仍只负责 raw mode / cursor / bracketed paste /
+    keyboard protocol negotiation，不直接改 renderer anchor。
+  - `TerminalSession.query_cursor_row(timeout_ms=100) -> CursorQueryResult`
+    是低层 helper：在真实 TTY 上发 DSR 查询（`\x1b[6n`），从 stdin
+    解析 `\x1b[<row>;<col>R`；返回 `CursorQueryResult(row: int | None,
+    leftover: bytes, attempted: bool, fallback_allowed: bool)`。它不计算
+    fallback anchor、不写入 `StdinBuffer`、不调用 `Renderer.set_anchor()`。
+    真实 TTY timeout / 不支持 DSR 时返回 `row=None, attempted=True,
+    fallback_allowed=True`；非 TTY 时必须 no-op，返回 `row=None,
+    leftover=b"", attempted=False, fallback_allowed=False`，且不写任何换行。
+  - `TUIApp._prepare_anchor(size)`（在 `terminal.enter()` 后、第一次 render
+    前调用）拥有编排权：调用 `terminal.query_cursor_row()`，把
+    `leftover` 用 `self._stdin.feed(leftover)` 回灌，再按
+    `CursorQueryResult` 字段计算最终 `anchor_row`：`row is int` 时走
+    DSR 成功路径；`row is None and fallback_allowed` 时走真实 TTY
+    bottom-reserved fallback；`row is None and not fallback_allowed` 时保持
+    anchor=1 且不写任何换行。最后调用 `self._renderer.set_anchor(anchor_row)`，
+    并把同一值存到 `self._anchor_row` 供 `_compose_frame` 计算可用高度。
+  - `reserved_height` 取 8（editor + status + 一些消息空间，可配置），并
+    clamp 到当前 `terminal_rows` 范围内。
+  - DSR 成功后先算 `available_height = terminal_rows - anchor_row + 1`；
+    若 `available_height < reserved_height`，说明用户在屏幕底部附近启动
+    TUI。此时写 `reserved_height - available_height` 个 `\n` 让终端滚动出
+    最小工作区，再把 `anchor_row` 设为
+    `terminal_rows - reserved_height + 1`（与 fallback 共用同一个
+    `bottom_reserved_anchor()` helper）。这样 DSR 正常响应时也不会只剩
+    一两行 TUI 可用空间。
+  - 超时 100 ms 不响应 → 兜底方案：走同一个 `bottom_reserved_anchor()`
+    helper；由于拿不到当前 cursor row，写 `terminal_rows` 个 `\n` 把光标
+    保守推到屏底（会滚动当前 viewport，但保留 scrollback），然后返回
+    `terminal_rows - reserved_height + 1`。
+  - DSR timeout 后可能仍收到迟到的 cursor position report（CPR），形态为
+    `\x1b[<row>;<col>R`。这类字节是 terminal response，不是用户输入：
+    `TerminalSession.query_cursor_row()` 在查询窗口内要消费匹配的 CPR；
+    查询窗口外的迟到 CPR 由 `StdinBuffer` 全局丢弃，不能产生 `KeyEvent` /
+    `PasteEvent` / 普通字符事件。
+  - 以上写换行 fallback **只允许在真实 TTY 且 DSR 超时/不支持时发生**；
+    非 TTY / pipe / playback / subprocess smoke tests 不做 DSR、不写换行，
+    anchor 保持默认 1，避免污染 stdout。
 - `Renderer` 增 `anchor_row` 字段（默认 1，向后兼容）+ `set_anchor(row)`
   方法。所有 `_move_cursor(r, c)` 内部偏移成 `_move_cursor(r + anchor - 1, c)`。
   首帧不再走 `\x1b[H + \x1b[J`，改为 `_move_cursor(anchor, 1) + \x1b[J`
@@ -69,33 +102,79 @@ ls -a / ll` 输出全部保留，TUI 在它们下方铺开。
 - `TUIApp._compose_frame` 把可用高度从 `self._rows` 改为
   `self._rows - anchor + 1`。`_RootComponent.render_with_height` 不动
   —— 它已经做高度感知组合了。
-- `lifecycle.exit()` 在还原 termios 之前，把 cursor 显式移到 TUI 区域之下
-  （`anchor + last_frame_height`）并写一个 `\n`，让 shell prompt 在干净行
-  起。也在这里处理"如果 TUI 区域占满整屏"的兜底（直接 `\n` 即可）。
-- Resize 时 `TerminalSession.install_resize_handler` 触发的回调要 invalidate
-  当前 anchor（终端 resize 通常会重排，老 anchor 可能已经不在合理位置）；
-  最简单的策略是 resize → 立即重新 DSR 查询；如果失败就退化到屏底锚定。
+- `Renderer` 独立保存 `_last_presented_frame_height: int | None`：每次
+  `present(frame)` 成功写出后设为 `len(frame)`；新建 renderer 和
+  `Renderer.reset()` 后设回 `None`，避免 reset 后 lifecycle 读到旧行号。
+  `last_bottom_row() -> int | None`：未成功 present 过第一帧或 reset 后返回
+  `None`；否则返回 1-based 最后一行已绘制行号
+  （`anchor + last_presented_frame_height - 1`）。`lifecycle.exit()` 在还原
+  termios 之前统一调用该 helper：若返回 `None`，只做 terminal restore，
+  不尝试按 TUI 底部移动 cursor；若 `last_bottom_row() < terminal_rows`，
+  move cursor 到 `last_bottom_row() + 1, col=1` 并清当前行；若最后一帧已到
+  屏底，move 到 `terminal_rows, col=1` 后写 `\r\n` 让终端滚动一行。不要
+  在已经移动到空白行后再额外写 newline，避免 off-by-one 留白。
+- Resize 时 `TerminalSession.install_resize_handler` 触发的回调运行在
+  SIGWINCH 路径里，**不得**在回调内写 terminal、读 stdin 或等待 DSR。
+  回调只做轻量动作：更新 rows/cols、`Renderer.reset()`、设置
+  `self._anchor_dirty = True`、注入 `ResizeEvent` 并请求 render。下一次正常
+  `TUIApp` loop tick 在 compose/present 前看到 `_anchor_dirty`，再调用
+  `_prepare_anchor(size)` 重新 DSR；失败就走屏底 fallback。
 
-**决策影响**（amend ADR-0015 §影响段，至少加这 3 条）：
+**决策影响**（amend ADR-0015 §影响段，至少加这 5 条）：
 
 1. `src/tui/renderer.py`：原文写"first render"隐含全屏 `\x1b[H\x1b[J`；
    amend 改为"first render = `\x1b[<anchor>;1H` + `\x1b[J`，仅清锚点以下；
    shell history 在锚点之上字节级保留，不动"。
 2. `src/tui/terminal.py`：原 §影响段责任清单（raw mode / bracketed paste
-   / SIGWINCH / cursor / drain）**没有 DSR**；amend 加一条 "`TerminalSession.enter()`
-   在 raw mode 之后、第一次 render 之前发 `\x1b[6n` DSR 查询，从 stdin
-   读取 `\x1b[<row>;<col>R` 响应（100 ms 超时 + 屏底锚定 fallback）；
-   响应窗口期间读到的非 DSR 字节回灌 `StdinBuffer.feed`，不丢用户首键"。
-3. `src/tui/lifecycle.py`：amend 加一条"退出路径在 termios 还原前，
-   把 cursor 显式移到 `anchor + last_frame_height` 并写一个 `\n`，shell
-   新 prompt 起干净行；不破坏 acceptance #3 的五条退出路径恢复保证"。
+   / SIGWINCH / cursor / drain）**没有 DSR**；amend 加一条
+   "`TerminalSession.query_cursor_row()` 是低层 TTY helper：发 `\x1b[6n`
+   DSR 查询并返回 `CursorQueryResult(row, leftover, attempted,
+   fallback_allowed)`；非 TTY no-op 且 `fallback_allowed=False`，不写 stdout；
+   不拥有 fallback anchor 计算、不接触 `Renderer` / `StdinBuffer`"。
+3. `src/tui/app.py`：amend 加一条"`TUIApp._prepare_anchor()` 是 anchored
+   renderer 的 owner：在 `terminal.enter()` 后、第一次 render 前调用 DSR
+   helper，把 leftover bytes 回灌 `self._stdin.feed()`，计算 bottom-reserved
+   fallback，调用 `renderer.set_anchor()`，并用同一个 anchor 计算 compose
+   height"。
+4. `src/tui/lifecycle.py`：amend 加一条"退出路径在 termios 还原前，调用
+   `Renderer.last_bottom_row()`；返回 `None` 时只做 terminal restore；
+   如果底部行未到屏底就移动到下一行 col=1，如果已经到屏底就写 `\r\n`
+   滚动一行，shell 新 prompt 起干净行；不破坏 acceptance #3 的五条退出
+   路径恢复保证"。
+5. `src/tui/stdin_buffer.py`：amend 加一条"`CSI <digits>;<digits> R`
+   cursor position report 是 terminal response，不是用户输入；即使作为
+   late DSR response 在查询 timeout 后进入 normal input path，也必须被
+   丢弃且不产生任何 event"。
 
 **测试覆盖**：
 
 - 单元：`Renderer.set_anchor(N)` 后所有 `present` 调用的 escape 序列含
-  `(N + r);c H` 而不是 `r;c H`。
-- 集成：DSR 解析的回放测试 —— 手工注入 `\x1b[5;1R` 字节流，验证
-  `query_cursor_row()` 返回 5；超时返回 1（或兜底 fallback）。
+  `(N + r - 1);c H` 而不是 `r;c H`（逻辑 row 是 1-based）。
+- `tests/tui/test_terminal.py` 只测 `TerminalSession.query_cursor_row()` 的
+  低层职责：DSR success 返回 raw row（例如 5）+ leftover bytes；timeout
+  返回 `row=None, attempted=True, fallback_allowed=True` 且不写 fallback
+  newlines；非 DSR bytes 被保存在 `leftover`；非 TTY no-op，返回
+  `row=None, attempted=False, fallback_allowed=False`，stdout 不出现
+  fallback newlines。
+- `tests/tui/test_stdin_buffer.py` 增 late DSR response 用例：直接 feed
+  `b"\x1b[12;34R"`（以及前后夹普通输入的变体）时，CPR 字节被丢弃，不
+  产生 `KeyEvent`，周围真实用户输入仍正常解析。
+- 集成：`TUIApp._prepare_anchor()` 用 fake terminal 返回 `row + leftover`
+  时，断言 `renderer.set_anchor()` 收到最终 anchor、`self._anchor_row`
+  同步更新、leftover bytes 进入 `StdinBuffer.feed()` 后仍能被正常解析。
+- 集成：`TUIApp._prepare_anchor()` 覆盖 fallback 计算：raw row 足够时
+  anchor=raw row；raw row 靠近屏底时（例如 `rows=10, reserved_height=8,
+  row=9, fallback_allowed=True`）写 6 个 `\n` 并 anchor=3；真实 TTY
+  timeout `row=None, fallback_allowed=True` 时写 `terminal_rows` 个 `\n`
+  并 anchor=3；非 TTY / pipe 场景 `row=None, fallback_allowed=False`
+  时保持 anchor=1 且 stdout 不出现 fallback newlines。
+- 集成：resize callback 只设置 `_anchor_dirty` / 注入 `ResizeEvent` /
+  request render，不调用 `query_cursor_row()`；下一次普通 loop tick 才调用
+  `_prepare_anchor()`。
+- 单元：`Renderer.last_bottom_row()` 覆盖未 present / reset 后返回 `None`
+  以及 `anchor + last_presented_frame_height - 1` 的 off-by-one；lifecycle
+  exit 测试分别覆盖"`None` 时不移动 cursor"、"未到屏底 move 到下一行"和
+  "已到屏底写 `\r\n` 滚动"。
 - 端到端：用 PTY 写已知数量行的"shell history"，进 TUI，验证锚点行被
   正确识别；退出 TUI，验证锚点之上的内容**字节级**未被改动。
 - 手测：macOS Terminal / iTerm2 / gnome-terminal 至少各跑一遍 §2 全部
@@ -106,19 +185,29 @@ ls -a / ll` 输出全部保留，TUI 在它们下方铺开。
 
 - 启动 `uv run python -m cli` 后，启动前的 shell 输出**字节级保留**在
   TUI 区域之上；退出后 shell prompt 出现在 TUI 区域之下的新行。
-- DSR 查询失败时（非 TTY、不支持 DSR 的终端）退化到屏底锚定，仍可正常
-  使用，记录在 closeout 的"已知降级"段。
+- 真实 TTY 上 DSR 查询失败或不支持时退化到屏底锚定，仍可正常使用，记录
+  在 closeout 的"已知降级"段。
+- 非 TTY / pipe / playback / subprocess smoke tests 下不做 DSR、不滚动、
+  不写 fallback newlines，anchor 保持 1，避免污染 CLI stdout。
+- DSR 查询成功但启动位置距离屏底不足 `reserved_height` 时，也退化到
+  bottom-reserved anchor；不能出现只有 1–2 行可用高度的压缩 TUI。
+- DSR timeout 后迟到的 `CSI <row>;<col> R` cursor position report 不会
+  进入用户输入流，不产生 `KeyEvent`。
 - `tests/tui/test_renderer.py` + `tests/tui/test_terminal.py` 增 ~5 条
   用例覆盖 anchor 偏移逻辑。
 - `pytest tests/` 仍 180+ 用例 green；`just lint` green；
   `complexity_guard regressions=0`。
 
-**M9 衔接（不在本 W 做，留 hook）**：架构文档 line 918 定义 `terminal.
-clearOnShrink` settings 用于控制 resize redraw 行为。本 W 的 resize
-处理（"重新 DSR 查询；失败退化到屏底锚定"）当前对所有终端无差别走，
-M9 接 settings 后应当让此行为受 `terminal.clearOnShrink` 控制：`true`
-→ 走当前重锚点路径；`false` → 保留旧 anchor 直到下一次 explicit 重启
-TUI。本 W 的 closeout 段需要把这个 hook 显式列入"M9 待接入"清单。
+**Resize setting 注意**：不要把本 W 的 resize re-anchor 接到
+`terminal.clearOnShrink`。pi-mono baseline 里的 `clearOnShrink` 控制的是
+内容变短时是否清空残留行 / resize redraw 行为，不是"保留旧 anchor"开关。
+本 W 只定义固定策略：真实 TTY resize 后重新 DSR；失败走屏底锚定；非 TTY
+保持 anchor=1。如果未来需要"resize 时保留旧 anchor"之类策略，另开 setting
+和 ADR，不复用 `clearOnShrink`。
+
+---
+
+### W2. Spinner primitive：通用等待动画 + 现有 Loader 收敛
 
 **问题陈述**：现状的 `Loader` / `CancellableLoader` 在 `src/tui/overlay.py`
 里继承自 `Overlay`，把"动画帧状态"和"浮层定位 + 焦点"耦在一起。后续要
@@ -133,31 +222,71 @@ TUI。本 W 的 closeout 段需要把这个 hook 显式列入"M9 待接入"清�
   目录；和 pi-mono `packages/tui/src/components/` 分层对齐）：
   - `Spinner` 类，纯 `tui.component.Component` 子类（**不**继承
     `Overlay`）；构造参数 `label: str`、`frames: Sequence[str] = PI_FRAMES`、
-    `tick_interval: float = 0.08`。
-  - `Spinner.tick()`：`self._frame = (self._frame + 1) % len(self._frames)`，
-    然后 `self.request_render()`。**绝不**直接写 terminal。
-  - `Spinner.render(width)`：返回单行 `[f"{frame} {label}"]` 经
-    `pad_to_width` 截断/补齐到 `width`。颜色 / 样式不在 Spinner 里硬
-    编码，由调用者通过 `style: Callable[[str], str] | None = None`
-    （传入 spinner+label 整段字符串，返回带 ANSI 包装的字符串）注入。
+    `tick_interval: float = 0.08`、`style: Callable[[str], str] | None =
+    None`、`clock: Callable[[], float] | None = None`。
+  - `Spinner.tick()`：如果 `self._frames` 为空，直接 no-op，不
+    `request_render()`、不做模运算、不 schedule 下一次 wake；否则才执行
+    `self._frame = (self._frame + 1) % len(self._frames)`，然后
+    `self.request_render()`，并在 auto-tick scheduler 存在时排下一次
+    callback。**绝不**直接写 terminal。
+  - `Spinner.render(width)`：frames 非空时渲染最终文本
+    `f"{current_frame} {label}"`；frames 为空时渲染 `label` 本身，不加前导
+    空格。颜色 / 样式不在 Spinner 里硬编码，由调用者通过
+    `style: Callable[[str], str] | None = None` 注入；style 作用于上述最终
+    文本，再经 `pad_to_width` 截断/补齐到 `width` 并作为单行返回。
   - 模块顶常量 `PI_FRAMES: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸",
     "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")`（和 pi-mono `packages/tui/src/`
     对齐）；其他模块**不允许**再定义自己的 spinner frames。
   - `Spinner.set_label(text)` / `Spinner.set_frames(seq)` 允许运行时
-    更新（compaction 进度文案要刷新）。
-  - **`set_frames([])` 进入 `hidden` 状态**（直接对接架构 line 794
-    `setWorkingIndicator({frames: []})` extension API 契约）：
-    `render(width)` 返回 `[]`、`tick()` no-op 不做模运算（避免
-    `len(frames) == 0` 触发 `ZeroDivisionError`）、不再调度下次 wake；
-    `set_frames(non_empty)` 后恢复正常。M8 接 extension API 时不需要
-    再为这个特殊值打 patch。
-- Auto-tick 集成（**复用** `TUIApp.schedule_wake`，不引入新机制）：
-  - `Spinner.attach_tick_scheduler(scheduler: Callable[[float], None])`
-    保存一个 `schedule_wake` 形态的回调；若不为 `None`，每次 `tick()`
-    末尾自动 `scheduler(now + tick_interval)`。
-  - 测试可以注入 fake scheduler 验证下次唤醒时刻；生产由
-    `InteractiveController.bootstrap()`（或更上层）接通到
-    `app.schedule_wake`，跟 status notification TTL 同一条路径。
+    更新（compaction 进度文案要刷新）。`set_frames(seq)` 每次都复制输入
+    序列并把 `_frame = 0`，避免旧 frame index 在切到短序列时越界或显示
+    不确定帧；如果新 frames 非空且 auto-tick scheduler 已 attach，则排
+    第一帧；如果新 frames 为空，不排队，已在队列里的旧 callback 到期时按
+    frames-empty `tick()` no-op 处理。
+  - **`set_frames([])` 进入 no-indicator 状态**（直接对接架构 line 794
+    `setWorkingIndicator({frames: []})` extension API 契约）：只隐藏
+    spinner indicator，不隐藏工作文案。`render(width)` 仍返回 label/message
+    行（无 braille frame 前缀，经 `pad_to_width` 截断/补齐）；`tick()`
+    no-op，不 request render、不做模运算（避免 `len(frames) == 0` 触发
+    `ZeroDivisionError`）、不再调度下次 wake；`set_frames(non_empty)`
+    后 `_frame` 重置为 0 并恢复正常。这样和
+    pi-mono loader 的"message 仍显示、只省略 frame"语义一致，M8 接
+    extension API 时不需要再为这个特殊值打 patch。
+- Auto-tick 集成（**需要扩展** `TUIApp`，现有 `schedule_wake(when)` 不够）：
+  - **现有 `schedule_wake(when)` 的语义**：到期只把 `_render_requested`
+    置 True，触发一次重画 —— 对 status notification TTL 的"过期淘汰"
+    场景够用（`_alive_notifications` 在 render 时自然过滤）。但对
+    spinner 不够：到期重画的是**同一帧**，动画不会自动转。如果只接到
+    `schedule_wake`，结果是终端定时刷一下，画面纹丝不动。
+  - **W2 扩展**：`TUIApp.schedule_callback(when: float, fn:
+    Callable[[], None]) -> None`。`_check_wakeups()` 在内部把到期的
+    callback 取出来**先执行 `fn()` 再 set `_render_requested = True`**。
+    `schedule_wake(when)` 保留为 `schedule_callback(when, lambda: None)`
+    的便捷别名（回调=空操作，行为等价于现状）。
+  - `Spinner` 构造时接收可选 `clock: Callable[[], float]`（默认
+    `time.monotonic`），只用于 auto-tick 调度测试；手动 `tick()` 不依赖
+    外部时钟。
+  - `Spinner.attach_tick_scheduler(scheduler: Callable[[float,
+    Callable[[], None]], None] | None)`：保存一个 `schedule_callback`
+    形态的回调。传入非空 scheduler 且当前 frames 非空时，**立即
+    schedule 第一帧** `scheduler(clock() + tick_interval, self.tick)`，但不
+    立刻推进 `_frame`；之后每次 `tick()` 仅在 frames 非空时 schedule 下一次
+    `scheduler(clock() + tick_interval, self.tick)`。这定义了 auto-tick 的
+    启动语义：owner 只需要 attach scheduler，不需要先手动 `tick()`。如果
+    attach 时 frames 为空，只保存 scheduler 不排队；后续
+    `set_frames(non_empty)` 且 scheduler 仍存在时再排第一帧。
+    `attach_tick_scheduler(None)` 关闭自动 tick；外部 owner 仍可手动
+    `tick()`，但手动 tick 不会在 scheduler 已清空或 frames 为空时继续排队。
+  - 测试三层：(1) `TUIApp.schedule_callback` 单测：到期 callback 被调用
+    且 `_render_requested` 为 True；(2) `Spinner` 单测：用 fake scheduler
+    验证 frames 非空时 attach 会 schedule 首次回调、`tick()` 末尾会
+    schedule 下一次回调且回调指向 `self.tick`；frames 为空时 attach 和
+    tick 都不排队；
+    (3) 集成：`Spinner` + `TUIApp` 跑一段时间（注入 fake clock + 手动驱
+    动 `_check_wakeups`），断言连续 N tick 后 `_frame` 推进了 N 次。
+  - 生产由 `InteractiveController.bootstrap()` 把 `app.schedule_callback`
+    传给业务层创建的 `Spinner` 实例（具体哪个 owner 创建在 M2/M3/M5
+    时再定，本 W 只交付 substrate 接口）。
 - `src/tui/overlay.py` 收敛：
   - `Loader(label, frames=None)` 改成"持有一个 `Spinner` 实例 + 把它
     渲染在 Overlay 的 body 里"，不再自己存帧或字符串。`tick()` 转发到
@@ -170,8 +299,9 @@ TUI。本 W 的 closeout 段需要把这个 hook 显式列入"M9 待接入"清�
   business-side 用法**不**在本 W 范围 —— 它们在 M2/M3/M5 接进真 runtime
   时再决定怎么把 `Spinner` 嵌进自己的 render（最常见会是把 `Spinner`
   作为 `ToolExecutionComponent` 的子组件，`tick()` 由 controller 在收到
-  `tool_execution_update` 时手动驱动，或者通过 `schedule_wake` 自动跑）。
-  本 W 只交付 substrate primitive + 收敛现有重复实现。
+  `tool_execution_update` 时手动驱动，或者通过 auto-tick scheduler
+  （`schedule_callback`）自动跑）。本 W 只交付 substrate primitive +
+  收敛现有重复实现。
 
 **决策影响**（amend ADR-0015 §影响段，至少加这 2 条）：
 
@@ -181,9 +311,22 @@ TUI。本 W 的 closeout 段需要把这个 hook 显式列入"M9 待接入"清�
    后业务层也跟随生效。
 2. **`tui.components.spinner.PI_FRAMES` 是 substrate 唯一 spinner 字符
    来源**（与 pi-mono `packages/tui/src/components/loader.ts` 帧序列
-   对齐，按 ADR-0011 baseline `97a38bf6`）。amend 加约束："`src/`
-   下 grep `"⠋⠙⠹"` 只能命中 `tui/components/spinner.py`，其他模块
-   定义自己的 spinner frames 视为违反 ADR"；W2 测试用静态扫描断言锁定。
+   对齐，按 ADR-0011 baseline `97a38bf6`）。amend 加约束："任何模块
+   不得自定义 braille spinner 帧序列；`tui.components.spinner.PI_FRAMES`
+   是唯一来源"。
+   - **静态扫描断言（落到 W2 测试里）**：原计划写"grep `⠋⠙⠹` 只命中
+     spinner.py"是错的 —— `PI_FRAMES` 用 tuple 字面量逐字符 quote
+     （`("⠋", "⠙", "⠹", ...)`），文件里**不会**含连续子串 `⠋⠙⠹`，
+     既漏 spinner.py 自己也漏可能的新重复（比如别处写 `_FRAMES =
+     "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"` 单字符串字面量的写法都能逃过去）。改双层覆盖：
+     - **AST 级**：walk `src/**/*.py`，找 module-level `Assign` 节点，
+       右值若是 `Tuple` / `List` / `Constant(str)` 且包含 ≥ 5 个 braille
+       glyph（U+2800–U+28FF）或长度 ≥ 5 的连续 braille 字符串字面量，
+       目标必须是 `tui/components/spinner.py` 里的 `PI_FRAMES`，否则
+       fail。这同时拦截 tuple 写法和单字符串写法。
+     - **单 glyph 兜底**：`grep -l "⠋"` `src/**/*.py` 命中文件集合必须
+       仅含 `src/tui/components/spinner.py`。简单粗暴但和 AST 互补，AST
+       误判时也能挂。
 
 **测试覆盖**：
 
@@ -193,19 +336,54 @@ TUI。本 W 的 closeout 段需要把这个 hook 显式列入"M9 待接入"清�
   - `set_label("compacting…")` 后 `render(width)` 含新 label。
   - `render(width=4)` 截断到 4 列、宽度 0 返回 `[""]`。
   - `style=lambda s: f"\x1b[33m{s}\x1b[0m"` 注入后输出含 `\x1b[33m`。
-  - `attach_tick_scheduler(fake)` 后 `tick()` 调用 `fake(now+interval)`
-    一次；不 attach 时 `tick()` 不调任何 scheduler。
+  - `set_frames([])` 进入 no-indicator：`render(width)` 仍返回 label/message
+    行但不含任何 braille frame，且文本不以空格开头；`tick()` 不抛
+    `ZeroDivisionError`、不调 attached scheduler；后续
+    `set_frames(non_empty)` 恢复正常，`_frame` 重置为 0，且 scheduler 已
+    attach 时会排第一帧。
+  - `set_frames(seq)` 每次复制并重置 frame index：从默认 10 帧 tick 到
+    `_frame=9` 后切到 2 帧自定义序列，下一次 render 显示新序列第 0 帧；
+    从 `frames=[]` 切回非空 frames 时同样从第 0 帧开始。
+  - `attach_tick_scheduler(fake)` 后立即调用 `fake(now+interval,
+    self.tick)` 一次且不推进 `_frame`；执行该回调后 `_frame` 推进一次并
+    再 schedule 下一次；frames 为空时 attach 不排队；不 attach 时
+    `tick()` 不调任何 scheduler。
+- `tests/tui/test_app.py`（或 `test_renderer.py`）补 `TUIApp.schedule_callback`：
+  到期回调被调用 + `_render_requested` 置 True；同时验证现有
+  `schedule_wake(when)` 行为兼容（callback=空操作）。
+- `tests/tui/test_spinner.py` 集成测试：注入 fake clock，连续触发 N 次
+  `_check_wakeups` due，断言 `Spinner._frame` 推进了 N 次（防止
+  "scheduler 接通但 callback 没真转 frame" 这类回归）。
 - `tests/tui/test_overlay.py` 增 1–2 条：`Loader` / `CancellableLoader`
   组合到 `Spinner` 后行为不变（同样的 frames、同样的 tick 行为、同样的
   Esc 关闭）。
+- **静态扫描断言**（落到 `tests/tui/test_spinner.py` 或独立
+  `tests/tui/test_substrate_invariants.py`）：
+  - AST walk `src/`：找带 ≥ 5 个 braille glyph（U+2800–U+28FF）的字符串
+    或 tuple/list 字面量，目标必须只在 `src/tui/components/spinner.py`
+    的 `PI_FRAMES` 赋值里。
+  - 单 glyph grep 兜底：`Path("src").rglob("*.py")` 中文件含字符 `⠋`
+    的集合 == `{"src/tui/components/spinner.py"}`。
+  - 新写"自定义 spinner frames" 时两条扫描至少一条会挂。
 - `pytest tests/` 不引入新 fail；`just lint` green；
   `complexity_guard regressions=0`。
 
 **Acceptance**：
 
 - `src/tui/components/spinner.py` 落地，`PI_FRAMES` 是 substrate 唯一
-  帧来源（grep `"⠋⠙⠹"` 在 `src/` 下只命中此文件 —— 加进 `tests/`
-  静态扫描）。
+  帧来源；测试覆盖里"AST 级 + 单 glyph"双扫描断言锁定（替代原计划那
+  个不会命中 tuple 字面量的 `"⠋⠙⠹"` 子串 grep）。
+- `TUIApp.schedule_callback(when, fn)` 落地，到期先 `fn()` 再请求重画；
+  现有 `schedule_wake(when)` 退化为 `schedule_callback(when, lambda:
+  None)`，status notification TTL 路径无任何破坏。
+- `Spinner` 接 `attach_tick_scheduler` 后会先排首个 callback；到期
+  callback 真的会推进 `_frame`（集成测试断言连续 N 次 due → frame
+  推进 N 次）。
+- `Spinner.set_frames([])` 只隐藏 indicator，不隐藏 label/message；测试
+  断言 render 仍输出工作文案、不含 braille、不以空格开头，且不会继续
+  自动 tick。
+- `Spinner.set_frames(seq)` 每次重置 `_frame=0`；从 10 帧切到 2 帧、从空
+  frames 切回非空 frames 都有测试覆盖。
 - `Loader` / `CancellableLoader` 内部改用 `Spinner`，外部签名不变。
 - `cli.interactive` 层无任何破坏（既有 `_open_quit_confirm` 等路径保持
   绿测）。
@@ -244,7 +422,7 @@ Pi-mono 对应位置（baseline `97a38bf6`）：
 
 **实现要点**：
 
-新增四个文件到 `src/tui/components/`（与 §W2 `spinner.py` 同目录）。
+新增五个文件到 `src/tui/components/`（与 §W2 `spinner.py` 同目录）。
 所有 primitive 都是 `tui.component.Component` 的纯子类，不引入新的
 substrate 概念（不碰 `Renderer` / `TerminalSession` / `TUIApp`），不
 import 任何 `agent_core` / `cli.core` / `ai_provider` —— 静态扫描
@@ -377,19 +555,25 @@ substrate 跑。如果某条追加项依赖 W1 之外的子集，在该条的实
 
 - **DSR 查询跨终端兼容性**：macOS Terminal / iTerm2 / Linux 主流终端都
   支持，但 SSH 嵌入 / tmux 嵌套 / 早期 Windows 终端可能不支持或回响应
-  时序异常。Mitigation：100 ms 超时 + 兜底"屏底锚定"，并把降级体验记录
-  在 closeout。
+  时序异常。Mitigation：真实 TTY 上 100 ms 超时 + 兜底"屏底锚定"；非
+  TTY no-op，避免污染 stdout；并把降级体验记录在 closeout。
 - **Resize 后 anchor 失效**：终端 resize 时已渲染的内容会被重排，原来的
-  anchor 行可能已经不指向 TUI 顶部。Mitigation：resize handler 触发
-  `Renderer.reset()` + 重新 DSR 查询；失败就重新走 fallback。
+  anchor 行可能已经不指向 TUI 顶部。Mitigation：SIGWINCH callback 只做
+  `Renderer.reset()`、标记 `_anchor_dirty`、注入 `ResizeEvent` 并请求
+  render；下一次正常 loop tick 再调用 `_prepare_anchor()` 重新 DSR，失败
+  就重新走 fallback。禁止在 signal handler 直连路径里做 terminal I/O 或
+  100 ms 等待。
 - **退出留白行计算错误导致 shell prompt 覆盖 TUI 残留**：`lifecycle.exit()`
-  必须把 cursor 准确移到 `anchor + last_frame_height + 1`，否则 shell 新
-  prompt 可能盖在 TUI 最后一帧上。Mitigation：在 `Renderer` 暴露
-  `last_bottom_row()` 给 lifecycle 用，避免重复计算。
+  必须基于 1-based `Renderer.last_bottom_row()` 放置 cursor：未 present
+  过或 reset 后返回 `None` 时只恢复 terminal；未到屏底时移到
+  `last_bottom_row() + 1`，已到屏底时写 `\r\n` 滚动一行；否则 shell 新
+  prompt 可能盖在 TUI 最后一帧上。Mitigation：renderer 独立保存
+  `_last_presented_frame_height`，只暴露 helper 给 lifecycle 用，避免重复
+  计算和 reset 后读旧状态。
 - **第一次 render 之前的字节延迟**：DSR 握手期间 stdin 必须暂存任何
   user 首键；否则用户在终端启动瞬间敲的字符可能丢。Mitigation：
-  `TerminalSession.query_cursor_row()` 内部接管 stdin，把读到的非 DSR
-  响应字节回灌给 `StdinBuffer.feed()`。
+  `TerminalSession.query_cursor_row()` 返回非 DSR leftover bytes，由
+  `TUIApp._prepare_anchor()` 回灌给 `self._stdin.feed()`。
 
 ## 后续移交
 
