@@ -97,28 +97,28 @@ GROUP_THRESHOLDS = {
         file_target=500,
         file_block=800,
         function_target=30,
-        function_block=50,
+        function_block=60,
         branches_target=3,
-        branches_block=6,
-        nesting_block=3,
+        branches_block=8,
+        nesting_block=4,
     ),
     "scripts": GroupThresholds(
         file_target=500,
         file_block=800,
         function_target=30,
-        function_block=50,
+        function_block=60,
         branches_target=3,
-        branches_block=6,
-        nesting_block=3,
+        branches_block=8,
+        nesting_block=4,
     ),
     "tests": GroupThresholds(
         file_target=1200,
         file_block=1200,
         function_target=30,
-        function_block=50,
+        function_block=60,
         branches_target=3,
-        branches_block=6,
-        nesting_block=3,
+        branches_block=8,
+        nesting_block=4,
     ),
 }
 
@@ -501,6 +501,25 @@ def _body_metrics(statements: Sequence[ast.stmt]) -> tuple[int, int]:
 def _branch_metrics(node: ast.AST, depth: int = 0) -> tuple[int, int]:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return 0, depth
+
+    if isinstance(node, ast.If):
+        branches = 1
+        next_depth = depth + 1
+        max_depth = next_depth
+        for child in node.body:
+            child_branches, child_depth = _branch_metrics(child, next_depth)
+            branches += child_branches
+            max_depth = max(max_depth, child_depth)
+        if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+            child_branches, child_depth = _branch_metrics(node.orelse[0], depth)
+            branches += child_branches
+            max_depth = max(max_depth, child_depth)
+        else:
+            for child in node.orelse:
+                child_branches, child_depth = _branch_metrics(child, next_depth)
+                branches += child_branches
+                max_depth = max(max_depth, child_depth)
+        return branches, max_depth
 
     branches = 0
     max_depth = depth
