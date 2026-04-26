@@ -228,6 +228,17 @@ cooked mode 恢复。`kill -9`（SIGKILL）**不**在恢复保证内 —— 内�
 
 ### 2.5 终端恢复验证（关键）
 
+> **术语速记** —— 终端有两种工作模式：
+> - **Cooked / canonical**（普通 shell 状态）：内核终端驱动做行编辑，
+>   Backspace 删字符、Enter 才把整行交给程序、`Ctrl+C` 转 SIGINT。
+> - **Raw**（TUI 进入时）：每个字节立刻交给程序、不做行编辑、`Ctrl+C` 当
+>   普通字节 `\x03`。
+>
+> NeoMAGI TUI 启动时切到 raw，退出时**必须**还原回 cooked，否则 shell
+> 会变得：输入不回显、Backspace 失灵、Ctrl+C 杀不掉东西。`stty -a`
+> 输出的 `lflags:` 行就是 local-flags 真值表 —— 标志带 `-` 前缀表示关闭，
+> 不带 `-` 表示开启。
+
 退出 TUI 后，立刻在同一个终端跑：
 
 ```bash
@@ -237,11 +248,23 @@ echo "✓ terminal looks fine"
 printf 'paste test: %s\n' "abc"
 ```
 
-**期望**：
-- `stty -a` 应包含 `icanon` 和 `echo`（即 cooked mode + 回显已恢复）。
-- 可以正常输入回显。
-- 如果显示 `-icanon` 或 `-echo`，说明 lifecycle 没把 termios 还原 —— 这是
-  M1 acceptance #3 的硬要求，必须 fail。
+**期望**（关键三个 flag 都不带 `-`）：
+- `icanon` ✓ — 行编辑回来了。
+- `echo` ✓ — 输入回显回来了。
+- `isig` ✓ — Ctrl+C 又能杀进程了。
+
+完整 lflags 行长这样（macOS 实测）：
+```
+lflags: icanon isig iexten echo echoe echok echoke -echonl echoctl
+    -echoprt -altwerase -noflsh -tostop -flusho pendin -nokerninfo
+```
+后面那些**带负号**的（`-echonl` `-echoprt` `-altwerase` `-noflsh`
+`-tostop` `-flusho` `-nokerninfo`）都是 cooked 默认关闭项，不是 bug；
+重点只看 `icanon` `echo` `isig` 三个。
+
+**失败模式**：
+- `stty -a` 出现 `-icanon` 或 `-echo` → lifecycle 没还原 termios，acceptance fail。按 §0.5 跑 `reset` 救场，把哪条退出路径触发的记下来。
+- `echo` 命令没回显（屏幕看不到 `OK`） → 同上。
 
 ### 2.6 异常退出后的恢复（可选硬核测试）
 
