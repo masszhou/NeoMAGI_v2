@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import io
 import signal
-import threading
 import time
 
 import pytest
@@ -59,30 +58,24 @@ def test_lifecycle_idempotent_cleanup() -> None:
     assert counter["calls"] == 1
 
 
-def test_sigint_signals_app_exit() -> None:
-    """Posting SIGINT to the main thread inside lifecycle exits the loop."""
+def test_sigint_inside_lifecycle_calls_app_exit() -> None:
+    """SIGINT delivered while the lifecycle is active must flip ``_running``
+    to False — that's how the run loop tears down. We start with
+    ``_running=True`` so a False reading after the signal proves the
+    lifecycle handler actually ran (rather than just observing the
+    constructor default)."""
 
     if not hasattr(signal, "SIGINT"):
         pytest.skip("SIGINT not available")
 
     app = _make_app()
-    fired = threading.Event()
-
-    def _wait_then_signal() -> None:
-        time.sleep(0.05)
-        signal.raise_signal(signal.SIGINT)
-        fired.set()
-
-    threading.Thread(target=_wait_then_signal, daemon=True).start()
     with lifecycle(app):
-        # spin lightly; the SIGINT handler will flip running off.
+        app._running = True  # noqa: SLF001 — simulate an active run loop
+        signal.raise_signal(signal.SIGINT)
+        # Python invokes signal handlers at the next bytecode checkpoint.
         deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline and getattr(app, "_running", False) is False:
+        while time.monotonic() < deadline and app._running:  # noqa: SLF001
             time.sleep(0.01)
-        # Drive the loop briefly so the handler has a chance to fire.
-        app._running = True  # type: ignore[attr-defined]
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline and app._running:
-            time.sleep(0.01)
-        app.exit()
-    assert fired.is_set() or True  # signal may have fired before the loop spun
+        assert app._running is False, (  # noqa: SLF001
+            "SIGINT did not propagate through the lifecycle handler"
+        )

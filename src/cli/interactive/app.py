@@ -99,7 +99,20 @@ class InteractiveController:
             # ``controller.exit()`` once the fixture is exhausted (unless an
             # earlier ``inject: quit`` already did so).
             self._exit_when_playback_finishes = True
-            self._start_playback_thread(self._playback_dir)
+            started = self._start_playback_thread(self._playback_dir)
+            if not started:
+                # Fixture failed to load: skip the run loop entirely so
+                # ``--playback`` against a bad path doesn't hang. (The
+                # status notification was already pushed by the thread
+                # starter; in practice we also write the error to stderr
+                # so a non-TTY caller sees it.)
+                import sys
+
+                print(
+                    f"neomagi --playback: failed to load fixture {self._playback_dir}",
+                    file=sys.stderr,
+                )
+                return
         self._app.run()
         if self._playback_thread is not None and self._playback_thread.is_alive():
             # Belt-and-suspenders: a manual /quit while playback is in
@@ -407,10 +420,12 @@ class InteractiveController:
                 f"playback failed: {exc}", level="error", ttl_seconds=10.0
             )
 
-    def _start_playback_thread(self, fixture: Path) -> None:
-        """Background driver used by ``--playback``. Honours ``delays_ms``
-        so the user actually sees frame-by-frame streaming, then exits the
-        TUI once the fixture is exhausted."""
+    def _start_playback_thread(self, fixture: Path) -> bool:
+        """Background driver used by ``--playback``. Returns ``True`` if the
+        thread was started, ``False`` if the fixture failed to load (caller
+        is responsible for skipping the run loop in that case — calling
+        ``self._app.exit()`` here is racy because ``_app.run()`` resets
+        ``_running = True`` on entry)."""
 
         from .playback import PlaybackHarness
 
@@ -420,8 +435,7 @@ class InteractiveController:
             self._status.push_notification(
                 f"playback failed to load: {exc}", level="error", ttl_seconds=10.0
             )
-            self._app.exit()
-            return
+            return False
 
         def _runner() -> None:
             try:
@@ -445,6 +459,7 @@ class InteractiveController:
         )
         self._playback_thread = thread
         thread.start()
+        return True
 
 
 class _RootComponent:

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from cli.interactive.app import InteractiveController
 from cli.interactive.components import (
     AssistantMessageComponent,
@@ -104,19 +102,8 @@ def test_abort_during_tool_marks_tool_aborted_and_returns_editor_to_idle() -> No
     assert c.editor.state == EditorState.IDLE
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "assistant_text_delta",
-        "assistant_thinking_delta",
-        "tool_execution_success",
-        "parallel_tools",
-        "compaction",
-        "abort_during_stream",
-        "abort_during_tool",
-    ],
-)
-def test_each_fixture_plays_to_completion(name: str) -> None:
-    c = _play(name)
-    # At least one component was created; play_sync did not raise.
-    assert c.messages.children
+# Removed: a parametrized "at least one component was created" smoke. Each
+# of the 7 M1 fixtures already has a named, behavioral test above asserting
+# the actual end-state (final text, tool name, abort flag, summary text…).
+# A weaker "plays without raising" smoke would just inflate the case count
+# while adding no protection that the named tests don't already provide.

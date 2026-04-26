@@ -31,3 +31,10 @@ doc_id_assigned_at: 2026-04-25T18:57:04+02:00
 - Evidence: `dev_docs/logs/p1_m1_closeout.md` § 评审后修复（更新 P1-1 行）, `tests/cli/interactive/test_controller_regressions.py` 现 11 用例（新增 4 条 inject_input 端到端：non-focused overlay、`/quit\n` 全程 editor 焦点、Tab→arrow→Enter、Esc 仅关 overlay）；`pytest tests/` 共 **167 用例 green**, `just lint` green, `complexity_guard` 0 regression；6 条 playback fixture smoke 全部 exit=0。
 - Next: 进入 P1-M2。
 - Risk: 无。
+
+## 2026-04-26 03:30 (local) | P1-M1 test-quality round
+- Status: done
+- Done: 第三轮评审针对测试质量做了 6 处改进：(1) lifecycle SIGINT 用例去掉 `or True`，改为先置 `_running=True` 再断 `False`；(2) 三处 Ctrl+C / playback 退出用例同样补预置，streaming-abort 反向断言 `is True`；(3) `PlaybackHarness` 增 `sleeper` 注入位，timing 测试改为断 sleeper 收到 `delays_ms` 列表（不再依赖墙钟阈值）；(4) 新增 `tests/cli/test_cli_smoke.py` 4 条 subprocess 级 CLI smoke（`--help` / `--print` / `--playback` exit / 不存在 fixture 不挂起）；(5) `/new` `/hotkeys` `/play` 各补 inject_input 端到端 dispatch 测试；(6) 移除弱 smoke `test_each_fixture_plays_to_completion` parametrize（7 用例）以提高覆盖比例。subprocess smoke 顺带暴露并修复一处真实 bug：`--playback` 在 fixture 加载失败时挂起（`_start_playback_thread` 在 except 里调 `app.exit()`，但 `app.run()` 入口 `_running=True` 又覆盖回去；改 `_start_playback_thread` 返回 `bool`，失败时 `controller.run()` 直接跳过进入 loop）。
+- Evidence: `dev_docs/logs/p1_m1_closeout.md` § 测试质量轮, `tests/cli/test_cli_smoke.py`, `tests/cli/interactive/test_controller_regressions.py`（17 用例，新增 5 dispatch + 2 sleeper + 修 4 假断言）, `tests/tui/test_lifecycle.py`, `src/cli/interactive/{playback,app}.py`；`pytest tests/` 共 **170 用例 green**；`.complexity-baseline.json` 刷新（W7 提交时新测试文件未 tracked，导致 complexity_guard 漏扫；本轮按 plan §risk 锁 M1 floor），`just lint` green、`complexity_guard regressions=0`。
+- Next: 进入 P1-M2。
+- Risk: 无。

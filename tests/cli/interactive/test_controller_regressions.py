@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 from cli.interactive.app import InteractiveController
@@ -118,27 +117,27 @@ def test_esc_closes_autocomplete_before_falling_through_to_abort() -> None:
 
 def test_ctrl_c_when_idle_exits_the_app() -> None:
     app, c = _make_controller()
+    app._running = True  # noqa: SLF001 — pretend the run loop is live, so a
+    # subsequent False reading actually proves ``app.exit()`` was invoked
+    # rather than just observing the constructor default.
     assert c._has_active_work() is False  # noqa: SLF001
     handled = c._global_input_hook(KeyEvent("Ctrl+C", raw="\x03"))  # noqa: SLF001
     assert handled is True
-    assert app._running is False  # noqa: SLF001 — exit() flips this off
+    assert app._running is False  # noqa: SLF001 — exit() flipped it off
 
 
 def test_ctrl_c_during_streaming_aborts_instead_of_exiting() -> None:
     app, c = _make_controller()
     c.editor.set_state(EditorState.STREAMING)
+    app._running = True  # noqa: SLF001 — same rationale: True before, must
+    # remain True after to prove the streaming-abort path doesn't exit.
     handled = c._global_input_hook(KeyEvent("Ctrl+C", raw="\x03"))  # noqa: SLF001
     assert handled is True
-    # App must NOT be marked exited — the abort path should leave the loop
-    # running so the user can keep typing.
-    # Note: ``app.run`` was never started so ``_running`` is False by default;
-    # we instead assert the abort side-effect: editor flipped back to idle
-    # and footer mentions abort.
+    # Editor flipped back to idle.
     assert c.editor.state == EditorState.IDLE
     assert "abort" in c.editor._footer.lower()  # noqa: SLF001
-    # ``app.exit()`` was NOT called: the pre-call value was False, the
-    # streaming-abort path doesn't touch _running.
-    assert app._running is False  # noqa: SLF001
+    # And app.exit() was NOT called — abort kept the loop alive.
+    assert app._running is True  # noqa: SLF001
 
 
 # -------------------------------------------------------------------- #
@@ -174,6 +173,8 @@ def test_focus_offset_provider_locates_nested_editor_cursor() -> None:
 
 def test_background_playback_thread_calls_controller_exit_when_done() -> None:
     app, c = _make_controller()
+    app._running = True  # noqa: SLF001 — simulate run loop active so that a
+    # False reading after join() actually proves the thread invoked exit().
     c._exit_when_playback_finishes = True  # noqa: SLF001
     c._start_playback_thread(  # noqa: SLF001
         FIXTURE_ROOT / "assistant_text_delta"
@@ -181,8 +182,7 @@ def test_background_playback_thread_calls_controller_exit_when_done() -> None:
     assert c._playback_thread is not None  # noqa: SLF001
     c._playback_thread.join(timeout=5.0)  # noqa: SLF001
     assert not c._playback_thread.is_alive()  # noqa: SLF001
-    # ``_app.exit()`` was called → ``_running`` is False (it never started).
-    assert app._running is False  # noqa: SLF001
+    assert app._running is False  # noqa: SLF001 — exit() ran
     # The fixture produced a final assistant message.
     assert any(
         type(child).__name__ == "AssistantMessageComponent"
@@ -190,21 +190,126 @@ def test_background_playback_thread_calls_controller_exit_when_done() -> None:
     )
 
 
-def test_play_sync_with_sleep_honours_delays() -> None:
+def test_play_sync_with_sleep_routes_delays_through_sleeper() -> None:
     """``--playback`` mode uses ``play_sync(sleep=True)`` so the user sees
-    streaming pacing rather than getting all events at once."""
+    streaming pacing. Inject a recording sleeper so the assertion is on
+    the requested delays, not wall-clock timing — that keeps the test
+    deterministic and fast."""
 
     fixture_dir = FIXTURE_ROOT / "abort_during_stream"
     sidecar = json.loads((fixture_dir / "playback.json").read_text())
-    expected_min_seconds = sum(sidecar["delays_ms"]) / 1000.0 * 0.7
+    expected_calls = [d / 1000.0 for d in sidecar["delays_ms"] if d > 0]
+
+    recorded: list[float] = []
     app, c = _make_controller()
-    harness = PlaybackHarness(fixture_dir, controller=c)
-    start = time.monotonic()
-    harness.play_sync(sleep=True)
-    elapsed = time.monotonic() - start
-    assert elapsed >= expected_min_seconds, (
-        f"play_sync(sleep=True) finished too fast: {elapsed:.3f}s "
-        f"vs ≥ {expected_min_seconds:.3f}s"
+    harness = PlaybackHarness(
+        fixture_dir,
+        controller=c,
+        sleeper=lambda seconds: recorded.append(seconds),
     )
-    # Also verify the abort path still leaves the editor idle.
+    harness.play_sync(sleep=True)
+
+    assert recorded == expected_calls, (
+        f"sleeper saw {recorded!r}; expected {expected_calls!r}"
+    )
+    # Also verify the abort inject side-effect: the editor returns to idle.
     assert c.editor.state == EditorState.IDLE
+
+
+def test_play_sync_without_sleep_never_calls_sleeper() -> None:
+    """Default ``play_sync()`` (no ``sleep=True``) must not pay the timing
+    cost — it's the path used by tests that only care about end-state."""
+
+    recorded: list[float] = []
+    app, c = _make_controller()
+    harness = PlaybackHarness(
+        FIXTURE_ROOT / "assistant_text_delta",
+        controller=c,
+        sleeper=lambda seconds: recorded.append(seconds),
+    )
+    harness.play_sync()  # default sleep=False
+    assert recorded == []
+
+
+# -------------------------------------------------------------------- #
+# Live slash dispatch (W6) — drive each command end to end via         #
+# ``inject_input`` so the focus dispatch + slash autocomplete + handler #
+# composition is actually exercised.                                    #
+# -------------------------------------------------------------------- #
+
+
+def _type_command(app: TUIApp, command: str) -> None:
+    """Type a slash command (one printable character at a time) followed by
+    Enter. Mirrors what a real keyboard would deliver."""
+
+    for ch in command:
+        _inject(app, ch)
+    _inject(app, "Enter")
+
+
+def test_slash_new_clears_messages_and_resets_state() -> None:
+    """Typing ``/new`` must clear the message column and put the editor
+    back to idle — the live ``new.handle_new`` handler is wired."""
+
+    from ai_provider.types import UserMessage
+    from cli.interactive.components import UserMessageComponent
+
+    app, c = _make_controller()
+    c.messages.append(
+        UserMessageComponent(UserMessage(role="user", content="leftover", timestamp=0))
+    )
+    c.editor.set_state(EditorState.STREAMING)
+    assert len(c.messages.children) == 1
+
+    _type_command(app, "/new")
+
+    assert c.messages.children == []
+    assert c.editor.state == EditorState.IDLE
+    assert "new session" in c.editor._footer.lower()  # noqa: SLF001
+
+
+def test_slash_hotkeys_opens_settings_overlay_with_keymap_rows() -> None:
+    """Typing ``/hotkeys`` must open the ``SettingsList`` overlay populated
+    from ``default_bindings()``."""
+
+    from tui.keymap import default_bindings
+    from tui.overlay import SettingsList
+
+    app, c = _make_controller()
+    _type_command(app, "/hotkeys")
+    overlays = [o for o in app._overlays if isinstance(o, SettingsList)]  # noqa: SLF001
+    assert len(overlays) == 1
+    expected_keys = {b.key for b in default_bindings()}
+    actual_keys = {row.label for row in overlays[0].rows}
+    assert expected_keys.issubset(actual_keys)
+
+
+def test_slash_play_with_known_fixture_drives_harness_synchronously() -> None:
+    """``/play <name>`` runs the harness via the slash handler. Default
+    ``play_sync()`` ignores delays so the test is deterministic without an
+    injected sleeper."""
+
+    app, c = _make_controller()
+    _type_command(app, "/play assistant_text_delta")
+    # Harness ran inline → at least one assistant component now exists.
+    assert any(
+        type(child).__name__ == "AssistantMessageComponent"
+        for child in c.messages.children
+    )
+
+
+def test_slash_play_with_unknown_fixture_pushes_error_notification() -> None:
+    app, c = _make_controller()
+    _type_command(app, "/play nonexistent-fixture-xyz")
+    notifications = c.status._notifications  # noqa: SLF001
+    assert any("not found" in n.text.lower() for n in notifications)
+
+
+def test_unknown_slash_command_pushes_warning_notification() -> None:
+    """Plan §W6 — unknown commands route through the registry's fallback
+    notification rather than the LLM submit path."""
+
+    app, c = _make_controller()
+    _type_command(app, "/totally-fake-command")
+    notifications = c.status._notifications  # noqa: SLF001
+    assert any("unknown command" in n.text.lower() for n in notifications)

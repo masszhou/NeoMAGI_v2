@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -126,9 +127,14 @@ class PlaybackHarness:
         controller: InteractiveController,
         events_filename: str = "events.jsonl",
         sidecar_filename: str = "playback.json",
+        sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self._dir = fixture_dir
         self._controller = controller
+        # Tests inject a fake sleeper so timing assertions don't depend on
+        # wall-clock thresholds; production passes ``None`` and gets the
+        # real ``time.sleep``.
+        self._sleeper: Callable[[float], None] = sleeper or time.sleep
         events_path = fixture_dir / events_filename
         sidecar_path = fixture_dir / sidecar_filename
         if not events_path.is_file():
@@ -147,13 +153,15 @@ class PlaybackHarness:
 
     def play_sync(self, *, sleep: bool = False) -> None:
         """Synchronous driver. ``sleep=False`` (default) ignores delays —
-        useful for unit tests; ``sleep=True`` honours wall-clock pacing."""
+        useful for unit tests; ``sleep=True`` routes delays through the
+        injected ``sleeper`` (production: ``time.sleep``; tests: a recorder
+        that captures the requested wait without burning real time)."""
 
         for index, event in enumerate(self.events):
             if sleep:
                 delay_ms = self.sidecar.delays_ms[index]
                 if delay_ms > 0:
-                    time.sleep(delay_ms * self.sidecar.speed_multiplier / 1000)
+                    self._sleeper(delay_ms * self.sidecar.speed_multiplier / 1000)
             self._controller.dispatch_event(event)
             self._apply_injects(index)
 

@@ -41,7 +41,7 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 | 9 | `src/tui` + `src/cli/interactive` 不定义 pydantic agent/session/message 模型；`src/tui` 不 import 协议模块 | ✅ `tests/cli/interactive/test_event_router.py::test_src_tui_does_not_import_protocol_modules` + `::test_neither_tui_nor_interactive_define_pydantic_models` 静态扫描通过 |
 | 10 | 进度归档落地 | ✅ `dev_docs/progress/progress.md` 末尾追加；本文件 |
 
-测试结果汇总：`pytest tests/` 共 **167 用例 green**（W7 新增 85 + 评审后回归 16 + 既有 66）。
+测试结果汇总：`pytest tests/` 共 **170 用例 green**（W7 新增 84 + 评审后回归 + 测试质量轮 20 + 既有 66）。
 
 ## 评审后修复（2026-04-26）
 
@@ -79,3 +79,22 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 ## 后续移交
 
 按 plan §后续移交所列：`tui.terminal.TerminalSession` / `tui.stdin_buffer.StdinBuffer` / `tui.renderer.Renderer` / `tui.width.*` / `tui.app.TUIApp` / `cli.interactive.app.InteractiveController` / `cli.interactive.event_router.EventRouter.route` / `cli.interactive.playback.PlaybackHarness` / `cli.interactive.tool_renderer_registry.ToolRendererRegistry` / `cli.slash_commands.SlashCommandRegistry` 全部已对齐对应里程碑接入点。
+
+## 测试质量轮（2026-04-26）
+
+第三轮评审针对 167 用例的覆盖质量做了体检。下列改动落实评审建议：
+
+| # | 评审条目 | 改动 |
+| --- | --- | --- |
+| 1 | `tests/tui/test_lifecycle.py` 的 `assert fired.is_set() or True` 没有约束力 | 重写为 `test_sigint_inside_lifecycle_calls_app_exit`：先把 `app._running = True` 模拟运行中，再 `signal.raise_signal(SIGINT)`，断言变 False；这样才真正证明 lifecycle 信号 handler 跑了 |
+| 2 | `tests/cli/interactive/test_controller_regressions.py` 多处 `app._running is False` 是默认值不能证明 `exit()` 被调用 | 三处 Ctrl+C / playback 退出用例统一改为先置 `_running = True`；streaming-abort 路径反向断言 `is True`（证明 abort 没有错杀循环）；exit 路径断言 `is False` 才真正证明 `app.exit()` 跑了 |
+| 3 | `play_sync(sleep=True)` 用墙钟阈值断言 timing 不稳 | `PlaybackHarness` 增 `sleeper: Callable[[float], None] \| None` 注入位（默认 `time.sleep`）；测试改成断言 sleeper 收到 `sidecar.delays_ms` 对应的秒数列表，确定性、零墙钟开销；并补 `test_play_sync_without_sleep_never_calls_sleeper` 防止默认路径意外开始 sleep |
+| 4 | 缺 subprocess 级 CLI smoke：`--help` / `--print` / `--playback` exit | 新增 `tests/cli/test_cli_smoke.py` 4 用例：`--help` 列出三个 P1 flag、`--print hello` 输出 stub 文案、`--playback assistant_text_delta` 在 8 s timeout 内 exit=0、`--playback /no-such-fixture` 也不挂起 |
+| 5 | `/quit` 已覆盖，但 `/new` `/hotkeys` `/play` 真实 dispatch 没测 | 新增 5 条 inject_input 端到端：`/new` 清空 messages + 复位 idle、`/hotkeys` 弹 `SettingsList` 且行覆盖 `default_bindings()`、`/play <fixture>` 真的跑 harness、`/play 不存在的` 推 error 通知、未知命令推 warning 通知 |
+| 6 | `test_each_fixture_plays_to_completion` 的 "至少一个组件" 是弱 smoke | 移除整个 parametrize（7 用例），保留同文件已有的 7 条具名行为断言（hello world 文本、tool name、aborted flag、compaction summary…）；用例数下降换覆盖质量上升 |
+
+附加 bug 收获：subprocess smoke 暴露了 `--playback` 在 fixture 加载失败时仍会挂起 —— 因为 `_start_playback_thread` 在 except 分支调 `app.exit()`，而 `app.run()` 一开头就 `self._running = True` 把它覆盖掉。改动 `_start_playback_thread` 返回 `bool`，失败时 `controller.run()` 直接跳过 `app.run()` 不进 loop。新增 `test_playback_unknown_fixture_does_not_hang` 用例锁定。
+
+复杂度治理：本轮把 `.complexity-baseline.json` 重新刷过 —— W7 提交时新测试文件还未 tracked，complexity_guard 通过 `git ls-files` 扫描漏掉了它们；commit 后这些文件进入 ratchet 视野，于是出现 33 条 "block" 级 finding（`EventRouter.route` 19 分支、`AssistantMessageComponent.apply` 12 分支、parser/renderer/markdown 等都在合理范围）。按 plan §risk "complexity_guard 抖动" 段落要求，此处用 `just complexity-baseline` 锁定 M1 floor，后续 PR 自查 ratchet。
+
+测试结果：`pytest tests/` 共 **170 用例 green**；`just lint` green，`complexity_guard regressions=0`（基准刷新后）。

@@ -1,33 +1,398 @@
 {
-    "generated_at": "2026-04-20T22:31:27+00:00",
-    "policy_version": 1,
-    "thresholds": {
-        "prod": {
-            "file_target": 500,
-            "file_block": 800,
-            "function_target": 30,
-            "function_block": 50,
-            "branches_target": 3,
-            "branches_block": 6,
-            "nesting_block": 3
-        },
-        "scripts": {
-            "file_target": 500,
-            "file_block": 800,
-            "function_target": 30,
-            "function_block": 50,
-            "branches_target": 3,
-            "branches_block": 6,
-            "nesting_block": 3
-        },
-        "tests": {
-            "file_target": 1200,
-            "file_block": 1200,
-            "function_target": 30,
-            "function_block": 50,
-            "branches_target": 3,
-            "branches_block": 6,
-            "nesting_block": 3
-        }
+  "generated_at": "2026-04-26T08:14:04+00:00",
+  "policy_version": 1,
+  "thresholds": {
+    "prod": {
+      "file_target": 500,
+      "file_block": 800,
+      "function_target": 30,
+      "function_block": 50,
+      "branches_target": 3,
+      "branches_block": 6,
+      "nesting_block": 3
+    },
+    "scripts": {
+      "file_target": 500,
+      "file_block": 800,
+      "function_target": 30,
+      "function_block": 50,
+      "branches_target": 3,
+      "branches_block": 6,
+      "nesting_block": 3
+    },
+    "tests": {
+      "file_target": 1200,
+      "file_block": 1200,
+      "function_target": 30,
+      "function_block": 50,
+      "branches_target": 3,
+      "branches_block": 6,
+      "nesting_block": 3
     }
+  },
+  "block_findings": [
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/cli/interactive/app.py",
+      "actual": 11,
+      "limit": 6,
+      "fingerprint": "function_branches::src/cli/interactive/app.py::InteractiveController._on_editor_action::280",
+      "symbol": "InteractiveController._on_editor_action",
+      "line": 280
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/cli/interactive/components/assistant_message.py",
+      "actual": 12,
+      "limit": 6,
+      "fingerprint": "function_branches::src/cli/interactive/components/assistant_message.py::AssistantMessageComponent.apply::55",
+      "symbol": "AssistantMessageComponent.apply",
+      "line": 55
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/cli/interactive/components/assistant_message.py",
+      "actual": 8,
+      "limit": 6,
+      "fingerprint": "function_branches::src/cli/interactive/components/assistant_message.py::AssistantMessageComponent.render::127",
+      "symbol": "AssistantMessageComponent.render",
+      "line": 127
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_lines",
+      "path": "src/cli/interactive/components/assistant_message.py",
+      "actual": 55,
+      "limit": 50,
+      "fingerprint": "function_lines::src/cli/interactive/components/assistant_message.py::AssistantMessageComponent.apply::55",
+      "symbol": "AssistantMessageComponent.apply",
+      "line": 55
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/cli/interactive/components/assistant_message.py",
+      "actual": 4,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/cli/interactive/components/assistant_message.py::AssistantMessageComponent.render::127",
+      "symbol": "AssistantMessageComponent.render",
+      "line": 127
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/cli/interactive/event_router.py",
+      "actual": 19,
+      "limit": 6,
+      "fingerprint": "function_branches::src/cli/interactive/event_router.py::EventRouter.route::131",
+      "symbol": "EventRouter.route",
+      "line": 131
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/cli/interactive/event_router.py",
+      "actual": 7,
+      "limit": 6,
+      "fingerprint": "function_branches::src/cli/interactive/event_router.py::EventRouter._handle_message_start::219",
+      "symbol": "EventRouter._handle_message_start",
+      "line": 219
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_lines",
+      "path": "src/cli/interactive/event_router.py",
+      "actual": 83,
+      "limit": 50,
+      "fingerprint": "function_lines::src/cli/interactive/event_router.py::EventRouter.route::131",
+      "symbol": "EventRouter.route",
+      "line": 131
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/cli/interactive/event_router.py",
+      "actual": 7,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/cli/interactive/event_router.py::EventRouter._handle_message_start::219",
+      "symbol": "EventRouter._handle_message_start",
+      "line": 219
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/cli/interactive/playback.py",
+      "actual": 7,
+      "limit": 6,
+      "fingerprint": "function_branches::src/cli/interactive/playback.py::PlaybackHarness._apply_injects::168",
+      "symbol": "PlaybackHarness._apply_injects",
+      "line": 168
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/cli/interactive/playback.py",
+      "actual": 5,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/cli/interactive/playback.py::PlaybackHarness._apply_injects::168",
+      "symbol": "PlaybackHarness._apply_injects",
+      "line": 168
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/tui/app.py",
+      "actual": 4,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/tui/app.py::TUIApp._collect_input_events::209",
+      "symbol": "TUIApp._collect_input_events",
+      "line": 209
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/autocomplete.py",
+      "actual": 9,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/autocomplete.py::file_completions::73",
+      "symbol": "file_completions",
+      "line": 73
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/tui/autocomplete.py",
+      "actual": 4,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/tui/autocomplete.py::file_completions::73",
+      "symbol": "file_completions",
+      "line": 73
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/editor.py",
+      "actual": 8,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/editor.py::Editor.handle_input::231",
+      "symbol": "Editor.handle_input",
+      "line": 231
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/editor.py",
+      "actual": 12,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/editor.py::Editor._dispatch_action::274",
+      "symbol": "Editor._dispatch_action",
+      "line": 274
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_lines",
+      "path": "src/tui/lifecycle.py",
+      "actual": 66,
+      "limit": 50,
+      "fingerprint": "function_lines::src/tui/lifecycle.py::lifecycle::31",
+      "symbol": "lifecycle",
+      "line": 31
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/markdown.py",
+      "actual": 12,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/markdown.py::render_markdown::37",
+      "symbol": "render_markdown",
+      "line": 37
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_lines",
+      "path": "src/tui/markdown.py",
+      "actual": 69,
+      "limit": 50,
+      "fingerprint": "function_lines::src/tui/markdown.py::render_markdown::37",
+      "symbol": "render_markdown",
+      "line": 37
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/overlay.py",
+      "actual": 8,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/overlay.py::Confirm.handle_input::174",
+      "symbol": "Confirm.handle_input",
+      "line": 174
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/tui/overlay.py",
+      "actual": 4,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/tui/overlay.py::Selector.handle_input::134",
+      "symbol": "Selector.handle_input",
+      "line": 134
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_nesting",
+      "path": "src/tui/overlay.py",
+      "actual": 6,
+      "limit": 3,
+      "fingerprint": "function_nesting::src/tui/overlay.py::Confirm.handle_input::174",
+      "symbol": "Confirm.handle_input",
+      "line": 174
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/renderer.py",
+      "actual": 9,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/renderer.py::Renderer.present::64",
+      "symbol": "Renderer.present",
+      "line": 64
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_lines",
+      "path": "src/tui/renderer.py",
+      "actual": 70,
+      "limit": 50,
+      "fingerprint": "function_lines::src/tui/renderer.py::Renderer.present::64",
+      "symbol": "Renderer.present",
+      "line": 64
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/stdin_buffer.py",
+      "actual": 9,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/stdin_buffer.py::StdinBuffer.drain::175",
+      "symbol": "StdinBuffer.drain",
+      "line": 175
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/stdin_buffer.py",
+      "actual": 7,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/stdin_buffer.py::StdinBuffer._parse_escape::234",
+      "symbol": "StdinBuffer._parse_escape",
+      "line": 234
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_lines",
+      "path": "src/tui/stdin_buffer.py",
+      "actual": 54,
+      "limit": 50,
+      "fingerprint": "function_lines::src/tui/stdin_buffer.py::StdinBuffer.drain::175",
+      "symbol": "StdinBuffer.drain",
+      "line": 175
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/terminal.py",
+      "actual": 9,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/terminal.py::TerminalSession.exit::124",
+      "symbol": "TerminalSession.exit",
+      "line": 124
+    },
+    {
+      "severity": "block",
+      "group": "prod",
+      "metric": "function_branches",
+      "path": "src/tui/width.py",
+      "actual": 8,
+      "limit": 6,
+      "fingerprint": "function_branches::src/tui/width.py::wrap_to_width::124",
+      "symbol": "wrap_to_width",
+      "line": 124
+    },
+    {
+      "severity": "block",
+      "group": "tests",
+      "metric": "function_branches",
+      "path": "tests/cli/interactive/test_event_router.py",
+      "actual": 7,
+      "limit": 6,
+      "fingerprint": "function_branches::tests/cli/interactive/test_event_router.py::test_src_tui_does_not_import_protocol_modules::123",
+      "symbol": "test_src_tui_does_not_import_protocol_modules",
+      "line": 123
+    },
+    {
+      "severity": "block",
+      "group": "tests",
+      "metric": "function_branches",
+      "path": "tests/cli/interactive/test_event_router.py",
+      "actual": 8,
+      "limit": 6,
+      "fingerprint": "function_branches::tests/cli/interactive/test_event_router.py::test_neither_tui_nor_interactive_define_pydantic_models::144",
+      "symbol": "test_neither_tui_nor_interactive_define_pydantic_models",
+      "line": 144
+    },
+    {
+      "severity": "block",
+      "group": "tests",
+      "metric": "function_nesting",
+      "path": "tests/cli/interactive/test_event_router.py",
+      "actual": 6,
+      "limit": 3,
+      "fingerprint": "function_nesting::tests/cli/interactive/test_event_router.py::test_src_tui_does_not_import_protocol_modules::123",
+      "symbol": "test_src_tui_does_not_import_protocol_modules",
+      "line": 123
+    },
+    {
+      "severity": "block",
+      "group": "tests",
+      "metric": "function_nesting",
+      "path": "tests/cli/interactive/test_event_router.py",
+      "actual": 7,
+      "limit": 3,
+      "fingerprint": "function_nesting::tests/cli/interactive/test_event_router.py::test_neither_tui_nor_interactive_define_pydantic_models::144",
+      "symbol": "test_neither_tui_nor_interactive_define_pydantic_models",
+      "line": 144
+    }
+  ]
 }
