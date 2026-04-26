@@ -131,7 +131,9 @@ def test_no_half_escape_ever_leaks_as_plain_key() -> None:
     sb.feed_str("[A")
     next_events = sb.drain()
     # The follow-up is a plain CSI sequence that becomes Up.
-    assert any(getattr(e, "key", None) == "Up" for e in next_events) or next_events == []
+    assert (
+        any(getattr(e, "key", None) == "Up" for e in next_events) or next_events == []
+    )
 
 
 def test_lone_esc_emits_after_debounce_window() -> None:
@@ -249,3 +251,13 @@ def test_single_csi_encoded_esc_flushes_after_gesture_window() -> None:
     events = sb.drain()
     keys = [getattr(e, "key", None) for e in events]
     assert keys == ["Esc"]
+
+
+def test_late_cursor_position_report_is_discarded() -> None:
+    events = _drain("\x1b[12;34R")
+    assert events == []
+
+
+def test_late_cursor_position_report_does_not_swallow_user_input() -> None:
+    events = _drain("a\x1b[12;34Rb")
+    assert [e.key for e in events] == ["a", "b"]

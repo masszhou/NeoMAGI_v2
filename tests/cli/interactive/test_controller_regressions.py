@@ -391,8 +391,8 @@ def test_status_notification_expires_via_scheduled_wake(monkeypatch) -> None:
     c.status.push_notification("aborted", ttl_seconds=3.0)
     assert any("abort" in n.text.lower() for n in c.status._notifications)  # noqa: SLF001
     # A wake-up has been scheduled just past the expiry instant.
-    assert app._wake_at, "schedule_wake was never invoked"  # noqa: SLF001
-    assert app._wake_at[0] > fake_now[0]  # noqa: SLF001
+    assert app._wake_callbacks, "schedule_wake was never invoked"  # noqa: SLF001
+    assert app._wake_callbacks[0][0] > fake_now[0]  # noqa: SLF001
 
     # Before TTL passes, the notification still renders.
     rows_before = c.status.render(80)
@@ -403,7 +403,7 @@ def test_status_notification_expires_via_scheduled_wake(monkeypatch) -> None:
     # the notification filtered out by ``_alive_notifications``.
     fake_now[0] = 1004.0  # 4 s later, well past 3 s TTL + 50 ms buffer
     app.step()
-    assert app._wake_at == []  # noqa: SLF001 — wake consumed
+    assert app._wake_callbacks == []  # noqa: SLF001 — wake consumed
     rows_after = c.status.render(80)
     assert not any("abort" in row.lower() for row in rows_after), (
         f"notification still painted after expiry: {rows_after!r}"

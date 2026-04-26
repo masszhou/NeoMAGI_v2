@@ -19,7 +19,7 @@ import pytest
 from tui.app import TUIApp
 from tui.lifecycle import lifecycle
 from tui.renderer import Renderer
-from tui.terminal import TerminalSession
+from tui.terminal import TerminalSession, TerminalSize
 
 
 def _make_app() -> TUIApp:
@@ -79,3 +79,75 @@ def test_sigint_inside_lifecycle_calls_app_exit() -> None:
         assert app._running is False, (  # noqa: SLF001
             "SIGINT did not propagate through the lifecycle handler"
         )
+
+
+class _ExitCursorTerminal:
+    def __init__(self, rows: int = 10, is_tty: bool = True) -> None:
+        self.rows = rows
+        self.is_tty = is_tty
+        self.writes: list[str] = []
+        self.entered = False
+
+    def enter(self) -> None:
+        self.entered = True
+
+    def exit(self) -> None:
+        self.entered = False
+
+    def size(self) -> TerminalSize:
+        return TerminalSize(cols=20, rows=self.rows)
+
+    def write(self, data: str) -> None:
+        self.writes.append(data)
+
+    @property
+    def is_active(self) -> bool:
+        return self.entered
+
+
+def _make_exit_cursor_app(
+    rows: int = 10,
+    *,
+    is_tty: bool = True,
+) -> tuple[TUIApp, _ExitCursorTerminal]:
+    out = io.StringIO()
+    terminal = _ExitCursorTerminal(rows=rows, is_tty=is_tty)
+    app = TUIApp(
+        terminal=terminal,  # type: ignore[arg-type]
+        renderer=Renderer(out_stream=out),
+        out_stream=out,
+    )
+    return app, terminal
+
+
+def test_lifecycle_does_not_move_cursor_without_presented_frame() -> None:
+    app, terminal = _make_exit_cursor_app()
+    with lifecycle(app):
+        app.exit()
+    assert terminal.writes == []
+
+
+def test_lifecycle_does_not_move_cursor_for_non_tty_terminal() -> None:
+    app, terminal = _make_exit_cursor_app(is_tty=False)
+    app.renderer.present(["a"])
+    with lifecycle(app):
+        app.exit()
+    assert terminal.writes == []
+
+
+def test_lifecycle_moves_cursor_to_line_after_tui_when_space_remains() -> None:
+    app, terminal = _make_exit_cursor_app(rows=10)
+    app.renderer.set_anchor(3)
+    app.renderer.present(["a", "b"])
+    with lifecycle(app):
+        app.exit()
+    assert "\x1b[5;1H\x1b[2K" in terminal.writes
+
+
+def test_lifecycle_scrolls_when_tui_ended_at_screen_bottom() -> None:
+    app, terminal = _make_exit_cursor_app(rows=10)
+    app.renderer.set_anchor(9)
+    app.renderer.present(["a", "b"])
+    with lifecycle(app):
+        app.exit()
+    assert "\x1b[10;1H\r\n" in terminal.writes

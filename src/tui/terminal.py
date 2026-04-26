@@ -9,6 +9,8 @@ from ADR-0015.
 from __future__ import annotations
 
 import os
+import re
+import select
 import signal
 import sys
 from collections.abc import Callable
@@ -33,12 +35,21 @@ _MODIFY_OTHER_KEYS_OFF = "\x1b[>4;0m"
 # Kitty keyboard protocol level 1.
 _KITTY_KEYS_ON = "\x1b[>1u"
 _KITTY_KEYS_OFF = "\x1b[<u"
+_CURSOR_POSITION_RE = re.compile(rb"\x1b\[(\d+);(\d+)R")
 
 
 @dataclass(frozen=True)
 class TerminalSize:
     cols: int
     rows: int
+
+
+@dataclass(frozen=True)
+class CursorQueryResult:
+    row: int | None
+    leftover: bytes
+    attempted: bool
+    fallback_allowed: bool
 
 
 class TerminalSession:
@@ -101,7 +112,9 @@ class TerminalSession:
         import termios
         import tty
 
-        fd = sys.stdin.fileno()
+        fd = self._input_fileno()
+        if fd is None:
+            return
         self._fd = fd
         self._old_termios = termios.tcgetattr(fd)
         tty.setraw(fd)
@@ -129,6 +142,14 @@ class TerminalSession:
         if self._fd is None:
             return
 
+        self._write_exit_sequences()
+        self._restore_termios()
+        self._restore_resize_handler()
+        self._fd = None
+        self._old_termios = None
+        self._old_winch = None
+
+    def _write_exit_sequences(self) -> None:
         out = self._out_stream
         try:
             out.write(_KITTY_KEYS_OFF)
@@ -144,6 +165,7 @@ class TerminalSession:
             # Stream may already be closed during interpreter shutdown.
             pass
 
+    def _restore_termios(self) -> None:
         if self._old_termios is not None and self._fd is not None:
             try:
                 import termios
@@ -152,16 +174,13 @@ class TerminalSession:
             except (OSError, ValueError, ImportError):
                 pass
 
+    def _restore_resize_handler(self) -> None:
         if self._resize_handler is not None and self._old_winch is not None:
             try:
                 signal.signal(signal.SIGWINCH, self._old_winch)  # type: ignore[arg-type]
             except (ValueError, OSError, AttributeError):
                 pass
             self._resize_handler = None
-
-        self._fd = None
-        self._old_termios = None
-        self._old_winch = None
 
     # ------------------------------------------------------------------ #
     # Resize: SIGWINCH single owner                                       #
@@ -218,18 +237,114 @@ class TerminalSession:
         except (OSError, ValueError):
             pass
 
+    def query_cursor_row(self, timeout_ms: int = 100) -> CursorQueryResult:
+        """Query the terminal cursor row with DSR (``CSI 6 n``).
+
+        This is deliberately low-level: it writes the query, consumes a
+        matching cursor-position report if one arrives during the timeout,
+        and returns any non-CPR bytes to the caller. Anchor fallback and
+        stdin replay ownership stay in :class:`tui.app.TUIApp`.
+        """
+
+        if not self._is_tty():
+            return _cursor_query_result(attempted=False, fallback_allowed=False)
+
+        fd = self._fd if self._fd is not None else self._input_fileno()
+        if fd is None:
+            return _cursor_query_result(attempted=False, fallback_allowed=False)
+
+        if not self._write_dsr_query():
+            return _cursor_query_result()
+
+        return _read_cursor_position(fd, timeout_ms)
+
+    def _write_dsr_query(self) -> bool:
+        try:
+            self._out_stream.write("\x1b[6n")
+            self._out_stream.flush()
+            return True
+        except (OSError, ValueError):
+            return False
+
     @property
     def is_active(self) -> bool:
         return self._entered
 
+    @property
+    def is_tty(self) -> bool:
+        return self._is_tty()
+
     def _is_tty(self) -> bool:
         try:
-            return sys.stdin.isatty() and self._out_stream.isatty()
+            in_stream = self._in_stream if self._in_stream is not None else sys.stdin
+            return in_stream.isatty() and self._out_stream.isatty()
         except (AttributeError, ValueError):
             return False
 
+    def _input_fileno(self) -> int | None:
+        try:
+            stream = self._in_stream if self._in_stream is not None else sys.stdin
+            return stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            return None
+
+
+def _read_cursor_position(fd: int, timeout_ms: int) -> CursorQueryResult:
+    import time
+
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    buffer = b""
+    while True:
+        if result := _cursor_query_match(buffer):
+            return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _cursor_query_result(leftover=buffer)
+        chunk = _read_available(fd, remaining)
+        if chunk is None:
+            return _cursor_query_result(leftover=buffer)
+        buffer += chunk
+
+
+def _cursor_query_match(buffer: bytes) -> CursorQueryResult | None:
+    match = _CURSOR_POSITION_RE.search(buffer)
+    if match is None:
+        return None
+    leftover = buffer[: match.start()] + buffer[match.end() :]
+    return _cursor_query_result(row=int(match.group(1)), leftover=leftover)
+
+
+def _read_available(fd: int, timeout: float) -> bytes | None:
+    try:
+        ready, _, _ = select.select([fd], [], [], timeout)
+    except (OSError, ValueError):
+        return None
+    if not ready:
+        return None
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        return None
+    return chunk or None
+
+
+def _cursor_query_result(
+    *,
+    row: int | None = None,
+    leftover: bytes = b"",
+    attempted: bool = True,
+    fallback_allowed: bool = True,
+) -> CursorQueryResult:
+    return CursorQueryResult(
+        row=row,
+        leftover=leftover,
+        attempted=attempted,
+        fallback_allowed=fallback_allowed,
+    )
+
 
 __all__ = [
+    "CursorQueryResult",
     "TerminalSession",
     "TerminalSize",
 ]

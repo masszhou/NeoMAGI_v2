@@ -376,6 +376,11 @@ class StdinBuffer:
             # CSI <code> ; <mod> u  — Kitty / xterm modifyOtherKeys=2.
             return self._parse_csi_u(params, raw)
 
+        if final == "R" and _is_cursor_position_report(params):
+            # Late DSR response from ``TerminalSession.query_cursor_row``.
+            # This is terminal control traffic, not user input.
+            return None
+
         if final == "~":
             # CSI <code> ; <mod> ~  — function / nav keys.
             parts = params.split(";")
@@ -398,9 +403,7 @@ class StdinBuffer:
             name = _CSI_NAMES[final]
             # Form: CSI 1 ; <mod> <final>
             parts = params.split(";") if params else []
-            mod_param = (
-                int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-            )
+            mod_param = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
             modifiers = _XTERM_MOD_TABLE.get(mod_param, frozenset())
             return KeyEvent(_format_key(name, modifiers), raw=raw, modifiers=modifiers)
 
@@ -494,7 +497,9 @@ class StdinBuffer:
             end += 1
         return None
 
-    def _parse_st_terminated(self, buf: str, start: int) -> tuple[KeyEvent | None, int] | None:
+    def _parse_st_terminated(
+        self, buf: str, start: int
+    ) -> tuple[KeyEvent | None, int] | None:
         end = start + 2
         while end < len(buf):
             if buf[end] == "\x1b" and end + 1 < len(buf) and buf[end + 1] == "\\":
@@ -536,6 +541,11 @@ class StdinBuffer:
         if ch == "\t":
             return "Tab"
         return ch
+
+
+def _is_cursor_position_report(params: str) -> bool:
+    parts = params.split(";")
+    return len(parts) == 2 and all(part.isdigit() and part for part in parts)
 
 
 __all__ = [

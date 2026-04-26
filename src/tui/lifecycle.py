@@ -42,35 +42,10 @@ def lifecycle(
             app.run()
     """
 
-    terminal = app.terminal
-    terminal.enter()
-
-    cleanup_called = {"done": False}
-
-    def cleanup() -> None:
-        if cleanup_called["done"]:
-            return
-        cleanup_called["done"] = True
-        try:
-            if on_exit is not None:
-                on_exit()
-        except Exception:
-            pass
-        terminal.exit()
-
+    app.terminal.enter()
+    cleanup = _make_cleanup(app, on_exit)
     atexit.register(cleanup)
-
-    old_int = signal.getsignal(signal.SIGINT)
-    old_term = signal.getsignal(signal.SIGTERM)
-
-    def _on_signal(_sig: int, _frame: FrameType | None) -> None:
-        app.exit()
-
-    try:
-        signal.signal(signal.SIGINT, _on_signal)
-        signal.signal(signal.SIGTERM, _on_signal)
-    except (ValueError, OSError):
-        pass
+    old_int, old_term = _install_exit_signal_handlers(app)
 
     try:
         yield app
@@ -89,11 +64,64 @@ def lifecycle(
     else:
         cleanup()
     finally:
-        try:
-            signal.signal(signal.SIGINT, old_int)  # type: ignore[arg-type]
-            signal.signal(signal.SIGTERM, old_term)  # type: ignore[arg-type]
-        except (ValueError, OSError, TypeError):
-            pass
+        _restore_exit_signal_handlers(old_int, old_term)
 
 
 __all__ = ["lifecycle"]
+
+
+def _make_cleanup(
+    app: TUIApp,
+    on_exit: Callable[[], None] | None,
+) -> Callable[[], None]:
+    cleanup_called = {"done": False}
+
+    def cleanup() -> None:
+        if cleanup_called["done"]:
+            return
+        cleanup_called["done"] = True
+        try:
+            if on_exit is not None:
+                on_exit()
+        except Exception:
+            pass
+        _place_cursor_after_frame(app)
+        app.terminal.exit()
+
+    return cleanup
+
+
+def _install_exit_signal_handlers(app: TUIApp) -> tuple[object, object]:
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.getsignal(signal.SIGTERM)
+
+    def _on_signal(_sig: int, _frame: FrameType | None) -> None:
+        app.exit()
+
+    try:
+        signal.signal(signal.SIGINT, _on_signal)
+        signal.signal(signal.SIGTERM, _on_signal)
+    except (ValueError, OSError):
+        pass
+    return old_int, old_term
+
+
+def _restore_exit_signal_handlers(old_int: object, old_term: object) -> None:
+    try:
+        signal.signal(signal.SIGINT, old_int)  # type: ignore[arg-type]
+        signal.signal(signal.SIGTERM, old_term)  # type: ignore[arg-type]
+    except (ValueError, OSError, TypeError):
+        pass
+
+
+def _place_cursor_after_frame(app: TUIApp) -> None:
+    if getattr(app.terminal, "is_tty", True) is False:
+        return
+    bottom = app.renderer.last_bottom_row()
+    if bottom is None:
+        return
+    rows = app.terminal.size().rows
+    if bottom < rows:
+        app.terminal.write(f"\x1b[{bottom + 1};1H\x1b[2K")
+    else:
+        app.terminal.write(f"\x1b[{rows};1H\r\n")

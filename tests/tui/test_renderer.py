@@ -60,6 +60,26 @@ def test_content_shrink_clears_orphan_rows() -> None:
     assert "\x1b[2K" in text
 
 
+def test_anchor_offsets_all_cursor_moves() -> None:
+    r, out = _make()
+    r.set_anchor(5)
+    r.present(["alpha", "beta"], cursor=CursorPosition(row=2, col=3, visible=True))
+    text = out.getvalue()
+    assert "\x1b[5;1H" in text
+    assert "\x1b[6;1H" in text
+    assert "\x1b[6;3H" in text
+
+
+def test_last_bottom_row_tracks_presented_frame_and_reset() -> None:
+    r, _ = _make()
+    assert r.last_bottom_row() is None
+    r.set_anchor(4)
+    r.present(["a", "b", "c"])
+    assert r.last_bottom_row() == 6
+    r.reset()
+    assert r.last_bottom_row() is None
+
+
 def test_synchronized_output_wraps_each_present() -> None:
     r, out = _make()
     r.present(["alpha"])
