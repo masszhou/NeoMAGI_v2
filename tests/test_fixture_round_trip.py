@@ -12,8 +12,8 @@ For each of the 8 core M0 fixtures we:
 5. Verify opaque fields (``textSignature`` / ``thinkingSignature`` /
    ``thoughtSignature`` / ``responseId``) survive the round-trip.
 
-The 18 placeholder fixtures only have ``README.md``; we just check the
-directory exists. The 26-directory invariant is the W4 acceptance criterion.
+M2 extends the fixture tree with provider/cache scenes; placeholder fixtures
+only need ``README.md`` until their milestone owns full input/expected pairs.
 """
 
 from __future__ import annotations
@@ -51,6 +51,9 @@ CORE_SCENES = (
 ALL_SCENES = (
     "abort_during_stream",
     "abort_during_tool",
+    "anthropic_cache_long",
+    "anthropic_cache_none",
+    "anthropic_cache_short",
     "assistant_text_delta",
     "assistant_thinking_delta",
     "assistant_tool_call",
@@ -58,13 +61,19 @@ ALL_SCENES = (
     "branch_summary",
     "cache_retention_none",
     "compaction",
+    "cross_provider_handoff_opaque",
     "extension_api_surface",
     "extension_custom_message",
     "extension_tool_event_mutation",
     "model_change",
+    "openai_completions_prompt_cache",
+    "openai_responses_prompt_cache",
     "overflow_error_patterns",
     "parallel_tools",
     "prepare_arguments_repair",
+    "provider_abort",
+    "provider_stream_text",
+    "provider_stream_tool_call",
     "rpc_prompt_flow",
     "rpc_sync_response",
     "session_affinity_headers",
@@ -72,6 +81,7 @@ ALL_SCENES = (
     "session_tree_branch",
     "silent_overflow",
     "thinking_level_change",
+    "tool_argument_validation",
     "tool_execution_error",
     "tool_execution_success",
     "usage_cache_normalization",
@@ -108,11 +118,11 @@ def _round_trip_obj(obj: Any, adapter: Any) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# 26-directory invariant                                                       #
+# Fixture directory invariant                                                 #
 # --------------------------------------------------------------------------- #
 
 
-def test_all_26_scene_directories_exist() -> None:
+def test_expected_scene_directories_exist() -> None:
     actual = {p.name for p in FIXTURE_ROOT.iterdir() if p.is_dir()}
     assert actual == set(ALL_SCENES), (
         f"Mismatched fixture directories: extra={actual - set(ALL_SCENES)}, "

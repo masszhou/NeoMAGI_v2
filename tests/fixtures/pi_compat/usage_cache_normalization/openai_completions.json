@@ -1,0 +1,17 @@
+{
+  "model": "openai/gpt-4o-mini-chat-completions",
+  "raw": {
+    "prompt_tokens": 160,
+    "completion_tokens": 20,
+    "prompt_tokens_details": {
+      "cached_tokens": 60
+    }
+  },
+  "expected": {
+    "input": 100,
+    "output": 20,
+    "cacheRead": 60,
+    "cacheWrite": 0,
+    "totalTokens": 180
+  }
+}

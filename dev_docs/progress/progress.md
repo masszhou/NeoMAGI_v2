@@ -52,3 +52,10 @@ doc_id_assigned_at: 2026-04-25T18:57:04+02:00
 - Evidence: `dev_docs/logs/p1_m1_closeout.md` § P1-M1 follow-up；ADR-0015 §影响 amended，`design_docs/decisions/INDEX.md` 记录 amendment，架构 TUI Contract primitive 列表与手测 §2 anchored renderer 期望已同步；`pytest tests/` **224 passed**；`just lint` green（`ruff check src/` passed，`complexity_guard regressions=0`）。
 - Next: 继续进入 P1-M2；本 follow-up 未改变 `InteractiveController` event/control plane，也未改变 `PlaybackHarness` 路径。
 - Risk: 真实 TTY DSR timeout / 不支持时会退化为屏底锚定并滚动当前 viewport，但 scrollback 保留；非 TTY / pipe / playback 不 DSR、不写 fallback newline，anchor=1。
+
+## 2026-04-26 23:51 (local) | P1-M2 closeout
+- Status: done
+- Done: 完成 P1-M2 `pi-ai` Python Core：runtime stream API、provider/model registry、prompt-cache/credential/tool helpers、usage/cost typed normalization、faux provider、Anthropic Messages、OpenAI Responses、OpenAI Chat Completions、cross-provider opaque handoff 全部落地。
+- Evidence: `dev_docs/logs/p1_m2_closeout.md`, `src/ai_provider/{runtime_types,streaming,api_registry,model_registry,models,prompt_cache,credentials,tools,usage,convert}.py`, `src/ai_provider/providers/{faux,anthropic,openai_responses,openai_completions}.py`, `tests/ai_provider/test_*.py`（34 条离线 provider/core 用例），`tests/fixtures/pi_compat/usage_cache_normalization/*.json`。
+- Next: 进入 P1-M3，把 `agent_core` loop 接到 `ai_provider.stream()`，并在工具 dispatch 前使用 `validate_tool_arguments()`。
+- Risk: 真实 provider smoke 未运行（未启用 `NEOMAGI_PROVIDER_SMOKE=1` / 未使用真实 key）；SDK runtime 已通过 fake client contract 锁 payload、headers、usage 和 stream 映射。

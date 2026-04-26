@@ -1,20 +1,4 @@
-"""Usage normalization + cost calculation (M0 boundary).
-
-Architecture: ``ai_provider`` Protocol § Model and Provider — usage normalization
-must keep Pi semantics so cross-provider handoff is byte-stable.
-
-Pi rules (architecture line 257):
-
-- ``input`` excludes ``cacheRead`` and ``cacheWrite``.
-- ``totalTokens = input + output + cacheRead + cacheWrite``.
-- Many OpenAI-compatible / proxy providers report ``prompt_tokens_details.cached_tokens``
-  while *also* including those tokens in ``prompt_tokens`` — the adapter must
-  subtract cached tokens before adding ``cacheRead`` / ``cacheWrite``.
-
-M0 only ships the cost calculator and the per-provider normalization
-*hook surface*. Concrete provider adapters land in M2; the round-trip fixture
-``usage_cache_normalization`` (W4) is what each M2 adapter must satisfy.
-"""
+"""Provider-specific usage normalization and five-dimensional cost."""
 
 from __future__ import annotations
 
@@ -26,65 +10,113 @@ PER_MILLION = 1_000_000
 
 
 def calculate_cost(model: Model, usage: Usage) -> UsageCost:
-    """Compute a five-dimensional ``UsageCost`` from raw token counts.
-
-    Costs in :class:`Model.cost` are quoted in dollars per million tokens, so
-    the conversion factor is :data:`PER_MILLION`.
-    """
-
     input_cost = model.cost.input * usage.input / PER_MILLION
     output_cost = model.cost.output * usage.output / PER_MILLION
     cache_read_cost = model.cost.cache_read * usage.cache_read / PER_MILLION
     cache_write_cost = model.cost.cache_write * usage.cache_write / PER_MILLION
-    total = input_cost + output_cost + cache_read_cost + cache_write_cost
-
     return UsageCost(
         input=input_cost,
         output=output_cost,
         cacheRead=cache_read_cost,
         cacheWrite=cache_write_cost,
-        total=total,
+        total=input_cost + output_cost + cache_read_cost + cache_write_cost,
     )
 
 
-def normalize_provider_usage(raw: dict[str, Any], provider: str) -> Usage:
-    """Provider-aware usage normalization (placeholder).
+def _as_int(value: Any) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
-    M0 only resolves the "avoid double-counting cacheRead" guarantee for the
-    common case (``prompt_tokens`` already includes ``cached_tokens``). Each
-    provider adapter in M2 will replace this with provider-specific extraction.
 
-    The current default treats ``raw`` as the OpenAI-compatible shape:
+def _get(raw: Any, key: str, default: Any = None) -> Any:
+    if isinstance(raw, dict):
+        return raw.get(key, default)
+    return getattr(raw, key, default)
 
-    - ``prompt_tokens`` may include ``cached_tokens`` (subtract before assigning).
-    - ``completion_tokens`` → ``output``.
-    - ``cached_tokens`` → ``cacheRead``.
-    - ``cache_creation_input_tokens`` → ``cacheWrite`` (Anthropic-flavored shim;
-      ignored if absent).
 
-    Anything outside these keys is left as ``0``; M2 fills the per-provider gaps.
-    """
+def _details(raw: Any, key: str) -> Any:
+    return _get(raw, key, {}) or {}
 
-    prompt_tokens = int(raw.get("prompt_tokens", 0) or 0)
-    completion_tokens = int(raw.get("completion_tokens", 0) or 0)
-    details = raw.get("prompt_tokens_details") or {}
-    cached_tokens = int(details.get("cached_tokens", 0) or 0)
-    cache_write_tokens = int(raw.get("cache_creation_input_tokens", 0) or 0)
 
-    input_tokens = max(prompt_tokens - cached_tokens, 0)
-    total_tokens = input_tokens + completion_tokens + cached_tokens + cache_write_tokens
+def _usage(model: Model, *, input: int, output: int, cache_read: int, cache_write: int) -> Usage:
+    usage = Usage(
+        input=max(input, 0),
+        output=max(output, 0),
+        cacheRead=max(cache_read, 0),
+        cacheWrite=max(cache_write, 0),
+        totalTokens=max(input, 0) + max(output, 0) + max(cache_read, 0) + max(cache_write, 0),
+    )
+    usage.cost = calculate_cost(model, usage)
+    return usage
 
-    return Usage(
+
+def normalize_anthropic_usage(raw: Any, model: Model) -> Usage:
+    input_tokens = _as_int(_get(raw, "input_tokens"))
+    output_tokens = _as_int(_get(raw, "output_tokens"))
+    cache_read = _as_int(_get(raw, "cache_read_input_tokens"))
+    cache_write = _as_int(_get(raw, "cache_creation_input_tokens"))
+    return _usage(
+        model,
         input=input_tokens,
-        output=completion_tokens,
-        cacheRead=cached_tokens,
-        cacheWrite=cache_write_tokens,
-        totalTokens=total_tokens,
+        output=output_tokens,
+        cache_read=cache_read,
+        cache_write=cache_write,
+    )
+
+
+def normalize_openai_responses_usage(raw: Any, model: Model) -> Usage:
+    input_total = _as_int(_get(raw, "input_tokens"))
+    output_tokens = _as_int(_get(raw, "output_tokens"))
+    input_details = _details(raw, "input_tokens_details")
+    cache_read = _as_int(_get(input_details, "cached_tokens"))
+    return _usage(
+        model,
+        input=max(input_total - cache_read, 0),
+        output=output_tokens,
+        cache_read=cache_read,
+        cache_write=0,
+    )
+
+
+def normalize_openai_completions_usage(raw: Any, model: Model) -> Usage:
+    prompt_tokens = _as_int(_get(raw, "prompt_tokens"))
+    output_tokens = _as_int(_get(raw, "completion_tokens"))
+    prompt_details = _details(raw, "prompt_tokens_details")
+    cached_tokens = _as_int(_get(prompt_details, "cached_tokens"))
+    cache_write = _as_int(_get(prompt_details, "cache_write_tokens"))
+    cache_read = max(cached_tokens - cache_write, 0)
+    return _usage(
+        model,
+        input=max(prompt_tokens - cache_read - cache_write, 0),
+        output=output_tokens,
+        cache_read=cache_read,
+        cache_write=cache_write,
+    )
+
+
+def normalize_faux_usage(raw: Any, model: Model) -> Usage:
+    input_tokens = _as_int(_get(raw, "input"))
+    output_tokens = _as_int(_get(raw, "output"))
+    cache_read = _as_int(_get(raw, "cacheRead", _get(raw, "cache_read")))
+    cache_write = _as_int(_get(raw, "cacheWrite", _get(raw, "cache_write")))
+    return _usage(
+        model,
+        input=input_tokens,
+        output=output_tokens,
+        cache_read=cache_read,
+        cache_write=cache_write,
     )
 
 
 __all__ = [
     "PER_MILLION",
     "calculate_cost",
-    "normalize_provider_usage",
+    "normalize_anthropic_usage",
+    "normalize_faux_usage",
+    "normalize_openai_completions_usage",
+    "normalize_openai_responses_usage",
 ]

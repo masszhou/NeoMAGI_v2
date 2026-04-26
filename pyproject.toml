@@ -9,6 +9,9 @@ description = "NeoMAGI v2 — local-first personal agent CLI"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "anthropic>=0.69.0",
+    "jsonschema>=4,<5",
+    "openai>=2.0.0",
     "pydantic>=2,<3",
     "wcwidth>=0.2.13",
 ]

@@ -1,0 +1,16 @@
+{
+  "model": "anthropic/claude-3-5-haiku-20241022",
+  "raw": {
+    "input_tokens": 100,
+    "output_tokens": 25,
+    "cache_read_input_tokens": 40,
+    "cache_creation_input_tokens": 10
+  },
+  "expected": {
+    "input": 100,
+    "output": 25,
+    "cacheRead": 40,
+    "cacheWrite": 10,
+    "totalTokens": 175
+  }
+}

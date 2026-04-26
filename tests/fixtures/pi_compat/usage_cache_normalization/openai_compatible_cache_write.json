@@ -1,0 +1,18 @@
+{
+  "model": "opencode/glm-5",
+  "raw": {
+    "prompt_tokens": 200,
+    "completion_tokens": 40,
+    "prompt_tokens_details": {
+      "cached_tokens": 90,
+      "cache_write_tokens": 30
+    }
+  },
+  "expected": {
+    "input": 110,
+    "output": 40,
+    "cacheRead": 60,
+    "cacheWrite": 30,
+    "totalTokens": 240
+  }
+}
