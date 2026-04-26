@@ -45,3 +45,10 @@ doc_id_assigned_at: 2026-04-25T18:57:04+02:00
 - Evidence: `dev_docs/logs/p1_m1_closeout.md` 末尾 7 段"手测追加"完整记录每条根因 / 修法 / acceptance 影响；commits `72335a9` `bcace2a` `2520cdc` `f47f554` `8df7e46` `65a8c29` `a610723` 等 16 次提交；`pytest tests/` 共 **180 用例 green**（手测轮新增 ~10 条端到端回归）；`just lint` green、`complexity_guard regressions=0`（baseline 刷新若干次，因为 line-anchored fingerprint 受 docstring 行号变动影响）；`scripts/diag_keys.py` 落地作为未来"按键不反应"问题的诊断工具。
 - Next: 进入 P1-M2（真实 / faux provider + AI stream contract）。M2/M3/M4 接入路径已多次确认：`PlaybackHarness` 走 controller 公开 event/control plane 两个面，可直接替换为 `Agent.events.subscribe()`，`InteractiveController` / `TUIApp` / 业务组件不需动。
 - Risk: 无；M1 现在的"用户能跑通"状态比 acceptance 表本身更严格，进 M2 的依赖项全部就位。
+
+## 2026-04-26 22:04 (local) | P1-M1 follow-up UX increments
+- Status: done
+- Done: 完成 `dev_docs/plans/p1_m1_followups.md` W1/W2/W3：anchored renderer 保留 shell history + 退出 prompt 新行；`TerminalSession.query_cursor_row()` / `TUIApp._prepare_anchor()` / `Renderer.set_anchor()` ownership 拆清；late DSR CPR 在 `StdinBuffer` 丢弃；新增 `TUIApp.schedule_callback` 与 `tui.components.spinner.Spinner`，现有 `Loader` / `CancellableLoader` 收敛到唯一 `PI_FRAMES`；新增 `Text` / `Spacer` / `Box` / `Container` / `TruncatedText` substrate primitives，`MessageListComponent` 改为 `Container` 薄壳。
+- Evidence: `dev_docs/logs/p1_m1_closeout.md` § P1-M1 follow-up；ADR-0015 §影响 amended，`design_docs/decisions/INDEX.md` 记录 amendment，架构 TUI Contract primitive 列表与手测 §2 anchored renderer 期望已同步；`pytest tests/` **224 passed**；`just lint` green（`ruff check src/` passed，`complexity_guard regressions=0`）。
+- Next: 继续进入 P1-M2；本 follow-up 未改变 `InteractiveController` event/control plane，也未改变 `PlaybackHarness` 路径。
+- Risk: 真实 TTY DSR timeout / 不支持时会退化为屏底锚定并滚动当前 viewport，但 scrollback 保留；非 TTY / pipe / playback 不 DSR、不写 fallback newline，anchor=1。

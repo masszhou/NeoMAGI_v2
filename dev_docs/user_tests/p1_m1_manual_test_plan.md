@@ -140,11 +140,15 @@ uv run neomagi --help
 > 提示：进入 TUI 后看不到 `bash` 提示符是正常的；底部最后一行是 editor，前面
 > 是空白消息列。
 >
+> **anchored renderer**：M1 follow-up 后，TUI 启动不再清全屏。启动前的 shell
+> 历史应保留在 TUI 区域上方；TUI 从启动时光标附近向下铺开。如果启动位置离
+> 屏幕底部太近，真实 TTY 会保守滚动出约 8 行工作区，但 scrollback 历史仍在。
+>
 > **退出时的视觉残留**：M1 默认**不**进 alt screen，所以退出后你看到的不是
-> "原本的 shell 干净屏幕"，而是 TUI 退出前那一帧**还挂在那里**，shell 的
-> 新 prompt 紧贴或写在这些字符旁边/下面。这非常容易让人误以为"Ctrl+C / kill
-> 没反应" —— 实际上进程已经退了。**任何时候不确定，键入 `echo OK<Enter>`：
-> 看到 `OK` 出现就是退了；如果连 `echo` 都没回显，再按 §0.5 应急。**
+> "原本的 shell 干净屏幕"，而是 TUI 退出前那一帧**还挂在那里**；shell 的
+> 新 prompt 应出现在 TUI 区域**下方的新行**。**任何时候不确定，键入
+> `echo OK<Enter>`：看到 `OK` 出现就是退了；如果连 `echo` 都没回显，再按
+> §0.5 应急。**
 
 ### 2.1 启动 TUI（无 args）
 
@@ -153,6 +157,7 @@ uv run python -m cli
 ```
 
 **期望**：
+- 启动前的 shell 输出仍在 TUI 区域上方；不应被整屏清空。
 - 终端立刻进入 TUI 模式（光标卡在最后一行的 `> ` 后面）。
 - 顶部状态行可能短暂出现"M1 mock — pass --playback or use /play"。
 - 底部 footer 行显示 `[idle] M1 mock — pass --playback or use /play`。
@@ -168,8 +173,9 @@ uv run python -m cli
    提示行已写明 "Tab toggles, Enter confirms, Esc cancels"。
 
 **期望**：进程退出，shell 接管。屏幕上会留下退出前最后一帧的字符残留
-（M1 默认不进 alt screen）—— 这是设计选择，不是 bug。键入 `echo OK` 回车
-确认 shell 已经在跑；想要干净屏幕再敲 `clear`。
+（M1 默认不进 alt screen）—— 这是设计选择，不是 bug；新的 shell prompt
+应在 TUI 区域下方的新行。键入 `echo OK` 回车确认 shell 已经在跑；想要
+干净屏幕再敲 `clear`。
 
 ### 2.3 退出（`Ctrl+C` idle 路径）
 
@@ -183,8 +189,7 @@ uv run python -m cli
 
 **怎么确认确实退出了**：M1 默认**不进 alt screen**，所以退出时屏幕**不会
 被清掉** —— 你看到的 `>` editor 行、`[idle] M1 mock ...` footer 仍然挂在
-屏幕上，shell 的新 prompt 会写在这些残留**旁边或下面**，视觉上很像
-"Ctrl+C 没反应"。判断方法：
+屏幕上，shell 的新 prompt 应写在这些残留**下面的新行**。判断方法：
 
 1. 直接键入 `echo CTRL_C_OK` 后回车。
 2. 看到 `CTRL_C_OK` 输出 + shell prompt 在新行 → Ctrl+C 已经退出。

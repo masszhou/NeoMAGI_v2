@@ -954,7 +954,8 @@ Borrowed `pi-tui` concepts:
 - terminal lifecycle: raw mode, bracketed paste, resize handling, cursor restoration, drain input on exit.
 - overlay stack with focus, hide/show, anchor/size options.
 - editor with multi-line input, autocomplete, prompt history, bracketed paste markers.
-- markdown renderer, inline image renderer, select list, settings list, loaders.
+- substrate primitives: `Text`, `Spacer`, `Box`, `Container`, `TruncatedText`, `Spinner` / `PI_FRAMES`.
+- markdown renderer, inline image renderer, select list, settings list, overlay loaders.
 
 P1 renderers:
 

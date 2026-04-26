@@ -527,3 +527,68 @@ W5 deliverable 表的 7 条；§7 修 `/quit` 双 Enter + pgrep pattern；新建
   中断的处理路径已经定型。
 
 P1-M1 视为完整 sign-off，进入 P1-M2。
+
+## P1-M1 follow-up：Pi-aligned UX increments（2026-04-26）
+
+基于 `dev_docs/plans/p1_m1_followups.md` 追加完成 W1/W2/W3，保持
+`InteractiveController` event/control plane 与 PlaybackHarness 路径不变。
+
+### W1 anchored renderer
+
+- Baseline check：按 ADR-0011 从
+  `https://raw.githubusercontent.com/badlogic/pi-mono/97a38bf65217d89619b3386c620333a97ee391b7/packages/tui/src/tui.ts`
+  核对，`TUI.doRender()` 的 first render 走 `fullRender(false)`，注释为
+  "just output everything without clearing"，未执行全屏清除；退出 `stop()`
+  会把 cursor 移到内容末尾并写 `\r\n`。本次实现与该 baseline 的
+  "不清 shell history / 退出另起行"方向一致。
+- `TerminalSession.query_cursor_row()` 只负责 DSR 查询与 leftover bytes 返回；
+  非 TTY no-op，不写 fallback newline。
+- `TUIApp._prepare_anchor()` 持有 anchor 编排权：回灌 leftover 到
+  `StdinBuffer`、计算 bottom-reserved fallback、调用 `Renderer.set_anchor()`，
+  并用 anchor 后的可用高度 compose frame。resize callback 只标记
+  `_anchor_dirty`，下一次普通 draw 前重新 DSR。
+- `Renderer` 增 `anchor_row` / `set_anchor()` /
+  `last_bottom_row()`，所有 cursor move 统一按 anchor 偏移；reset 后
+  `last_bottom_row()` 回到 `None`。
+- `lifecycle` 在 terminal restore 前基于 `last_bottom_row()` 放置 cursor：
+  未绘制时不移动，未到屏底时到下一行并清行，已到屏底时写 `\r\n` 滚动。
+- 已知降级：真实 TTY 若 DSR timeout / 不支持，启动会写 `terminal_rows`
+  个 newline，把工作区保守锚到屏底附近；scrollback 保留，但当前 viewport
+  会滚动。这是 plan 允许的降级。非 TTY / pipe / playback 不 DSR、不 fallback
+  newline，anchor 保持 1。
+
+### W2 spinner primitive
+
+- 新增 `src/tui/components/spinner.py`：`Spinner` 是纯 `Component`，不继承
+  `Overlay`；`PI_FRAMES` 是唯一 braille spinner 帧来源。
+- `TUIApp.schedule_callback(when, fn)` 落地，到期先执行 callback 再请求 render；
+  `schedule_wake(when)` 退化成空 callback，保持 Status TTL 语义。
+- `Spinner.attach_tick_scheduler()` attach 后排首个 tick；`set_frames([])` 只
+  隐藏 indicator，不隐藏 label，也不继续自动调度。
+- `Loader` / `CancellableLoader` 改为持有 `Spinner`，外部类名与调用面不变。
+
+### W3 substrate primitives
+
+- 新增 `src/tui/components/{text,spacer,box,container,truncated_text}.py` 与
+  `__init__.py`，只依赖 stdlib + `tui.*`。
+- `MessageListComponent` 改为 `Container` 薄壳；`_RootComponent` 的
+  height-aware `render_with_height()` 与 `editor_offset()` 暂不迁移，避免
+  触发既有 `InteractiveController._on_editor_action` complexity baseline
+  漂移。后续如果要把 root 也迁到 substrate container，应单独处理该既有
+  block finding。
+- ADR-0015 §影响、`design_docs/decisions/INDEX.md` amendment 记录、架构
+  TUI Contract primitive 列表、手测说明书 §2 均已同步。
+
+### Acceptance / evidence
+
+- Explicit deviations before commit：`_RootComponent` 内部 Container 化未做，仅
+  `MessageListComponent` 已迁；W1 PTY 字节级保留端到端测试未做；macOS
+  Terminal / iTerm2 / gnome-terminal 三终端手测未跑。本段把这些作为显式
+  未完成项记录，避免未来把 W1/W3 的完整 acceptance 误读为已经全部覆盖。
+- `tests/tui/`：102 passed，覆盖 DSR success/timeout/non-TTY、late CPR discard、
+  anchor fallback、resize dirty、exit cursor placement、Spinner scheduler、
+  loader 收敛、components primitives、唯一 spinner frames 静态扫描。
+- `pytest tests/`：224 passed。
+- `just lint`：green（`ruff check src/` passed；
+  `complexity_guard regressions=0`，当前 target findings 80 / block findings 10，
+  均为既有 ratchet 状态，无新增回归）。
