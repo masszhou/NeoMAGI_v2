@@ -142,10 +142,17 @@ class StdinBuffer:
     protocol level-1 sequences.
     """
 
+    _PARTIAL_CSI_WINDOW: float = 0.03
+    """Seconds the buffer holds a lone ``\\x1b`` before synthesising an Esc
+    event for downstream gesture composition. Just long enough to ride
+    over a CSI sequence that arrives split across reads on a slow link
+    (rare on local terminals); short enough that single Esc latency stays
+    dominated by the gesture window, not by this."""
+
     def __init__(
         self,
         *,
-        lone_esc_timeout: float = 0.10,
+        lone_esc_timeout: float = 0.20,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -154,21 +161,29 @@ class StdinBuffer:
         self._paste_acc: list[str] = []
         self._lone_esc_seen_at: float | None = None
         """Wall-clock instant at which the buffer first held nothing but a
-        single ``\\x1b`` with no follow-up bytes. While this is non-None and
-        the timeout hasn't elapsed, ``drain()`` deliberately does NOT emit
-        an ``Esc`` keystroke — it gives the terminal time to deliver either
-        the rest of a CSI/OSC sequence or a second ``\\x1b`` (for the
-        ``Esc Esc`` gesture). At 12ms event-loop ticks, a 100ms debounce
-        leaves room for ~8 ticks worth of follow-up before flushing.
-        Cleared whenever new bytes arrive (via ``feed``/``feed_str``) or
-        the buffer changes shape."""
+        single ``\\x1b``. Used only for the short ``_PARTIAL_CSI_WINDOW``
+        wait — actual Esc gesture composition happens at the event level
+        via ``_pending_esc_at`` so it works for both lone-byte and
+        CSI-encoded (``\\x1b[27u`` / ``\\x1b[27;1;27~``) Esc deliveries."""
+        self._pending_esc_at: float | None = None
+        """Wall-clock instant of the most recent Esc *event* (from any
+        source — lone-byte synthesis, CSI-u, or modifyOtherKeys). While
+        non-None and within ``_lone_esc_timeout``, a second Esc folds into
+        ``Esc Esc``; any non-Esc event flushes it as a real ``Esc``;
+        otherwise a final timeout flush emits ``Esc`` alone. Without this
+        layer, terminals that honour the ``\\x1b[>4;2m`` / ``\\x1b[>1u``
+        negotiation (e.g. macOS Terminal.app) deliver each Esc as a
+        complete CSI sequence and the byte-level wait never sees a lone
+        ``\\x1b`` — so manual P1-M1 §3.9 ``Esc Esc`` always degenerated
+        into two separate Esc/ABORT events regardless of how fast the
+        user double-tapped."""
         self._lone_esc_timeout: float = lone_esc_timeout
-        """Seconds to wait between first seeing a lone ``\\x1b`` and emitting
-        the synthetic ``Esc`` keystroke. Default 100 ms — matches xterm's
-        ESC-key debounce convention. Lower values make single Esc snappier
-        but degrade reliability of multi-byte escape sequences and the
-        ``Esc Esc`` gesture (manual P1-M1 §3.9). Tests inject a fake clock
-        rather than tuning this."""
+        """Seconds the gesture composer waits for a second Esc before
+        flushing the parked one as ``Esc``. Default 200 ms — wide enough
+        for human reflex double-tap (typical 100-250 ms inter-tap
+        interval), narrow enough that single Esc still feels reactive
+        for an abort gesture. Tests inject a fake clock rather than
+        tuning this."""
         self._clock: Callable[[], float] = clock or time.monotonic
 
     # ------------------------------------------------------------------ #
@@ -228,19 +243,16 @@ class StdinBuffer:
                 events.append(event)
 
         self._buffer = buf[i:]
-        self._maybe_flush_lone_esc(events)
-        return events
+        self._maybe_synthesize_lone_esc(events)
+        return self._compose_esc_gestures(events)
 
-    def _maybe_flush_lone_esc(self, events: list[Event]) -> None:
-        """Lone-ESC debounce: when the buffer holds only ``\\x1b`` with no
-        follow-up, hold the keystroke for ``_lone_esc_timeout`` seconds
-        before emitting a synthetic ``Esc``. The window must be long
-        enough for two-handed reflex double-Esc (manual P1-M1 §3.9) to
-        land both bytes in the buffer in time for ``_parse_escape`` to
-        collapse them into a single ``Esc Esc`` event, but short enough
-        that single Esc still feels reactive (xterm uses ~100 ms).
-        ``feed*()`` clears ``_lone_esc_seen_at`` on every byte arrival,
-        so the debounce only fires when the buffer truly idled."""
+    def _maybe_synthesize_lone_esc(self, events: list[Event]) -> None:
+        """Buffer-level lone-byte handling: when the buffer holds only a
+        bare ``\\x1b`` with no follow-up bytes for the short
+        ``_PARTIAL_CSI_WINDOW`` (lets a CSI sequence split across reads
+        on slow links complete first), synthesise an ``Esc`` event so
+        the gesture composer downstream can treat it identically to a
+        CSI-encoded Esc."""
 
         if self._buffer != "\x1b":
             self._lone_esc_seen_at = None
@@ -249,10 +261,44 @@ class StdinBuffer:
         if self._lone_esc_seen_at is None:
             self._lone_esc_seen_at = now
             return
-        if now - self._lone_esc_seen_at >= self._lone_esc_timeout:
+        if now - self._lone_esc_seen_at >= self._PARTIAL_CSI_WINDOW:
             events.append(KeyEvent("Esc", raw="\x1b"))
             self._buffer = ""
             self._lone_esc_seen_at = None
+
+    def _compose_esc_gestures(self, raw: list[Event]) -> list[Event]:
+        """Event-level Esc combiner: park any ``Esc`` keystroke for
+        ``_lone_esc_timeout`` seconds and either fold a second Esc that
+        arrives within the window into ``Esc Esc``, flush the parked one
+        as ``Esc`` if any other event arrives, or flush as ``Esc`` once
+        the timeout expires.
+
+        This works regardless of how the terminal delivers Esc (raw
+        ``\\x1b`` byte, ``\\x1b[27u`` CSI-u, ``\\x1b[27;1;27~``
+        modifyOtherKeys=2) — all those paths produce a ``KeyEvent("Esc")``
+        before reaching here. Without this layer, terminals that honour
+        our keyboard-protocol negotiation deliver each Esc as a complete
+        CSI sequence and the byte-level lone-Esc parking never engages,
+        so ``Esc Esc`` cannot compose — the manual §3.9 regression."""
+
+        out: list[Event] = []
+        for ev in raw:
+            if isinstance(ev, KeyEvent) and ev.key == "Esc":
+                if self._pending_esc_at is not None:
+                    out.append(KeyEvent("Esc Esc", raw="\x1b\x1b"))
+                    self._pending_esc_at = None
+                else:
+                    self._pending_esc_at = self._clock()
+                continue
+            if self._pending_esc_at is not None:
+                out.append(KeyEvent("Esc", raw="\x1b"))
+                self._pending_esc_at = None
+            out.append(ev)
+        if self._pending_esc_at is not None:
+            if self._clock() - self._pending_esc_at >= self._lone_esc_timeout:
+                out.append(KeyEvent("Esc", raw="\x1b"))
+                self._pending_esc_at = None
+        return out
 
     # ------------------------------------------------------------------ #
     # Escape parsing                                                      #
@@ -340,17 +386,7 @@ class StdinBuffer:
             # would silently drop e.g. Ctrl+C on a terminal that honoured
             # our ``\x1b[>4;2m`` negotiation request.
             if code == "27" and len(parts) == 3 and parts[2].isdigit():
-                mod_param = int(parts[1]) if parts[1].isdigit() else 1
-                ch_code = int(parts[2])
-                modifiers = _XTERM_MOD_TABLE.get(mod_param, frozenset())
-                if 32 < ch_code < 127:
-                    ch = chr(ch_code)
-                    if "Ctrl" in modifiers and "a" <= ch <= "z":
-                        ch = ch.upper()
-                    return KeyEvent(
-                        _format_key(ch, modifiers), raw=raw, modifiers=modifiers
-                    )
-                return None
+                return self._csi_27_alt_form(parts, raw)
             mod_param = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
             name = _TILDE_NAMES.get(code)
             if name is None:
@@ -370,6 +406,36 @@ class StdinBuffer:
 
         # Unknown CSI — drop silently rather than corrupt the stream.
         return None
+
+    def _csi_27_alt_form(self, parts: list[str], raw: str) -> KeyEvent | None:
+        """xterm modifyOtherKeys=2 alternate encoding ``CSI 27 ; mod ; ascii ~``.
+
+        Decodes both printable ASCII and the named control codes (Esc / Tab /
+        Enter / Backspace / Space). Without the named codes, terminals that
+        report Esc as ``\\x1b[27;1;27~`` would lose every Esc keystroke (the
+        ``32 < ch_code < 127`` filter excluded ASCII 27 = Esc). Manual P1-M1
+        §3.9 caught this when double-Esc never composed."""
+
+        mod_param = int(parts[1]) if parts[1].isdigit() else 1
+        ch_code = int(parts[2])
+        modifiers = _XTERM_MOD_TABLE.get(mod_param, frozenset())
+        named: dict[int, str] = {
+            8: "Backspace",
+            9: "Tab",
+            13: "Enter",
+            27: "Esc",
+            32: "Space",
+            127: "Backspace",
+        }
+        if ch_code in named:
+            name = named[ch_code]
+        elif 32 < ch_code < 127:
+            name = chr(ch_code)
+            if "Ctrl" in modifiers and "a" <= name <= "z":
+                name = name.upper()
+        else:
+            return None
+        return KeyEvent(_format_key(name, modifiers), raw=raw, modifiers=modifiers)
 
     def _parse_csi_u(self, params: str, raw: str) -> KeyEvent | None:
         parts = params.split(";")

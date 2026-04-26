@@ -172,22 +172,21 @@ def test_lone_esc_is_not_emitted_when_csi_arrives_in_next_chunk() -> None:
 
 
 def test_slow_double_esc_still_collapses_to_single_event() -> None:
-    """Regression for §3.9 manual test on macOS Terminal.app: a human
-    double-tap on Esc lands ~100–250 ms apart, well past one event-loop
-    tick. The earlier "flush after one idle drain" logic emitted a
-    single ``Esc`` immediately after the first byte, so the second Esc
-    arrived to an empty buffer and produced a *second* ``Esc`` event
-    instead of the expected ``Esc Esc`` gesture. With the debounce
-    window now set wider than human reflex, the second feed lands while
-    the first is still pending and ``_parse_escape`` collapses both
-    into one event."""
+    """Regression for §3.9 manual test: human double-tap on Esc lands
+    ~100–300 ms apart, well past one event-loop tick. The earlier
+    "flush after one idle drain" logic emitted a single ``Esc``
+    immediately after the first byte, so the second Esc arrived to an
+    empty buffer and produced a *second* ``Esc`` event instead of the
+    expected ``Esc Esc`` gesture. The debounce window now exceeds
+    typical human reflex; both bytes land in the buffer in time and
+    ``_parse_escape`` collapses them."""
 
     now = [0.0]
     sb = StdinBuffer(clock=lambda: now[0])
     sb.feed_str("\x1b")
     now[0] = 0.02
     assert sb.drain() == []  # first byte parked, no event yet
-    now[0] = 0.07  # 70 ms later — still inside the 100 ms debounce
+    now[0] = 0.07  # 70 ms later — still inside the partial-CSI window
     sb.feed_str("\x1b")
     events = sb.drain()
     keys = [getattr(e, "key", None) for e in events]
@@ -195,3 +194,58 @@ def test_slow_double_esc_still_collapses_to_single_event() -> None:
         f"expected one Esc Esc event, got {keys!r} — slow double-tap "
         f"degenerated into single Esc events again"
     )
+
+
+def test_csi_encoded_esc_gesture_composes_via_event_layer() -> None:
+    """Regression for §3.9 follow-up: when the terminal honours our
+    ``\\x1b[>1u`` / ``\\x1b[>4;2m`` negotiation it delivers each Esc as
+    a complete CSI sequence (e.g. ``\\x1b[27u``). The byte-level
+    lone-Esc parking never sees a lone ``\\x1b`` in this case, so the
+    composition has to happen at the event layer — otherwise both Escs
+    fire as immediate ABORTs and ``Esc Esc`` is unreachable on macOS
+    Terminal.app and similar."""
+
+    now = [0.0]
+    sb = StdinBuffer(clock=lambda: now[0])
+    sb.feed_str("\x1b[27u")  # first CSI-u encoded Esc
+    now[0] = 0.05
+    assert sb.drain() == []  # event-level composer parked it
+    now[0] = 0.10
+    sb.feed_str("\x1b[27u")  # second CSI-u encoded Esc within window
+    events = sb.drain()
+    keys = [getattr(e, "key", None) for e in events]
+    assert keys == ["Esc Esc"], (
+        f"expected Esc Esc gesture; got {keys!r} — CSI-encoded Esc "
+        f"bypassed the event-layer composer"
+    )
+
+
+def test_csi_27_modifyotherkeys_esc_also_composes() -> None:
+    """Companion: same composition must work for the xterm
+    ``modifyOtherKeys=2`` alternate Esc encoding ``\\x1b[27;1;27~``."""
+
+    now = [0.0]
+    sb = StdinBuffer(clock=lambda: now[0])
+    sb.feed_str("\x1b[27;1;27~")
+    now[0] = 0.05
+    assert sb.drain() == []
+    now[0] = 0.15
+    sb.feed_str("\x1b[27;1;27~")
+    events = sb.drain()
+    keys = [getattr(e, "key", None) for e in events]
+    assert keys == ["Esc Esc"]
+
+
+def test_single_csi_encoded_esc_flushes_after_gesture_window() -> None:
+    """With no second Esc, the parked CSI-u Esc must still flush as a
+    plain ``Esc`` once the gesture window expires — otherwise the abort
+    path would never fire on terminals that honour the negotiation."""
+
+    now = [0.0]
+    sb = StdinBuffer(clock=lambda: now[0])
+    sb.feed_str("\x1b[27u")
+    assert sb.drain() == []  # parked
+    now[0] = 0.5  # well past the window
+    events = sb.drain()
+    keys = [getattr(e, "key", None) for e in events]
+    assert keys == ["Esc"]

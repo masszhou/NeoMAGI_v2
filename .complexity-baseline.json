@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-26T08:26:09+00:00",
+  "generated_at": "2026-04-26T09:55:38+00:00",
   "policy_version": 1,
   "thresholds": {
     "prod": {
@@ -38,9 +38,9 @@
       "path": "src/cli/interactive/app.py",
       "actual": 11,
       "limit": 8,
-      "fingerprint": "function_branches::src/cli/interactive/app.py::InteractiveController._on_editor_action::280",
+      "fingerprint": "function_branches::src/cli/interactive/app.py::InteractiveController._on_editor_action::285",
       "symbol": "InteractiveController._on_editor_action",
-      "line": 280
+      "line": 285
     },
     {
       "severity": "block",
@@ -151,17 +151,6 @@
       "fingerprint": "function_lines::src/tui/renderer.py::Renderer.present::64",
       "symbol": "Renderer.present",
       "line": 64
-    },
-    {
-      "severity": "block",
-      "group": "prod",
-      "metric": "function_branches",
-      "path": "src/tui/stdin_buffer.py",
-      "actual": 9,
-      "limit": 8,
-      "fingerprint": "function_branches::src/tui/stdin_buffer.py::StdinBuffer.drain::175",
-      "symbol": "StdinBuffer.drain",
-      "line": 175
     },
     {
       "severity": "block",

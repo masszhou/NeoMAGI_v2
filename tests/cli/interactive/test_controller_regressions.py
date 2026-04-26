@@ -104,10 +104,11 @@ def test_esc_closes_autocomplete_before_falling_through_to_abort() -> None:
     _inject(app, "/")
     assert c._slash_overlay is not None  # noqa: SLF001
     _inject(app, "Esc")
-    # First Esc dismissed the overlay; editor is still idle so abort path
-    # was NOT triggered.
+    # First Esc dismissed the overlay; abort path was NOT triggered, so no
+    # "aborted" status notification was pushed.
     assert c._slash_overlay is None  # noqa: SLF001
-    assert "abort" not in c.editor._footer.lower()  # noqa: SLF001
+    notes = c.status._notifications  # noqa: SLF001
+    assert not any("abort" in n.text.lower() for n in notes)
 
 
 # -------------------------------------------------------------------- #
@@ -135,7 +136,11 @@ def test_ctrl_c_during_streaming_aborts_instead_of_exiting() -> None:
     assert handled is True
     # Editor flipped back to idle.
     assert c.editor.state == EditorState.IDLE
-    assert "abort" in c.editor._footer.lower()  # noqa: SLF001
+    # Abort signals via a transient status notification, not by pinning
+    # "aborted" into the footer (which had no auto-revert and stuck
+    # forever — manual §3.9 follow-up bug).
+    notes = c.status._notifications  # noqa: SLF001
+    assert any("abort" in n.text.lower() for n in notes)
     # And app.exit() was NOT called — abort kept the loop alive.
     assert app._running is True  # noqa: SLF001
 

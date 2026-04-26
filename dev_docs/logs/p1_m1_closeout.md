@@ -201,3 +201,79 @@ P1-4 修单 Esc 不可达时引入的"flush after one idle drain"逻辑节奏太
   里靠 fake clock 锁定，未来调整 timeout 不会偷偷退化。
 - 自动测试 174 → **175 passed**；`just lint` green、`complexity_guard
   regressions=0`（drain 拆出 helper 后维持原有阈值）。
+
+## 手测追加：双 Esc 仍不复合 + "aborted" 永久卡 footer（2026-04-26）
+
+上一轮调宽 lone-ESC debounce 到 100ms 后，手测 §3.9 反馈"无论手速快慢，
+两次 Esc 都各自变成 abort"。同时观察到一条衍生 bug：footer 一旦显示
+`aborted` 就再也回不去 `[idle] M1 mock — ...`。
+
+### 根因 1：CSI-encoded Esc 绕开了字节层 debounce
+
+P1-M1 §"测试质量轮"加的 debounce 只挡在 `_parse_escape` 看到孤立字节
+`\x1b` 的路径上。但 `TerminalSession.enter()` 下发的
+`\x1b[>4;2m` / `\x1b[>1u` 协商一旦被终端接受（macOS Terminal.app 实测
+确认），Esc 会被编码成完整的 CSI 序列：
+
+| 编码 | 来源 | 解析路径 |
+| --- | --- | --- |
+| `\x1b[27u` | Kitty / CSI-u 协议 | `_parse_csi_u` 立刻 emit `KeyEvent("Esc")` |
+| `\x1b[27;1;27~` | xterm modifyOtherKeys=2 替代形式 | `~` 分支需要新增名称映射（原本 `32 < ch_code < 127` 把 ASCII 27 = ESC 滤掉） |
+
+无论哪条，事件**不经过字节层 debounce**：每次 Esc 都立刻 emit、立刻走
+ABORT。第二次 Esc 到来时第一次早已被消化，永远凑不成 `Esc Esc`。
+
+### 根因 2：footer 没有 TTL，"aborted" 永久挂死
+
+`InteractiveController.handle_abort()` 直接 `editor.set_footer("aborted")`。
+Editor 的 footer 是 plain 字符串，没有过期/复位机制，下一次 render 也只是
+重新画原值。用户后续无论键入还是 `/new`，这个文案都不会消失，会让人误以为
+"系统永久 stuck 在 aborted 状态"。
+
+### 解决办法（commit `<本次>`）
+
+#### Esc gesture 提到事件层
+
+- `StdinBuffer.__init__` 增 `_pending_esc_at` 状态字段；默认 timeout 调到
+  `0.20s`（200 ms gesture window，覆盖典型人类双击节奏 100–250 ms）；保留
+  字节层 `_PARTIAL_CSI_WINDOW = 30 ms` 用于跨 read 的 partial-CSI 容忍。
+- `drain()` 末尾追加 `_compose_esc_gestures(raw)`：任何来源的 `KeyEvent("Esc")`
+  都先入 pending；下一次 Esc 到达就 fold 成 `KeyEvent("Esc Esc")` 一并
+  emit；其他事件到来或 timeout 触发时 flush 单 Esc。这样无论字节路径
+  还是 CSI-u / modifyOtherKeys 路径，复合器都能命中。
+- `_csi_27_alt_form` 新增 helper：把 `\x1b[27;<mod>;<code>~` 中 ASCII
+  8/9/13/27/32/127 这些命名控制码也映射回 `Backspace` / `Tab` / `Enter` /
+  `Esc` / `Space` / `Backspace`，否则 ASCII 27 = ESC 会被 `32 < ch_code <
+  127` 滤掉，整个 modifyOtherKeys=2 路径上的 Esc 都拿不到。
+
+新增三条回归用例（fake clock 注入，全确定性）：
+- `test_csi_encoded_esc_gesture_composes_via_event_layer`：两次
+  `\x1b[27u` 100 ms 内 → `["Esc Esc"]`。
+- `test_csi_27_modifyotherkeys_esc_also_composes`：两次
+  `\x1b[27;1;27~` 150 ms 内 → `["Esc Esc"]`。
+- `test_single_csi_encoded_esc_flushes_after_gesture_window`：单次
+  CSI-u Esc + 500 ms 后 drain → `["Esc"]`。
+
+#### Abort 不再写 footer，改推 status 通知
+
+`handle_abort` 删掉 `editor.set_footer("aborted")`，改为
+`status.push_notification("aborted", level="info", ttl_seconds=3.0)`。
+Status 区已经有 TTL 自动淘汰，3 秒后通知自然消失，editor footer 维持
+`[idle] M1 mock — pass --playback or use /play` 不变。
+
+`tests/cli/interactive/test_controller_regressions.py` 里两条断言相应
+更新：`test_ctrl_c_during_streaming_aborts_instead_of_exiting` 改成断
+status 通知文本含 "abort"；`test_esc_closes_autocomplete_before_falling_
+through_to_abort` 改成断 status 通知里 *没有* abort。
+
+### Acceptance 影响
+
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.8 / §3.9 同步：
+  说明单 Esc 期望看到的是 status 区青色 `aborted` 瞬时通知（不是 footer
+  永久变化）；§3.9 列出"误把单 Esc 当双 Esc"的失败模式判定。
+- M1 acceptance #4 物理回归现在分两层覆盖：字节层（`test_lone_esc_*` /
+  `test_slow_double_esc_*`）+ 事件层（`test_csi_*_esc_*`），任一路径回退
+  都会断。
+- 自动测试 175 → **178 passed**；`just lint` green、`complexity_guard`
+  re-baseline 后 regressions=0（`_csi_27_alt_form` 拆出独立 helper 维持
+  阈值不变）。

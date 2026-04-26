@@ -143,7 +143,12 @@ class InteractiveController:
         # second placeholder. The router itself clears active when the
         # terminal frame arrives.
         self._editor.set_state(EditorState.IDLE)
-        self._editor.set_footer("aborted")
+        # Use a transient status notification instead of pinning "aborted"
+        # into the editor footer: the footer has no auto-revert, so a hard
+        # set would leave the user staring at "aborted" forever even after
+        # they kept typing or ran another command. Notifications already
+        # carry a TTL (Status component fades them after a few seconds).
+        self._status.push_notification("aborted", level="info", ttl_seconds=3.0)
         self._app.request_render()
 
     def inject_user_input(self, text: str) -> None:

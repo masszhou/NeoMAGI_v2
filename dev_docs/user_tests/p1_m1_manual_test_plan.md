@@ -333,21 +333,28 @@ pgrep -f "python.* -m cli" | xargs kill -TERM
 ### 3.8 `Esc` 单按（必须可达）
 
 - 在 editor 里输入 `partial`，**不要按 Enter**，按 `Esc` 一次。
-- 等大约 100ms（debounce 窗口）让单 Esc 触发 ABORT。
-- **期望**：footer 行变为 `[idle] aborted`；buffer 没有提交。
-- 这条是 P1-M1 第一次评审抓到的 bug 修复后的核心回归。如果按一次 Esc 没反应
-  超过 ~300ms，说明 lone-ESC debounce 又坏了，记一下。
+- 等大约 300ms（gesture window 230–330ms，给单 Esc 一个稍长的"等等看有没有
+  第二个 Esc 来组合"的窗口）让单 Esc 触发 ABORT。
+- **期望**：顶部 status 出现一条 **info 级（青色 ●）瞬时通知 `aborted`**
+  （3 秒后自动消失），buffer 没有提交，editor footer 仍是 `[idle] M1 mock —
+  pass --playback or use /play`。
+- **不要**期待 footer 永久变成 `aborted` —— 那是早期实现的 bug，footer 没有
+  TTL 会永远卡住；现在改用 status 通知，自动消逝是预期行为。
+- 如果按一次 Esc 没反应超过 ~500ms，说明 Esc gesture 复合器又坏了，记一下。
 
 ### 3.9 双 Esc
 
-- **快速**连按 `Esc Esc`（两次按下间隔最好 < 100ms —— 也就是 debounce 窗口
-  以内；像双击鼠标那样的节奏）。
-- **期望**：顶部 status 出现一条黄色通知：`tree navigation not implemented in M1; tracked in M6`。
+- 连按 `Esc Esc`（两次按下间隔在 ~300ms 内即可，普通双击节奏就行；不需要
+  特别快）。
+- **期望**：顶部 status 出现一条**黄色 warn 级通知**：
+  `tree navigation not implemented in M1; tracked in M6`。
+- **不要**误把"按一次 Esc 后等几百毫秒看到 `aborted` 通知"当作双 Esc 触发
+  ——那是 §3.8 的单 Esc 路径。
 - **失败模式判定**：
-  - 看到的是 `[idle] aborted`（single Esc 路径走了两次）→ 你两次按键间隔
-    太长，超过了 100ms 的 debounce 窗口，第一下已经被当作单 Esc 提交了。
-    重做并按快一些。
-  - 完全无反应超过 ~300ms → 真 bug，跑 §3.X 探针抓字节。
+  - 看到的是 `aborted` 通知（单 Esc 路径走了一次或两次）→ 你两次按键间隔
+    超过了 ~300ms gesture window，第一下已经被 flush 成单 Esc。重做并按快
+    一点（像双击鼠标那种 100–200ms 节奏）。
+  - 完全无反应超过 ~500ms → 真 bug，跑 §3.X 探针抓字节。
 
 ### 3.X troubleshooting：编辑器收不到按键？
 
