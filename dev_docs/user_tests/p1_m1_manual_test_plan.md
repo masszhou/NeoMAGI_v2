@@ -496,7 +496,7 @@ done
 
 | 退出路径 | 步骤 | 验证 |
 | --- | --- | --- |
-| `/quit` 确认 | TUI 内 `/quit Enter Y` | `stty -a \| grep icanon` 含 `icanon` |
+| `/quit` 确认 | TUI 内 `/quit` `Enter` `Y` `Enter`（Y 只切高亮，第二个 Enter 才提交；详见 §2.2） | `stty -a \| grep icanon` 含 `icanon` |
 | `Ctrl+C` idle | TUI idle 时按 `Ctrl+C` | 同上 |
 | `kill -TERM` | 终端 B 跑 `pgrep -f cli.__main__ \| xargs kill -TERM` | 同上 |
 | 异常崩溃 | 暂时不易手动触发 — 依赖 `tests/tui/test_lifecycle.py::test_lifecycle_runs_exit_on_exception` | 自动测试已覆盖 |
