@@ -260,11 +260,30 @@ pgrep -f "python.* -m cli" | xargs kill -TERM
 
 > 进 TUI（`uv run python -m cli`）后逐项做。每项失败都记下来，**不要**用 `/quit`
 > 之外的方式退出（防止终端卡住）。
+>
+> **§3 全节通用约定 —— 不要在测试期间按 Enter，除非该步骤明确要求**。M1 是
+> mock：editor 提交（Enter）会把 buffer 清空 + 推一条黄色 `M1 mock — no agent
+> runtime` 通知，**不会**把你的输入回显成消息列里的一条 `UserMessage`（那条
+> 路径要 M3 真 agent loop 接进来才有）。所以：
+> - 验证"按键到不到 editor"看的是**键入过程中**editor 行（`> ...`）的实时
+>   增长，不是按 Enter 之后留下的痕迹。
+> - 看到黄色 `M1 mock` 通知 = 你按过 Enter；buffer 已清空、原文按 Pi 约定
+>   不留底，这都是预期。
+> - 想清掉残留通知：等 ~4 秒 TTL 自然过期，或 `/new` 一下重置。
 
 ### 3.1 基础键入
 
-- 输入：`hello world`
-- **期望**：`> hello world` 显示在 editor 行。
+1. 启动 TUI 后**不要立刻按 Enter**。
+2. 慢慢键入：`hello world`（11 个字符）。
+3. **期望**：editor 行随每个字符实时变长 —— `> h` → `> he` → … → `> hello world`，
+   光标始终紧跟最后一个字符之后。
+4. 验证完后，可按 `Backspace` 删掉再继续 §3.2，或者 `/new` 清场。
+
+**失败模式判定**：
+- 键入过程中 editor 行**完全不更新** → 真 bug，按 §3 末尾 troubleshooting
+  跑 `scripts/diag_keys.py` 抓字节，把 `/tmp/neomagi-diag-keys.log` 贴出来。
+- 键完后看到 `>` 是空的 + 黄色 `M1 mock` 通知 → **不是 bug**，是你按过
+  Enter，请重做并这一次别按 Enter。
 
 ### 3.2 多行（Shift+Enter）
 
@@ -323,6 +342,22 @@ pgrep -f "python.* -m cli" | xargs kill -TERM
 
 - 快速按 `Esc Esc`。
 - **期望**：顶部 status 出现一条黄色通知：`tree navigation not implemented in M1; tracked in M6`。
+
+### 3.X troubleshooting：编辑器收不到按键？
+
+如果 §3 任意一项里键入完全没在 editor 行可视化（不是按了 Enter 之后清掉，
+而是键入过程中**根本不更新**），先排除终端协商问题：
+
+1. `/quit` 退出 TUI（按 §2.2 路径）。
+2. 跑探针：`uv run python scripts/diag_keys.py`。
+3. 在探针窗口里依次按：`a`、`b`、`Ctrl+C`、`Up`、`Esc`、`Enter`、`q`。
+4. 把 `/tmp/neomagi-diag-keys.log` 内容贴出来。
+
+探针会用和 TUI 完全一样的 raw mode + keyboard-protocol 协商序列，把每个
+按键的字节序列原样落盘。从日志能直接判断：(a) 你的终端真把字符发出来了
+但解析器掉了；(b) 终端在某个协商之后开始发奇怪的 CSI；(c) 完全没字节进
+stdin（驱动/IME 层问题）。Ctrl+C 之前在 macOS Terminal.app 上的 bug
+（commit `72335a9`）就是用这条路径定的位。
 
 ---
 
