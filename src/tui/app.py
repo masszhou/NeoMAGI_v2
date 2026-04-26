@@ -286,14 +286,28 @@ class TUIApp:
 
     def _compose_frame(self) -> list[str]:
         lines: list[str] = []
-        if self._root is not None:
-            lines.extend(self._root.render(self._cols))
+        # Render overlays first so we know how much vertical space they
+        # claim — the root then gets the *remaining* height to do its
+        # height-aware composition. Without this the message column
+        # overflows the screen and the editor (which root pins at the
+        # bottom of its output) gets clipped off, exactly the §4.9
+        # "history doesn't accumulate" complaint.
+        overlay_lines: list[str] = []
         for overlay in self._overlays:
-            lines.extend(overlay.render(self._cols))
-        # Pad / clip to terminal height so the line-diff renderer has a
-        # stable frame size.
+            overlay_lines.extend(overlay.render(self._cols))
+        if self._root is not None:
+            available = max(1, self._rows - len(overlay_lines))
+            render_with_height = getattr(self._root, "render_with_height", None)
+            if callable(render_with_height):
+                lines.extend(render_with_height(self._cols, available))
+            else:
+                lines.extend(self._root.render(self._cols))
+        lines.extend(overlay_lines)
+        # Final fail-safe: a non-height-aware root or a tall overlay
+        # could still overflow. Clip from the *top* so the editor and
+        # newest messages stay visible (they sit at the bottom of root).
         if len(lines) > self._rows:
-            lines = lines[: self._rows]
+            lines = lines[-self._rows :]
         else:
             lines.extend([""] * (self._rows - len(lines)))
         return lines

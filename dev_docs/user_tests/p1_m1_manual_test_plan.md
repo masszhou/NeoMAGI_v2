@@ -475,6 +475,17 @@ stdin（驱动/IME 层问题）。Ctrl+C 之前在 macOS Terminal.app 上的 bug
 | `/play abort_during_tool` | tool 行加 `[aborted]` 标记 |
 | `/play nonexistent` | 红色错误通知 `fixture 'nonexistent' not found` |
 
+**关于"重复跑同一个 fixture 像没累加"**：M1 不进 alt-screen，画面在终端
+顶部原地重绘；连跑同一条 fixture（例如两次 `assistant_text_delta`），新
+块**确实**追加在下面，editor 也会随之往下移 —— 但因为输出文字一模一样，
+视觉上很像"刷新了一遍"。换两条不同 fixture（例如先 `tool_execution_success`
+再 `compaction`）就能直观看到块在堆叠。
+
+**关于"消息太多 editor 消失"**：当消息列总行数超过终端高度时，**最老的**
+消息会被裁掉（从顶部滚走），status 通知和 editor 永远在视野内。想看到
+被滚走的旧消息：`/new` 重置，或者用更高的终端窗口；M1 没有 in-app 滚动条
+（M6 session manager 接进来后才接 `/resume`、`/tree` 等历史导航）。
+
 ### 4.10 stub 命令（18 条）
 
 - 输入任何 stub 命令，例如 `/compact` `/login` `/resume` `/export` 等。

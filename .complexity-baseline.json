@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-26T10:04:39+00:00",
+  "generated_at": "2026-04-26T13:30:27+00:00",
   "policy_version": 1,
   "thresholds": {
     "prod": {
@@ -38,9 +38,9 @@
       "path": "src/cli/interactive/app.py",
       "actual": 11,
       "limit": 8,
-      "fingerprint": "function_branches::src/cli/interactive/app.py::InteractiveController._on_editor_action::286",
+      "fingerprint": "function_branches::src/cli/interactive/app.py::InteractiveController._on_editor_action::291",
       "symbol": "InteractiveController._on_editor_action",
-      "line": 286
+      "line": 291
     },
     {
       "severity": "block",

@@ -260,10 +260,15 @@ class InteractiveController:
 
     def _focus_offset_provider(self, focused: Any, width: int) -> int | None:
         """Translate a focus on the editor (nested inside ``_RootComponent``)
-        into the row offset substrate's cursor placement needs."""
+        into the row offset substrate's cursor placement needs.
+
+        Reads the root's cached ``_last_visible_msg_rows`` from the most
+        recent ``render_with_height`` call, so the cursor lands on the
+        editor's actual on-screen row even when the message column was
+        clipped to fit the terminal height (manual §4.9)."""
 
         if focused is self._editor:
-            return len(self._status.render(width)) + len(self._messages.render(width))
+            return self._root.editor_offset(width)
         return None
 
     def _on_editor_submit(self, submission: EditorSubmission) -> None:
@@ -486,13 +491,54 @@ class _RootComponent:
         self._status = status
         self._messages = messages
         self._editor = editor
+        self._last_visible_msg_rows: int = 0
+        """Number of message rows that survived the most recent
+        height-aware composition. Used by
+        ``InteractiveController._focus_offset_provider`` to compute the
+        editor's actual on-screen row when the message column was
+        clipped — without this, the cursor would land at the
+        unclipped offset and miss the editor."""
 
     def render(self, width: int) -> list[str]:
+        # Plain render path — used when the substrate doesn't know the
+        # terminal height (e.g. unit tests calling render directly).
         rows: list[str] = []
         rows.extend(self._status.render(width))
-        rows.extend(self._messages.render(width))
+        msg_rows = self._messages.render(width)
+        self._last_visible_msg_rows = len(msg_rows)
+        rows.extend(msg_rows)
         rows.extend(self._editor.render(width))
         return rows
+
+    def render_with_height(self, width: int, height: int) -> list[str]:
+        """Height-aware composition: status pinned at top, editor pinned
+        at bottom, messages fill the middle with the **oldest** rows
+        clipped when the column overflows. The editor stays visible at
+        all times — manual §4.9 caught the previous "clip from bottom"
+        behaviour where a few ``/play`` runs pushed the editor and the
+        latest messages off-screen, making it look like history wasn't
+        accumulating."""
+
+        status_rows = self._status.render(width)
+        editor_rows = self._editor.render(width)
+        msg_rows = self._messages.render(width)
+        # status + editor are pinned; messages get whatever's left.
+        budget = max(0, height - len(status_rows) - len(editor_rows))
+        if len(msg_rows) > budget:
+            # Clip from the top: keep the most recent ``budget`` rows so
+            # the latest assistant turn / tool result is always visible.
+            msg_rows = msg_rows[-budget:] if budget > 0 else []
+        self._last_visible_msg_rows = len(msg_rows)
+        return status_rows + msg_rows + editor_rows
+
+    def editor_offset(self, width: int) -> int:
+        """Row index at which the editor starts in the composed frame —
+        used by the focus-offset provider. Reads the cached
+        ``_last_visible_msg_rows`` from the most recent render so the
+        cursor lands on the editor's actual on-screen position even
+        when the message column was clipped."""
+
+        return len(self._status.render(width)) + self._last_visible_msg_rows
 
     def attach(self, request_render: Callable[[], None]) -> None:
         self._status.attach(request_render)

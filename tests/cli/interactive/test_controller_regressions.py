@@ -336,6 +336,45 @@ def test_unknown_slash_command_pushes_warning_notification() -> None:
     assert any("unknown command" in n.text.lower() for n in notifications)
 
 
+def test_messages_overflow_clips_oldest_keeps_editor_visible() -> None:
+    """Regression for §4.9 manual test: running ``/play`` multiple times
+    let the message column grow past the terminal height. The previous
+    composition clipped from the bottom, so the editor and the most
+    recent assistant turn vanished off-screen and the user concluded
+    history wasn't accumulating. The fix moves to a height-aware root
+    that keeps status pinned at the top, the editor pinned at the
+    bottom, and clips the oldest messages from the top of the message
+    column when it overflows."""
+
+    app, c = _make_controller()
+    app._cols, app._rows = 80, 12  # noqa: SLF001 — small terminal so we
+    # can exercise the overflow path with just a few /play runs.
+
+    for _ in range(4):
+        _type_command(app, "/play assistant_text_delta")
+    assert len(c.messages.children) == 4  # all four accumulated in model
+
+    frame = app._compose_frame()  # noqa: SLF001
+    assert len(frame) == app._rows  # noqa: SLF001 — frame matches terminal
+
+    # The editor's `> ` line must appear in the visible frame even
+    # though there are 4 stacked assistant blocks above it.
+    editor_visible = any(line.lstrip().startswith(">") for line in frame)
+    assert editor_visible, (
+        f"editor row was clipped off the visible frame: {frame!r}"
+    )
+
+    # And the cursor lands on the editor row, not on a clipped message.
+    cursor = app._compose_cursor(frame)  # noqa: SLF001
+    assert cursor is not None
+    # Use the editor offset reported by the root — the visible editor
+    # row is one past the final message row that survived clipping.
+    expected_row = c._root.editor_offset(app._cols) + 1  # noqa: SLF001
+    assert cursor.row == expected_row, (
+        f"cursor at row {cursor.row}; expected editor row {expected_row}"
+    )
+
+
 def test_status_notification_expires_via_scheduled_wake(monkeypatch) -> None:
     """Regression: TTL'd notifications used to stay painted forever
     because the render loop is event-driven — no input meant no render,

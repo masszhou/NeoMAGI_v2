@@ -364,3 +364,55 @@ hardware cursor 移过去——这在很多终端配置下根本不显眼。同�
   "focus 没切" vs "Selector 不消费当前键"。
 - 自动测试 179 passed（数量不变，强化既有 §4.4 用例）；`just lint`
   green、`complexity_guard regressions=0`。
+
+## 手测追加：消息列溢出从底部裁剪导致 editor 不可见（2026-04-26）
+
+§4.9 反馈"`/play` 之后每次都像重新刷新，没有从历史继续往下走"。直接测
+`controller.messages.children` 显示消息**确实**在累加（5 条不同 fixture
+后有 6 个 component），但 raw frame trace 显示终端 30 行 / 内容 36 行时，
+`_compose_frame` 用 `lines[: self._rows]` **从底部**裁掉超出部分 —— editor
+的 `>` 行和最新的几条消息都消失了，可视区只剩老内容。用户看到的"刷新感"
+实际是"editor 和最新消息都被裁出屏幕外，剩下的是上次画过的老 frame 区域"。
+
+### 根因
+
+`TUIApp._compose_frame` 用 `lines[: self._rows]` 简单截断，没有区分内容
+角色。message column 在底部，editor 也在底部（root 输出顺序：status →
+messages → editor）—— 一裁就把 editor 也带走了。
+
+### 解决办法（commit `<本次>`）
+
+把 root 的渲染改成**高度感知**的三段布局：
+
+- `_RootComponent.render_with_height(width, height)`：先 render status（顶
+  端 pin）+ editor（底端 pin），然后 messages 拿剩下的预算（`height -
+  status_rows - editor_rows`）；message 列超出预算时**从顶部裁掉**最老的
+  行，最新消息保留在底端，editor 永远可见。`_last_visible_msg_rows` 缓存
+  实际显示的消息行数。
+- `_RootComponent.editor_offset(width)` 返回 `len(status) +
+  _last_visible_msg_rows`，给 cursor 定位用 —— editor 真实落在裁剪后的
+  组合 frame 第几行。
+- `TUIApp._compose_frame` 检测 root 是否有 `render_with_height`，有就传可用
+  高度（`rows - overlay_rows`）调它；保留兜底 `lines[-self._rows:]` 让
+  非 height-aware root 或超大 overlay 也不至于把 editor 裁掉。
+- `InteractiveController._focus_offset_provider` 改读 `self._root.editor_offset`
+  而不是直接 `len(messages.render(width))`，否则 cursor 仍会按"未裁剪"
+  位置算，落到裁剪掉的旧消息行上。
+
+回归测试 `test_messages_overflow_clips_oldest_keeps_editor_visible`：
+设 12 行小终端 → 跑 4 次 `/play assistant_text_delta` → 断言 4 个组件都
+进了 model；`_compose_frame` 输出长度等于终端高度；editor 的 `>` 行**仍
+在 frame 内**；`_compose_cursor` 的位置等于 root.editor_offset(width)+1
+（即落在 editor 行）。
+
+### Acceptance 影响
+
+- 任何 message-heavy 场景（多条 `/play`、未来真 agent 多轮对话、长
+  `parallel_tools` 输出）editor 都会保持可见，最新消息也保留在屏幕底端。
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §4.9 加两段说明：
+  (1) 重复跑同一 fixture 视觉上像 "刷新" 是因为输出文字一模一样，换不同
+  fixture 就能看到堆叠；(2) 消息超过终端高度时最老的从顶部滚走，editor
+  和 status 永远可见，M1 没有 in-app 滚动（要 M6 session manager 才接历史
+  导航）。
+- 自动测试 179 → **180 passed**；`just lint` green、`complexity_guard`
+  re-baseline 后 regressions=0。
