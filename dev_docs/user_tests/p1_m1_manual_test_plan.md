@@ -16,6 +16,12 @@ doc_id_assigned_at: 2026-04-26T10:26:32+02:00
 > 渲染与输入、slash 命令、`--playback` 行为、终端 lifecycle 恢复。任何"和真实
 > 模型说话"的预期都不属于 M1。
 
+> **CLI 调用约定**：开发/测试期一律使用 `uv run python -m cli ...`；
+> `[project.scripts]` 生成的 `neomagi` shim 留给 M9+ 终端用户安装路径，dev
+> 文档不依赖它（仅 §1.3 做一次可选 sanity 检查）。完整规则见 `CLAUDE.md`
+> §Commands 与 `AGENTS.md` §实施基线。如果你嫌长，建议自己加一个 shell
+> alias，例如 `alias nm='uv run python -m cli'`。
+
 ---
 
 ## 0. 全新系统准备
@@ -60,7 +66,7 @@ uv sync
 uv run python -c "import sys; print(sys.version)"   # 3.14.x
 uv run pytest tests/                                 # 应 170 passed
 just lint                                            # green / regressions=0
-uv run neomagi --help                                # 显示三个 P1 flag
+uv run python -m cli --help                                # 显示三个 P1 flag
 ```
 
 如果以上四条任意一条不通过，**先停下来排查环境**，不要继续走交互测试。
@@ -96,24 +102,15 @@ stty sane < /dev/tty1   # 或对应的终端设备
 ### 1.1 `--help` 输出三个 P1 flag
 
 ```bash
-uv run neomagi --help
+uv run python -m cli --help
 ```
 
 **期望**：`stdout` 包含 `--playback`、`--print`、`--help` 三行；exit code 0。
 
-### 1.2 `python -m cli` 等价入口
+### 1.2 `--print` stub（M1 无 provider）
 
 ```bash
-uv run python -m cli --help
-```
-
-**期望**：和 1.1 完全一致的输出，证明 `pyproject.toml [project.scripts]` 与
-`cli/__main__.py` 两条入口都活着。
-
-### 1.3 `--print` stub（M1 无 provider）
-
-```bash
-uv run neomagi --print "hello world"
+uv run python -m cli --print "hello world"
 ```
 
 **期望**：`stderr`（不是 stdout）出现：
@@ -123,7 +120,18 @@ neomagi --print: not implemented in M1 (tracked for M9/M10 once real provider la
   echo: hello world
 ```
 
-exit code 0。
+文案里的 `neomagi` 是 stub 硬编码的程序名，不是当前调用入口；和你用 `python -m cli` 还是 shim 调用无关。exit code 0。
+
+### 1.3 （可选，M9 前瞻）`neomagi` shim 仍然能调通
+
+仅为确认 `pyproject.toml [project.scripts]` 生成的 console-script 没坏 ——
+M1 开发期不依赖它，所以即使 ❌ 也只是低优先记录，不阻塞 acceptance。
+
+```bash
+uv run neomagi --help
+```
+
+**期望**：和 1.1 完全一致的输出。
 
 ---
 
@@ -136,7 +144,7 @@ exit code 0。
 ### 2.1 启动 TUI（无 args）
 
 ```bash
-uv run neomagi
+uv run python -m cli
 ```
 
 **期望**：
@@ -157,7 +165,7 @@ uv run neomagi
 ### 2.3 退出（`Ctrl+C` idle 路径）
 
 ```bash
-uv run neomagi
+uv run python -m cli
 ```
 
 进入 TUI 后**不输入任何字符**，直接按 `Ctrl+C` 一次。
@@ -170,7 +178,7 @@ uv run neomagi
 终端 A：
 
 ```bash
-uv run neomagi
+uv run python -m cli
 ```
 
 终端 B：
@@ -214,7 +222,7 @@ pgrep -f "cli.__main__" | xargs kill -TERM
 
 ## 3. Editor 输入语义
 
-> 进 TUI（`uv run neomagi`）后逐项做。每项失败都记下来，**不要**用 `/quit`
+> 进 TUI（`uv run python -m cli`）后逐项做。每项失败都记下来，**不要**用 `/quit`
 > 之外的方式退出（防止终端卡住）。
 
 ### 3.1 基础键入
@@ -325,7 +333,7 @@ pgrep -f "cli.__main__" | xargs kill -TERM
 
 ### 4.6 `/new` —— 实装命令
 
-- 先制造一些消息：`uv run neomagi --playback tests/fixtures/pi_compat/assistant_text_delta`
+- 先制造一些消息：`uv run python -m cli --playback tests/fixtures/pi_compat/assistant_text_delta`
   会自动播完退出 —— 不便观察。**改用** TUI 内 `/play` 路径：见 4.9。
 - 或直接：在 TUI 里键入 `/new`，按 `Enter`。
 - **期望**：消息列被清空；editor footer 提示 "new session (M1 mock — session
@@ -389,7 +397,7 @@ pgrep -f "cli.__main__" | xargs kill -TERM
 ### 5.1 短 fixture 自动播放并退出
 
 ```bash
-uv run neomagi --playback tests/fixtures/pi_compat/assistant_text_delta
+uv run python -m cli --playback tests/fixtures/pi_compat/assistant_text_delta
 ```
 
 **期望**：
@@ -401,7 +409,7 @@ uv run neomagi --playback tests/fixtures/pi_compat/assistant_text_delta
 ### 5.2 abort_during_stream 看 partial 保留
 
 ```bash
-uv run neomagi --playback tests/fixtures/pi_compat/abort_during_stream
+uv run python -m cli --playback tests/fixtures/pi_compat/abort_during_stream
 ```
 
 **期望**：
@@ -412,7 +420,7 @@ uv run neomagi --playback tests/fixtures/pi_compat/abort_during_stream
 ### 5.3 tool 中途 abort
 
 ```bash
-uv run neomagi --playback tests/fixtures/pi_compat/abort_during_tool
+uv run python -m cli --playback tests/fixtures/pi_compat/abort_during_tool
 ```
 
 **期望**：
@@ -423,7 +431,7 @@ uv run neomagi --playback tests/fixtures/pi_compat/abort_during_tool
 ### 5.4 不存在的 fixture 也不挂
 
 ```bash
-uv run neomagi --playback /tmp/no-such-fixture
+uv run python -m cli --playback /tmp/no-such-fixture
 ```
 
 **期望**：立刻报错并退出（exit 0）；stderr 出现：
@@ -439,7 +447,7 @@ uv run neomagi --playback /tmp/no-such-fixture
 for f in assistant_text_delta assistant_thinking_delta parallel_tools \
          compaction abort_during_stream abort_during_tool; do
   echo "=== $f ==="
-  uv run neomagi --playback "tests/fixtures/pi_compat/$f"
+  uv run python -m cli --playback "tests/fixtures/pi_compat/$f"
   echo "exit=$?"
   sleep 0.5
 done
@@ -453,7 +461,7 @@ done
 
 ### 6.1 拉宽
 
-- 启动 `uv run neomagi`。
+- 启动 `uv run python -m cli`。
 - 用鼠标把终端窗口横向拉宽 30 列（或 `printf '\e[8;30;200t'`，不是所有终端
   都支持）。
 - **期望**：界面立刻 full redraw，没有残影。
@@ -482,7 +490,7 @@ done
 | `Ctrl+C` idle | TUI idle 时按 `Ctrl+C` | 同上 |
 | `kill -TERM` | 终端 B 跑 `pgrep -f cli.__main__ \| xargs kill -TERM` | 同上 |
 | 异常崩溃 | 暂时不易手动触发 — 依赖 `tests/tui/test_lifecycle.py::test_lifecycle_runs_exit_on_exception` | 自动测试已覆盖 |
-| `--playback` 自然结束 | `uv run neomagi --playback ...assistant_text_delta` 跑完 | 同上 |
+| `--playback` 自然结束 | `uv run python -m cli --playback ...assistant_text_delta` 跑完 | 同上 |
 
 任何一条 `stty -a` 显示 `-icanon` 或 cursor 仍隐藏 → **acceptance fail**，
 立即跑 `reset` 救场并标记。
