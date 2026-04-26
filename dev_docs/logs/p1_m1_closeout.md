@@ -156,3 +156,48 @@ overlay 都不会弹。这是为什么截图里 "Ctrl+C 之后没反应" + 按 E
 - 自动测试 167 → **174 passed**（W7 + 评审后回归 + 测试质量轮 + parser
   case 修复 + CSI-27 form），`just lint` green，`complexity_guard
   regressions=0`。
+
+## 手测发现：双 Esc 退化为两次单 Esc（2026-04-26）
+
+按 `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.9 在 macOS Terminal.app
+上测 "快速按 Esc Esc 应弹 `tree navigation not implemented` 黄色通知"，
+实测拿到的是 §3.8 单 Esc 的 `[idle] aborted` —— 两次按键各自走 ABORT 路径，
+`Esc Esc` 复合事件根本没成型。
+
+### 根因
+
+P1-4 修单 Esc 不可达时引入的"flush after one idle drain"逻辑节奏太快：
+`StdinBuffer.drain()` 看到 `_buffer == "\x1b"` 时只挂起 1 个 drain tick
+（≈ 12 ms 在 TUIApp 主循环节拍下）就 emit 单 `Esc`。但人类双击 Esc 的反射
+间隔在 100–250 ms 量级，第一下早就被当作单 Esc 提交（→ ABORT → footer
+`aborted`），第二下到达时 buffer 是空的，又被当作另一次单 Esc。`Esc Esc`
+复合永远没机会被 `_parse_escape` 折叠。
+
+### 解决办法（commit `<本提交>`）
+
+把 lone-ESC 的"挂起 1 次 drain"改成**基于墙钟的 debounce**：
+
+- `StdinBuffer.__init__` 新增 `lone_esc_timeout: float = 0.10` + `clock`
+  注入位（默认 `time.monotonic`）。100 ms 对齐 xterm ESC-key 约定，既给
+  人类双击 Esc 留够时间，又不把单 Esc 拖到明显发滞。
+- `drain()` 抽出 `_maybe_flush_lone_esc(events)` helper：buffer 仍是单
+  `\x1b` 时记下首次出现时刻；后续 drain 只有在墙钟差 ≥ timeout 才 emit
+  单 `Esc`。`feed`/`feed_str` 任何字节到达都重置 `_lone_esc_seen_at`，
+  包括第二个 `\x1b` —— 此时 `_parse_escape` 在主循环里直接折叠成
+  `KeyEvent("Esc Esc")`。
+- 测试改用注入 fake clock：`test_lone_esc_emits_after_debounce_window`
+  断言"在 50ms drain 不发，0.5s drain 才发"；新增
+  `test_slow_double_esc_still_collapses_to_single_event` 锁定本次回归
+  ——"feed Esc → 70ms 后 feed Esc → 单次 drain 出 `Esc Esc`"。
+
+### Acceptance 影响
+
+- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.9 同步更新文案：
+  说明 debounce 窗口是 100 ms、列出"看到 aborted 是因为按得太慢"vs
+  "完全无反应是真 bug"两种失败模式判定。§3.8 也加上"等约 100 ms"的
+  debounce 提示，避免读者误以为单 Esc 应该零延迟。
+- M1 acceptance #4「输入语义齐全」原本只挂在自动 inject_input 测试上
+  （它跳过物理时间），物理 debounce 的回归现在落到 stdin parser 单测
+  里靠 fake clock 锁定，未来调整 timeout 不会偷偷退化。
+- 自动测试 174 → **175 passed**；`just lint` green、`complexity_guard
+  regressions=0`（drain 拆出 helper 后维持原有阈值）。

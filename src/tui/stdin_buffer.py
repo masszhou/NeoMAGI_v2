@@ -20,6 +20,8 @@ acceptance §9 exception clause).
 from __future__ import annotations
 
 import codecs
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 # Bracketed-paste markers (DEC).
@@ -140,17 +142,34 @@ class StdinBuffer:
     protocol level-1 sequences.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        lone_esc_timeout: float = 0.10,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._buffer: str = ""
         self._paste_active: bool = False
         self._paste_acc: list[str] = []
-        self._lone_esc_pending: bool = False
-        """Set on the drain that first sees buffer == "\\x1b" with no follow-up
-        bytes. Cleared as soon as more bytes arrive. If the next drain still
-        sees only ``\\x1b``, we emit a synthetic Esc — that gives the terminal
-        ~one event-loop tick to deliver the rest of a multi-byte escape
-        sequence before we conclude it was a lone keystroke."""
+        self._lone_esc_seen_at: float | None = None
+        """Wall-clock instant at which the buffer first held nothing but a
+        single ``\\x1b`` with no follow-up bytes. While this is non-None and
+        the timeout hasn't elapsed, ``drain()`` deliberately does NOT emit
+        an ``Esc`` keystroke — it gives the terminal time to deliver either
+        the rest of a CSI/OSC sequence or a second ``\\x1b`` (for the
+        ``Esc Esc`` gesture). At 12ms event-loop ticks, a 100ms debounce
+        leaves room for ~8 ticks worth of follow-up before flushing.
+        Cleared whenever new bytes arrive (via ``feed``/``feed_str``) or
+        the buffer changes shape."""
+        self._lone_esc_timeout: float = lone_esc_timeout
+        """Seconds to wait between first seeing a lone ``\\x1b`` and emitting
+        the synthetic ``Esc`` keystroke. Default 100 ms — matches xterm's
+        ESC-key debounce convention. Lower values make single Esc snappier
+        but degrade reliability of multi-byte escape sequences and the
+        ``Esc Esc`` gesture (manual P1-M1 §3.9). Tests inject a fake clock
+        rather than tuning this."""
+        self._clock: Callable[[], float] = clock or time.monotonic
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -162,7 +181,7 @@ class StdinBuffer:
         if not chunk:
             return
         self._buffer += self._decoder.decode(chunk)
-        self._lone_esc_pending = False
+        self._lone_esc_seen_at = None
 
     def feed_str(self, text: str) -> None:
         """Test-friendly variant that takes already-decoded text."""
@@ -170,7 +189,7 @@ class StdinBuffer:
         if not text:
             return
         self._buffer += text
-        self._lone_esc_pending = False
+        self._lone_esc_seen_at = None
 
     def drain(self) -> list[Event]:
         """Return all complete events parsed so far. Partial sequences stay
@@ -209,23 +228,31 @@ class StdinBuffer:
                 events.append(event)
 
         self._buffer = buf[i:]
-
-        # Lone-ESC flush: if the buffer still holds nothing but ``\x1b`` and
-        # we already saw it on the previous drain (no new bytes arrived
-        # in between — :meth:`feed` would have cleared the flag), emit the
-        # synthetic Esc keystroke. That covers users pressing Esc once
-        # without any follow-up sequence — otherwise we would buffer the
-        # ESC forever and the editor's abort path would be unreachable.
-        if self._buffer == "\x1b":
-            if self._lone_esc_pending:
-                events.append(KeyEvent("Esc", raw="\x1b"))
-                self._buffer = ""
-                self._lone_esc_pending = False
-            else:
-                self._lone_esc_pending = True
-        else:
-            self._lone_esc_pending = False
+        self._maybe_flush_lone_esc(events)
         return events
+
+    def _maybe_flush_lone_esc(self, events: list[Event]) -> None:
+        """Lone-ESC debounce: when the buffer holds only ``\\x1b`` with no
+        follow-up, hold the keystroke for ``_lone_esc_timeout`` seconds
+        before emitting a synthetic ``Esc``. The window must be long
+        enough for two-handed reflex double-Esc (manual P1-M1 §3.9) to
+        land both bytes in the buffer in time for ``_parse_escape`` to
+        collapse them into a single ``Esc Esc`` event, but short enough
+        that single Esc still feels reactive (xterm uses ~100 ms).
+        ``feed*()`` clears ``_lone_esc_seen_at`` on every byte arrival,
+        so the debounce only fires when the buffer truly idled."""
+
+        if self._buffer != "\x1b":
+            self._lone_esc_seen_at = None
+            return
+        now = self._clock()
+        if self._lone_esc_seen_at is None:
+            self._lone_esc_seen_at = now
+            return
+        if now - self._lone_esc_seen_at >= self._lone_esc_timeout:
+            events.append(KeyEvent("Esc", raw="\x1b"))
+            self._buffer = ""
+            self._lone_esc_seen_at = None
 
     # ------------------------------------------------------------------ #
     # Escape parsing                                                      #

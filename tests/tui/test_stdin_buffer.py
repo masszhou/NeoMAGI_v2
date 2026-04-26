@@ -134,29 +134,64 @@ def test_no_half_escape_ever_leaks_as_plain_key() -> None:
     assert any(getattr(e, "key", None) == "Up" for e in next_events) or next_events == []
 
 
-def test_lone_esc_emits_after_one_idle_drain() -> None:
-    """Regression for P1-4: pressing Esc once with no follow-up must reach
-    the editor. The buffer holds it for one tick to allow a multi-byte
-    CSI sequence to land; the next idle drain emits the synthetic Esc."""
+def test_lone_esc_emits_after_debounce_window() -> None:
+    """Regression for P1-4: pressing Esc once with no follow-up must
+    reach the editor. The buffer holds the keystroke for the lone-ESC
+    debounce window, then flushes a synthetic ``Esc``. Tests inject a
+    fake clock so the assertion is deterministic instead of waiting on
+    wall-clock time."""
 
-    sb = StdinBuffer()
+    now = [0.0]
+    sb = StdinBuffer(clock=lambda: now[0])
     sb.feed_str("\x1b")
-    first = sb.drain()
-    assert all(getattr(e, "key", None) != "Esc" for e in first)
-    second = sb.drain()
-    assert any(getattr(e, "key", None) == "Esc" for e in second)
+    now[0] = 0.001
+    assert all(getattr(e, "key", None) != "Esc" for e in sb.drain())
+    now[0] = 0.05  # within 100 ms debounce
+    assert all(getattr(e, "key", None) != "Esc" for e in sb.drain())
+    now[0] = 0.5  # past debounce window
+    events = sb.drain()
+    assert any(getattr(e, "key", None) == "Esc" for e in events)
 
 
 def test_lone_esc_is_not_emitted_when_csi_arrives_in_next_chunk() -> None:
     """Companion to the previous test: if real follow-up bytes arrive
-    before the idle drain fires, the buffer must NOT also emit a stray
-    Esc — the two reads compose into a single CSI."""
+    before the debounce expires, the buffer must NOT emit a stray Esc —
+    the two reads compose into a single CSI sequence."""
 
-    sb = StdinBuffer()
+    now = [0.0]
+    sb = StdinBuffer(clock=lambda: now[0])
     sb.feed_str("\x1b")
-    sb.drain()  # marks lone-ESC pending
+    now[0] = 0.05
+    sb.drain()  # within debounce — no Esc yet, lone-ESC seen_at recorded
     sb.feed_str("[A")  # second chunk completes the CSI
+    now[0] = 0.5  # well past the debounce window
     events = sb.drain()
     keys = [getattr(e, "key", None) for e in events]
     assert "Up" in keys
     assert "Esc" not in keys
+
+
+def test_slow_double_esc_still_collapses_to_single_event() -> None:
+    """Regression for §3.9 manual test on macOS Terminal.app: a human
+    double-tap on Esc lands ~100–250 ms apart, well past one event-loop
+    tick. The earlier "flush after one idle drain" logic emitted a
+    single ``Esc`` immediately after the first byte, so the second Esc
+    arrived to an empty buffer and produced a *second* ``Esc`` event
+    instead of the expected ``Esc Esc`` gesture. With the debounce
+    window now set wider than human reflex, the second feed lands while
+    the first is still pending and ``_parse_escape`` collapses both
+    into one event."""
+
+    now = [0.0]
+    sb = StdinBuffer(clock=lambda: now[0])
+    sb.feed_str("\x1b")
+    now[0] = 0.02
+    assert sb.drain() == []  # first byte parked, no event yet
+    now[0] = 0.07  # 70 ms later — still inside the 100 ms debounce
+    sb.feed_str("\x1b")
+    events = sb.drain()
+    keys = [getattr(e, "key", None) for e in events]
+    assert keys == ["Esc Esc"], (
+        f"expected one Esc Esc event, got {keys!r} — slow double-tap "
+        f"degenerated into single Esc events again"
+    )

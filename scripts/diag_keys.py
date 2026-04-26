@@ -34,64 +34,54 @@ LOG_PATH = Path("/tmp/neomagi-diag-keys.log")
 DURATION_SECONDS = 8.0
 
 
+def _emit(log_fp, line: str) -> None:
+    sys.stdout.write(line + "\r\n")
+    sys.stdout.flush()
+    log_fp.write(line + "\n")
+    log_fp.flush()
+
+
+def _capture_loop(fd: int, log_fp) -> None:
+    deadline = time.monotonic() + DURATION_SECONDS
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([fd], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError as exc:
+            _emit(log_fp, f"read error: {exc}")
+            return
+        if not chunk:
+            _emit(log_fp, "eof on stdin")
+            return
+        _emit(log_fp, f"got {len(chunk)} byte(s): {chunk!r}")
+        if b"q" in chunk:
+            _emit(log_fp, "'q' seen, stopping early")
+            return
+
+
 def main() -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         sys.stderr.write("diag_keys: needs an interactive terminal.\n")
         raise SystemExit(2)
-
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-
     log_fp = LOG_PATH.open("w")
-
-    def emit(line: str) -> None:
-        sys.stdout.write(line + "\r\n")
-        sys.stdout.flush()
-        log_fp.write(line + "\n")
-        log_fp.flush()
-
     try:
         # Same negotiation the TUI does — that's what we're diagnosing.
-        sys.stdout.write("\x1b[?2004h")  # bracketed paste on
-        sys.stdout.write("\x1b[>4;2m")   # modifyOtherKeys=2
-        sys.stdout.write("\x1b[>1u")     # Kitty keyboard level 1
+        sys.stdout.write("\x1b[?2004h\x1b[>4;2m\x1b[>1u")
         sys.stdout.flush()
         tty.setraw(fd)
-
-        emit(
-            f"diag_keys: capturing for {DURATION_SECONDS:.0f}s. "
-            "Press q to stop early. Try: a, b, Ctrl+C, Ctrl+L, Up, Esc, Enter."
-        )
-        emit(f"log file: {LOG_PATH}")
-
-        deadline = time.monotonic() + DURATION_SECONDS
-        # Defensive: re-arm SIGINT to a no-op so even if raw mode failed to
-        # clear ISIG (which is what would cause "Ctrl+C kills the probe"),
-        # we don't lose the diagnostic itself. The bytes still appear in
-        # stdin if raw mode took.
+        _emit(log_fp, f"diag_keys: capturing for {DURATION_SECONDS:.0f}s.")
+        _emit(log_fp, f"log file: {LOG_PATH}")
+        # Defensive: even if raw mode failed to clear ISIG (which would let
+        # Ctrl+C kill the probe before we logged it), swallow SIGINT so the
+        # capture itself survives.
         signal.signal(signal.SIGINT, lambda *_: None)
-
-        while time.monotonic() < deadline:
-            ready, _, _ = select.select([fd], [], [], 0.1)
-            if not ready:
-                continue
-            try:
-                chunk = os.read(fd, 4096)
-            except OSError as exc:
-                emit(f"read error: {exc}")
-                break
-            if not chunk:
-                emit("eof on stdin")
-                break
-            emit(f"got {len(chunk)} byte(s): {chunk!r}")
-            if b"q" in chunk:
-                emit("'q' seen, stopping early")
-                break
+        _capture_loop(fd, log_fp)
     finally:
-        sys.stdout.write("\x1b[<u")     # Kitty keys off
-        sys.stdout.write("\x1b[>4;0m")  # modifyOtherKeys off
-        sys.stdout.write("\x1b[?2004l") # bracketed paste off
-        sys.stdout.write("\x1b[0m")
+        sys.stdout.write("\x1b[<u\x1b[>4;0m\x1b[?2004l\x1b[0m")
         sys.stdout.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
