@@ -209,12 +209,22 @@ uv run python -m cli
 终端 B：
 
 ```bash
-pgrep -f "cli.__main__" | xargs kill   # 或 `kill -TERM <pid>`
+pgrep -af "python.* -m cli"            # 先看一眼，确认抓到的是 TUI 进程
+pgrep -f "python.* -m cli" | xargs kill   # 默认 SIGTERM
 ```
 
-**期望**：终端 A 的 TUI 立刻关闭，cursor 可见，cooked mode 恢复。
-`kill -9`（SIGKILL）**不**在恢复保证内 —— 内核直接砍进程，`atexit` 跑不到。
-不要用 `-9` 测试。
+**为什么 pgrep pattern 是这个**：`python -m cli` 启动后，进程的 cmdline
+就是字面 `Python -m cli`。`__main__` 这个名字只在 Python 模块加载内部
+出现，**不**进 argv，所以 `pgrep -f "cli.__main__"` 抓不到。pattern 用
+`"python.* -m cli"` 同时覆盖系统 python、`python3`、homebrew
+`Python.framework` 路径等命名变体。如果你恰好同时跑了多个 `-m cli` 实例
+（比如 `--playback` 在另一个终端），`pgrep -af` 先列出来再选 pid 手动 kill
+更安全。
+
+**期望**：终端 A 的 TUI 立刻关闭，按 `echo OK<Enter>` 确认 shell 接管
+（M1 不进 alt screen，屏幕残留正常 —— 详见 §2 头部）。`stty -a` 验证
+cooked mode 恢复。`kill -9`（SIGKILL）**不**在恢复保证内 —— 内核直接砍
+进程，`atexit` 跑不到。不要用 `-9` 测试。
 
 ### 2.5 终端恢复验证（关键）
 
@@ -238,10 +248,11 @@ printf 'paste test: %s\n' "abc"
 进入 TUI 后，**不要**通过任何正常路径退出；终端 B 跑：
 
 ```bash
-pgrep -f "cli.__main__" | xargs kill -TERM
+pgrep -f "python.* -m cli" | xargs kill -TERM
 ```
 
 `kill -TERM` 会触发 lifecycle 的 SIGTERM handler。终端 A 应当回归 cooked mode。
+（pattern 选择见 §2.4 注解。）
 
 ---
 
@@ -521,7 +532,7 @@ done
 | --- | --- | --- |
 | `/quit` 确认 | TUI 内 `/quit` `Enter` `Y` `Enter`（Y 只切高亮，第二个 Enter 才提交；详见 §2.2） | `stty -a \| grep icanon` 含 `icanon` |
 | `Ctrl+C` idle | TUI idle 时按 `Ctrl+C` | 同上 |
-| `kill -TERM` | 终端 B 跑 `pgrep -f cli.__main__ \| xargs kill -TERM` | 同上 |
+| `kill -TERM` | 终端 B 跑 `pgrep -f "python.* -m cli" \| xargs kill -TERM`（详见 §2.4） | 同上 |
 | 异常崩溃 | 暂时不易手动触发 — 依赖 `tests/tui/test_lifecycle.py::test_lifecycle_runs_exit_on_exception` | 自动测试已覆盖 |
 | `--playback` 自然结束 | `uv run python -m cli --playback ...assistant_text_delta` 跑完 | 同上 |
 
