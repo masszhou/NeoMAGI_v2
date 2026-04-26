@@ -470,3 +470,60 @@ messages → editor）—— 一裁就把 editor 也带走了。
 - 自动测试 180 passed（数量不变，强化既有用例 + fixture round-trip 仍 pass，
   因为 abort_during_tool 不在 CORE_SCENES）；`just lint` green、
   `complexity_guard regressions=0`（renderer aborted 分支拆出后整体在阈值内）。
+
+## P1-M1 手测全程 sign-off（2026-04-26）
+
+`dev_docs/user_tests/p1_m1_manual_test_plan.md` §0–§7 全部章节在
+macOS Terminal.app 上**手动复测通过**。M1 acceptance #1–#10 与手测计划
+所有失败模式判定都通过；下面汇总本轮发现的 7 个真 bug 和它们的提交点，
+作为 M2 启动前的最终参照表。
+
+| # | 现象 | 修复 commit | 影响层 |
+| --- | --- | --- | --- |
+| 1 | macOS Terminal Ctrl+C 不走 hook（卡住退不出） | `72335a9` | `StdinBuffer._parse_csi_u` Ctrl+letter 强制大写；新增 `_csi_27_alt_form` 处理 modifyOtherKeys=2 的 ASCII 命名码（27/8/9/13/32/127） |
+| 2 | 单 Esc abort 12ms debounce 太短 + lone-ESC 永远 buffer | `bcace2a` | `StdinBuffer` 字节层 lone-ESC debounce 提到 100ms，注入 fake clock 让测试确定性 |
+| 3 | 双 Esc 不复合（CSI-encoded Esc 绕开字节层）+ "aborted" 永久卡 footer | `2520cdc` | 新增事件层 `_compose_esc_gestures` 复合器（任何来源的 Esc 都进 200ms 复合窗口）；`handle_abort` 改推 status 瞬时通知 |
+| 4 | Status 通知 TTL 不消失（render loop 不被唤醒） | `f47f554` | `TUIApp.schedule_wake(when)` + `_check_wakeups()` + `StatusComponent.attach_wake_scheduler`，loop 主动按时间 tick |
+| 5 | Tab 进 Selector 视觉无感（cursor 唯一信号太弱） | `8df7e46` | `Component.focused: bool` 由 `TUIApp.set_focus` 维护；`Selector` 在 focused 时 title 加粗青色 + 选中行反色 |
+| 6 | `/play` 多次后看似没累加（裁剪从底部切掉了 editor） | `65a8c29` | `_RootComponent.render_with_height` 三段 pin 布局：status/messages/editor；溢出时**从顶部**裁老消息，editor 永远可见；`editor_offset(width)` 让 cursor 定位算到裁剪后的位置 |
+| 7 | `abort_during_tool` 视觉像"完成后 abort"（fixture + renderer 双坑） | `a610723` | events.jsonl 砍掉多余 end event；`mark_aborted` 不再伪造假 result；`ToolRenderContext` 增 `aborted` 字段；`generic_tool_renderer` 新增 aborted 分支保留 partial + 显示 `[aborted after N ms]` |
+
+文档准确性配套修订（不计入 bug 数）：CLI 调用约定从 `uv run neomagi` 切到
+`uv run python -m cli`（`CLAUDE.md` / `AGENTS.md` 规则、subprocess smoke、
+test plan 全部对齐）；§2.5 加 cooked vs raw 术语速记；§3 加 "Enter 在
+mock 下会清 buffer + 推 mock 通知"提醒，§3.1 / §3.8 / §3.9 失败模式判定
+分清楚；§4.3 重写 selector 边输入边过滤的语义；§4.4 加 focus 视觉判定 +
+新增 Tab 路径区分；§4.9 加"重复同一 fixture 视觉像刷新"和"消息溢出 editor
+始终可见"两段说明；§5.3 重写 abort_during_tool 期望；§5.5 fixture 数补回
+W5 deliverable 表的 7 条；§7 修 `/quit` 双 Enter + pgrep pattern；新建
+`scripts/diag_keys.py` 作为后续"按键不反应"诊断工具。
+
+### 最终自动化门禁
+
+- `pytest tests/`：**180 用例 green**（W7 substrate+interactive 共 84 +
+  评审三轮回归 + 测试质量轮 + 手测轮，加起来比 W7 commit 时的 151 多 29 用例
+  全是行为级回归）。
+- `just lint`：green；`complexity_guard regressions=0`（baseline 在过程中
+  按 plan §risk 指引刷新过若干次，line-anchored fingerprint 受 docstring
+  行号变动影响）。
+- 6 条 `--playback` smoke：`assistant_text_delta` / `assistant_thinking_delta` /
+  `parallel_tools` / `compaction` / `abort_during_stream` / `abort_during_tool`
+  全部 exit=0；不存在 fixture 也不挂死。
+
+### M2 启动前置（再确认一遍）
+
+- `cli.interactive.app.InteractiveController` 的 event plane
+  (`dispatch_event`) + control plane (`handle_abort` / `inject_user_input` /
+  `simulate_resize` / `exit`) 是 M2/M3/M4 接入唯一入口；`PlaybackHarness`
+  当前只走这两个面，M3 接真 `Agent.events.subscribe()` 时控制器/组件/
+  substrate 全部不动。
+- `TUIApp.schedule_wake` 给后续 Loader spinner / ToolExecution duration
+  自动刷新留好接口。
+- `Component.focused` + `TUIApp.set_focus` 视觉指示机制让任何后续 picker /
+  overlay 都能用统一的 focused-render 习惯。
+- `_RootComponent.render_with_height` 高度感知布局让真 agent 多轮对话
+  消息列不会再把 editor 推下屏。
+- `ToolRenderContext.aborted` 字段让 M5 真 tool runtime 接进来时，对中途
+  中断的处理路径已经定型。
+
+P1-M1 视为完整 sign-off，进入 P1-M2。
