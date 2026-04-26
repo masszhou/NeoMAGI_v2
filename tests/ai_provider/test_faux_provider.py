@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 from ai_provider.model_registry import get_model
 from ai_provider.providers.faux import faux_thinking, faux_tool_call, stream_faux
 from ai_provider.runtime_types import StreamOptions
 from ai_provider.types import Context, UserMessage
+
+FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "pi_compat"
 
 
 def _context(text: str = "hi") -> Context:
@@ -64,6 +68,26 @@ def test_faux_provider_error_and_abort_paths() -> None:
     asyncio.run(run())
 
 
+def test_provider_abort_fixture_drives_faux_abort_path() -> None:
+    async def run() -> None:
+        fixture = json.loads((FIXTURE_ROOT / "provider_abort" / "events.json").read_text())
+        expected = fixture["expected"]
+        model = get_model(fixture["provider"], fixture["model"])
+        stream = stream_faux(
+            model,
+            _context(),
+            StreamOptions(metadata=fixture["streamOptions"]["metadata"]),
+        )
+        events = [event.type async for event in stream]
+        result = await stream.result()
+
+        assert events == expected["eventTypes"]
+        assert result.stop_reason == expected["stopReason"]
+        assert result.error_message == expected["errorMessage"]
+
+    asyncio.run(run())
+
+
 def test_faux_prompt_cache_simulates_read_and_write() -> None:
     async def run() -> None:
         model = get_model("faux", "faux-1")
@@ -93,4 +117,3 @@ def test_faux_prompt_cache_simulates_read_and_write() -> None:
         assert none.usage.cache_write == 0
 
     asyncio.run(run())
-

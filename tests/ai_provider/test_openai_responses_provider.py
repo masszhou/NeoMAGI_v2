@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
+from ai_provider.api_registry import stream_simple
 from ai_provider.model_registry import get_model
 from ai_provider.providers.openai_responses import (
     build_openai_responses_params,
@@ -9,8 +12,10 @@ from ai_provider.providers.openai_responses import (
     encode_text_signature,
     stream_openai_responses,
 )
-from ai_provider.runtime_types import StreamOptions
+from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions
 from ai_provider.types import Context, Tool, UserMessage
+
+FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "pi_compat"
 
 
 class FakeResponses:
@@ -78,24 +83,29 @@ def _context() -> Context:
     )
 
 
+def _fixture(scene: str) -> dict:
+    return json.loads((FIXTURE_ROOT / scene / "fixture.json").read_text())
+
+
 def test_text_signature_round_trip() -> None:
     signature = encode_text_signature("item_1", "final_answer")
     assert decode_text_signature(signature) == {"v": 1, "id": "item_1", "phase": "final_answer"}
 
 
 def test_openai_responses_prompt_cache_fields_and_headers() -> None:
+    fixture = _fixture("openai_responses_prompt_cache")
     model = get_model("openai", "gpt-4o-mini")
     payload, headers = build_openai_responses_params(
         model,
         _context(),
-        StreamOptions(cache_retention="long", session_id="session-1"),
+        StreamOptions(cache_retention=fixture["cacheRetention"], session_id=fixture["sessionId"]),
     )
 
-    assert payload["prompt_cache_key"] == "session-1"
-    assert payload["prompt_cache_retention"] == "24h"
-    assert headers["session_id"] == "session-1"
-    assert headers["x-client-request-id"] == "session-1"
-    assert "cache_control" not in str(payload)
+    for key, value in fixture["expectedPayload"].items():
+        assert payload[key] == value
+    for key, value in fixture["expectedHeaders"].items():
+        assert headers[key] == value
+    assert fixture["forbiddenText"] not in str(payload)
 
 
 def test_openai_responses_cache_none_forbids_cache_fields() -> None:
@@ -141,5 +151,36 @@ def test_openai_responses_stream_text_and_tool_call() -> None:
         assert result.usage.input == 13
         assert fake.responses.last_payload["prompt_cache_key"] == "session-1"
         assert fake.responses.last_headers["session_id"] == "session-1"
+
+    asyncio.run(run())
+
+
+def test_openai_responses_stream_simple_sets_reasoning_payload() -> None:
+    async def run() -> None:
+        model = get_model("openai", "gpt-4o-mini").model_copy(deep=True)
+        model.reasoning = True
+        fake = FakeOpenAIClient([{"type": "response.completed", "response": {"id": "resp_1"}}])
+
+        await stream_simple(
+            model,
+            _context(),
+            SimpleStreamOptions(client=fake, reasoning="xhigh"),
+        ).result()
+
+        assert fake.responses.last_payload["reasoning"] == {"effort": "high", "summary": "auto"}
+        assert fake.responses.last_payload["include"] == ["reasoning.encrypted_content"]
+
+    asyncio.run(run())
+
+
+def test_openai_responses_stream_simple_disables_reasoning_by_default() -> None:
+    async def run() -> None:
+        model = get_model("openai", "gpt-4o-mini").model_copy(deep=True)
+        model.reasoning = True
+        fake = FakeOpenAIClient([{"type": "response.completed", "response": {"id": "resp_1"}}])
+
+        await stream_simple(model, _context(), SimpleStreamOptions(client=fake)).result()
+
+        assert fake.responses.last_payload["reasoning"] == {"effort": "none"}
 
     asyncio.run(run())

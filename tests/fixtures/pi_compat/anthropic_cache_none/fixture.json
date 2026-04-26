@@ -1,0 +1,4 @@
+{
+  "cacheRetention": "none",
+  "forbiddenKeys": ["cache_control"]
+}

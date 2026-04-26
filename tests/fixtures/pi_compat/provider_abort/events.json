@@ -1,0 +1,11 @@
+{
+  "provider": "faux",
+  "model": "faux-1",
+  "streamOptions": {"metadata": {"abort": true}},
+  "expected": {
+    "eventTypes": ["start", "error"],
+    "reason": "aborted",
+    "stopReason": "aborted",
+    "errorMessage": "Request was aborted"
+  }
+}

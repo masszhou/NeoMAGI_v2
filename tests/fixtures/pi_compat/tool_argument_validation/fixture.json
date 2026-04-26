@@ -1,0 +1,9 @@
+{
+  "tool": "read",
+  "invalidArguments": {},
+  "expectedError": {
+    "toolName": "read",
+    "path": [],
+    "message": "'path' is a required property"
+  }
+}

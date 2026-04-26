@@ -6,9 +6,9 @@ import json
 from urllib.parse import urlparse
 
 from ai_provider.credentials import resolve_api_key
-from ai_provider.models import parse_openai_completions_compat
+from ai_provider.models import OpenAICompletionsCompat, parse_openai_completions_compat
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
-from ai_provider.runtime_types import StreamOptions, ensure_stream_options
+from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -56,7 +56,7 @@ def build_openai_completions_params(
     payload: dict[str, object] = {
         "model": model.id,
         "messages": _convert_messages(context, model),
-        "tools": [_convert_tool(tool) for tool in context.tools or []],
+        "tools": [_convert_tool(tool, compat.supports_strict_mode) for tool in context.tools or []],
         "stream": True,
     }
     max_tokens_field = compat.max_tokens_field or "max_completion_tokens"
@@ -68,8 +68,32 @@ def build_openai_completions_params(
         payload["stream_options"] = {"include_usage": True}
     if compat.supports_store is not False and _is_direct_openai(model.base_url):
         payload["store"] = False
+    _apply_reasoning_effort(payload, model, options, compat)
 
     headers: dict[str, str] = {}
+    _apply_prompt_cache(payload, headers, model, options, compat)
+    headers.update(model.headers or {})
+    headers.update(options.headers or {})
+    return payload, headers
+
+
+def _apply_reasoning_effort(
+    payload: dict[str, object],
+    model: Model,
+    options: StreamOptions,
+    compat: OpenAICompletionsCompat,
+) -> None:
+    if options.metadata.get("reasoning_effort") and model.reasoning and compat.supports_reasoning_effort is not False:
+        payload["reasoning_effort"] = options.metadata["reasoning_effort"]
+
+
+def _apply_prompt_cache(
+    payload: dict[str, object],
+    headers: dict[str, str],
+    model: Model,
+    options: StreamOptions,
+    compat: OpenAICompletionsCompat,
+) -> None:
     retention = resolve_cache_retention(options.cache_retention)
     affinity_id = sanitize_cache_affinity_id(options.session_id)
     if affinity_id and cache_enabled(retention):
@@ -82,10 +106,6 @@ def build_openai_completions_params(
             headers["x-client-request-id"] = affinity_id
             headers["x-session-affinity"] = affinity_id
 
-    headers.update(model.headers or {})
-    headers.update(options.headers or {})
-    return payload, headers
-
 
 def stream_openai_completions(
     model: Model,
@@ -96,6 +116,17 @@ def stream_openai_completions(
     stream, partial = start_stream(model)
     schedule_provider_task(stream, _run_openai_completions(stream, partial, model, context, options))
     return stream
+
+
+def stream_openai_completions_simple(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions | None = None,
+) -> AssistantMessageEventStream:
+    metadata: dict[str, object] = {}
+    if model.reasoning and options and options.reasoning:
+        metadata["reasoning_effort"] = _map_reasoning_effort(options.reasoning)
+    return stream_openai_completions(model, context, stream_options_from_simple(options, metadata=metadata))
 
 
 async def _run_openai_completions(
@@ -143,6 +174,7 @@ async def _parse_completion_chunks(
         "thinking_index": None,
         "tool_indexes": {},
         "tool_json": {},
+        "tool_finished": set(),
         "finish_reason": "stop",
     }
 
@@ -181,6 +213,7 @@ def _apply_completion_delta(
         _append_completion_thinking(stream, partial, thinking_field, thinking_text, state)
     for tool_delta in event_value(delta, "tool_calls", []) or []:
         _apply_tool_delta(stream, partial, state, tool_delta)
+    _apply_reasoning_details(partial, event_value(delta, "reasoning_details", []) or [])
 
 
 def _append_completion_text(
@@ -219,6 +252,7 @@ def _finish_completion_blocks(
     partial: AssistantMessage,
     state: dict[str, object],
 ) -> None:
+    _finish_tool_calls(stream, partial, state)
     thinking_index = state["thinking_index"]
     if thinking_index is not None:
         thinking = partial.content[thinking_index].thinking
@@ -271,7 +305,41 @@ def _apply_tool_delta(
     parsed = parse_json_object(tool_json[tool_delta_index])
     if parsed:
         block.arguments = parsed
+
+
+def _finish_tool_calls(
+    stream: AssistantMessageEventStream,
+    partial: AssistantMessage,
+    state: dict[str, object],
+) -> None:
+    tool_indexes = state["tool_indexes"]
+    for tool_delta_index, content_index in sorted(tool_indexes.items(), key=lambda item: item[1]):
+        if content_index in state["tool_finished"]:
+            continue
+        block = partial.content[content_index]
+        parsed = parse_json_object(state["tool_json"].get(tool_delta_index, ""))
+        if parsed:
+            block.arguments = parsed
         stream.push(StreamToolCallEnd(contentIndex=content_index, toolCall=block, partial=clone_message(partial)))
+        state["tool_finished"].add(content_index)
+
+
+def _apply_reasoning_details(partial: AssistantMessage, details: object) -> None:
+    if not isinstance(details, list):
+        return
+    tool_calls = {block.id: block for block in partial.content if block.type == "toolCall"}
+    for detail in details:
+        if _is_encrypted_reasoning_detail(detail) and detail["id"] in tool_calls:
+            tool_calls[detail["id"]].thought_signature = json.dumps(detail, separators=(",", ":"))
+
+
+def _is_encrypted_reasoning_detail(detail: object) -> bool:
+    return (
+        isinstance(detail, dict)
+        and detail.get("type") == "reasoning.encrypted"
+        and isinstance(detail.get("id"), str)
+        and bool(detail.get("data"))
+    )
 
 
 def _first_choice(chunk: object) -> object | None:
@@ -299,6 +367,10 @@ def _map_finish_reason(reason: str, partial: AssistantMessage) -> str:
     return "stop"
 
 
+def _map_reasoning_effort(reasoning: str) -> str:
+    return "high" if reasoning == "xhigh" else reasoning
+
+
 def _is_direct_openai(base_url: str) -> bool:
     return urlparse(base_url).netloc == "api.openai.com"
 
@@ -322,6 +394,9 @@ def _convert_message(message: object) -> dict[str, object]:
         tool_calls = [_convert_assistant_tool_call(block) for block in message.content if block.type == "toolCall"]
         if tool_calls:
             converted["tool_calls"] = tool_calls
+            reasoning_details = _tool_call_reasoning_details(message)
+            if reasoning_details:
+                converted["reasoning_details"] = reasoning_details
         return converted
     if isinstance(message, ToolResultMessage):
         result: dict[str, object] = {
@@ -366,18 +441,34 @@ def _convert_assistant_tool_call(block: ToolCall) -> dict[str, object]:
     }
 
 
-def _convert_tool(tool: object) -> dict[str, object]:
+def _tool_call_reasoning_details(message: AssistantMessage) -> list[object]:
+    details: list[object] = []
+    for block in message.content:
+        if block.type != "toolCall" or not block.thought_signature:
+            continue
+        try:
+            details.append(json.loads(block.thought_signature))
+        except json.JSONDecodeError:
+            continue
+    return details
+
+
+def _convert_tool(tool: object, supports_strict_mode: bool | None) -> dict[str, object]:
+    function: dict[str, object] = {
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+    }
+    if supports_strict_mode is not False:
+        function["strict"] = False
     return {
         "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        },
+        "function": function,
     }
 
 
 __all__ = [
     "build_openai_completions_params",
     "stream_openai_completions",
+    "stream_openai_completions_simple",
 ]

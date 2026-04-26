@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
+from ai_provider.api_registry import stream_simple
 from ai_provider.model_registry import get_model
 from ai_provider.providers.anthropic import build_anthropic_messages_params, get_cache_control, stream_anthropic_messages
-from ai_provider.runtime_types import StreamOptions
+from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions
 from ai_provider.types import Context, Tool, UserMessage
+
+FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "pi_compat"
 
 
 class FakeAnthropicMessages:
@@ -23,45 +28,12 @@ class FakeAnthropicClient:
         self.messages = FakeAnthropicMessages(events)
 
 
-ANTHROPIC_TEXT_TOOL_EVENTS = [
-    {
-        "type": "message_start",
-        "message": {
-            "id": "msg_1",
-            "usage": {
-                "input_tokens": 10,
-                "output_tokens": 0,
-                "cache_read_input_tokens": 2,
-                "cache_creation_input_tokens": 3,
-            },
-        },
-    },
-    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
-    {"type": "content_block_stop", "index": 0},
-    {
-        "type": "content_block_start",
-        "index": 1,
-        "content_block": {"type": "tool_use", "id": "call_1", "name": "read", "input": {}},
-    },
-    {
-        "type": "content_block_delta",
-        "index": 1,
-        "delta": {"type": "input_json_delta", "partial_json": "{\"path\":\"README.md\"}"},
-    },
-    {"type": "content_block_stop", "index": 1},
-    {
-        "type": "message_delta",
-        "delta": {"stop_reason": "tool_use"},
-        "usage": {
-            "input_tokens": 10,
-            "output_tokens": 4,
-            "cache_read_input_tokens": 2,
-            "cache_creation_input_tokens": 3,
-        },
-    },
-    {"type": "message_stop"},
-]
+def _json_fixture(scene: str, file_name: str = "fixture.json") -> dict:
+    return json.loads((FIXTURE_ROOT / scene / file_name).read_text())
+
+
+def _stream_fixture(scene: str) -> dict:
+    return json.loads((FIXTURE_ROOT / scene / "events.json").read_text())
 
 
 def _context() -> Context:
@@ -80,56 +52,127 @@ def _context() -> Context:
 
 def test_anthropic_cache_control_rules(monkeypatch) -> None:
     monkeypatch.delenv("PI_CACHE_RETENTION", raising=False)
+    fixture = _json_fixture("anthropic_cache_long")
+
     assert get_cache_control("https://api.anthropic.com", "short") == {"type": "ephemeral"}
-    assert get_cache_control("https://api.anthropic.com", "long") == {
-        "type": "ephemeral",
-        "ttl": "1h",
-    }
-    assert get_cache_control("https://proxy.example.com", "long") == {"type": "ephemeral"}
+    assert get_cache_control("https://api.anthropic.com", fixture["cacheRetention"]) == fixture["directExpected"][
+        "cacheControl"
+    ]
+    assert get_cache_control("https://proxy.example.com", fixture["cacheRetention"]) == fixture["proxyExpected"][
+        "cacheControl"
+    ]
     assert get_cache_control("https://api.anthropic.com", "none") is None
 
 
 def test_anthropic_payload_marks_system_last_tool_and_last_user() -> None:
+    fixture = _json_fixture("anthropic_cache_short")
+    expected = fixture["expected"]
     model = get_model("anthropic", "claude-3-5-haiku-20241022")
-    payload = build_anthropic_messages_params(model, _context(), StreamOptions())
+    payload = build_anthropic_messages_params(
+        model,
+        _context(),
+        StreamOptions(cache_retention=fixture["cacheRetention"]),
+    )
 
-    assert payload["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert payload["tools"][-1]["cache_control"] == {"type": "ephemeral"}
-    assert payload["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert payload["system"][0]["cache_control"] == expected["systemCacheControl"]
+    assert payload["tools"][-1]["cache_control"] == expected["lastToolCacheControl"]
+    assert payload["messages"][-1]["content"][-1]["cache_control"] == expected["lastUserCacheControl"]
 
 
 def test_anthropic_cache_none_forbids_cache_markers() -> None:
+    fixture = _json_fixture("anthropic_cache_none")
     model = get_model("anthropic", "claude-3-5-haiku-20241022")
-    payload = build_anthropic_messages_params(model, _context(), StreamOptions(cache_retention="none"))
+    payload = build_anthropic_messages_params(
+        model,
+        _context(),
+        StreamOptions(cache_retention=fixture["cacheRetention"]),
+    )
 
-    assert "cache_control" not in payload["system"][0]
-    assert "cache_control" not in payload["tools"][-1]
-    assert "cache_control" not in payload["messages"][-1]["content"][-1]
+    for forbidden in fixture["forbiddenKeys"]:
+        assert forbidden not in payload["system"][0]
+        assert forbidden not in payload["tools"][-1]
+        assert forbidden not in payload["messages"][-1]["content"][-1]
 
 
-def test_anthropic_stream_text_and_tool_call() -> None:
+def test_anthropic_stream_text_fixture() -> None:
     async def run() -> None:
-        model = get_model("anthropic", "claude-3-5-haiku-20241022")
-        fake = FakeAnthropicClient(ANTHROPIC_TEXT_TOOL_EVENTS)
+        fixture = _stream_fixture("provider_stream_text")
+        expected = fixture["expected"]
+        model = get_model(fixture["provider"], fixture["model"])
+        fake = FakeAnthropicClient(fixture["providerEvents"])
         stream = stream_anthropic_messages(model, _context(), StreamOptions(client=fake))
         events = [event.type async for event in stream]
         result = await stream.result()
 
-        assert events == [
-            "start",
-            "text_start",
-            "text_delta",
-            "text_end",
-            "toolcall_start",
-            "toolcall_delta",
-            "toolcall_end",
-            "done",
-        ]
-        assert result.response_id == "msg_1"
-        assert result.stop_reason == "toolUse"
-        assert result.content[0].text == "hi"
-        assert result.content[1].arguments == {"path": "README.md"}
-        assert result.usage.cache_read == 2
+        assert events == expected["eventTypes"]
+        assert result.response_id == expected["responseId"]
+        assert result.stop_reason == expected["stopReason"]
+        assert result.content[0].text == expected["text"]
+        assert result.usage.input == expected["usage"]["input"]
+        assert result.usage.output == expected["usage"]["output"]
+
+    asyncio.run(run())
+
+
+def test_anthropic_stream_text_and_tool_call() -> None:
+    async def run() -> None:
+        fixture = _stream_fixture("provider_stream_tool_call")
+        expected = fixture["expected"]
+        model = get_model(fixture["provider"], fixture["model"])
+        fake = FakeAnthropicClient(fixture["providerEvents"])
+        stream = stream_anthropic_messages(model, _context(), StreamOptions(client=fake))
+        events = [event.type async for event in stream]
+        result = await stream.result()
+
+        assert events == expected["eventTypes"]
+        assert result.response_id == expected["responseId"]
+        assert result.stop_reason == expected["stopReason"]
+        assert result.content[0].text == expected["text"]
+        assert result.content[1].id == expected["toolCall"]["id"]
+        assert result.content[1].name == expected["toolCall"]["name"]
+        assert result.content[1].arguments == expected["toolCall"]["arguments"]
+        assert result.usage.cache_read == expected["usage"]["cacheRead"]
+        assert result.usage.cache_write == expected["usage"]["cacheWrite"]
         assert fake.messages.last_payload is not None
+
+    asyncio.run(run())
+
+
+def test_anthropic_stream_simple_sets_thinking_budget() -> None:
+    async def run() -> None:
+        model = get_model("anthropic", "claude-3-5-haiku-20241022").model_copy(deep=True)
+        model.reasoning = True
+        fake = FakeAnthropicClient([{"type": "message_stop"}])
+        await stream_simple(
+            model,
+            _context(),
+            SimpleStreamOptions(client=fake, reasoning="low", thinking_budgets={"low": 1234}),
+        ).result()
+
+        payload = fake.messages.last_payload
+        assert payload["max_tokens"] == model.max_tokens
+        assert payload["thinking"] == {"type": "enabled", "budget_tokens": 1234}
+        assert "metadata" not in payload
+
+    asyncio.run(run())
+
+
+def test_anthropic_stream_simple_omits_thinking_for_non_reasoning_model() -> None:
+    async def run() -> None:
+        model = get_model("anthropic", "claude-3-5-haiku-20241022")
+        fake = FakeAnthropicClient([{"type": "message_stop"}])
+        await stream_simple(model, _context(), SimpleStreamOptions(client=fake)).result()
+        assert "thinking" not in fake.messages.last_payload
+
+    asyncio.run(run())
+
+
+def test_anthropic_stream_simple_ignores_reasoning_for_non_reasoning_model() -> None:
+    async def run() -> None:
+        model = get_model("anthropic", "claude-3-5-haiku-20241022")
+        fake = FakeAnthropicClient([{"type": "message_stop"}])
+        await stream_simple(model, _context(), SimpleStreamOptions(client=fake, reasoning="low")).result()
+        assert "thinking" not in fake.messages.last_payload
+        assert fake.messages.last_payload["max_tokens"] == model.max_tokens
 
     asyncio.run(run())

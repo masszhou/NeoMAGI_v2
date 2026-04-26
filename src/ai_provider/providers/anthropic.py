@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from ai_provider.credentials import resolve_api_key
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention
-from ai_provider.runtime_types import StreamOptions, ensure_stream_options
+from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -42,6 +42,8 @@ from ._shared import (
     start_stream,
 )
 
+_INTERNAL_METADATA_KEYS = {"thinking_enabled", "thinking_budget_tokens"}
+
 
 def get_cache_control(base_url: str, retention: str) -> dict[str, str] | None:
     if not cache_enabled(retention):
@@ -74,8 +76,10 @@ def build_anthropic_messages_params(
     }
     if options.temperature is not None:
         payload["temperature"] = options.temperature
-    if options.metadata:
-        payload["metadata"] = options.metadata
+    metadata = _public_metadata(options.metadata)
+    if metadata:
+        payload["metadata"] = metadata
+    _apply_thinking_options(payload, options)
     if context.system_prompt is not None:
         system_block: dict[str, object] = {"type": "text", "text": context.system_prompt}
         if cache_control:
@@ -105,6 +109,33 @@ def stream_anthropic_messages(
     stream, partial = start_stream(model)
     schedule_provider_task(stream, _run_anthropic(stream, partial, model, context, options))
     return stream
+
+
+def stream_anthropic_messages_simple(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions | None = None,
+) -> AssistantMessageEventStream:
+    if not model.reasoning or options is None or not options.reasoning:
+        return stream_anthropic_messages(model, context, stream_options_from_simple(options))
+    adjusted = _adjust_max_tokens_for_thinking(
+        options.max_tokens or min(model.max_tokens, 32000),
+        model.max_tokens,
+        options.reasoning,
+        options.thinking_budgets,
+    )
+    return stream_anthropic_messages(
+        model,
+        context,
+        stream_options_from_simple(
+            options,
+            max_tokens=adjusted["max_tokens"],
+            metadata={
+                "thinking_enabled": True,
+                "thinking_budget_tokens": adjusted["thinking_budget"],
+            },
+        ),
+    )
 
 
 async def _run_anthropic(
@@ -322,6 +353,35 @@ def _map_stop_reason(reason: object) -> str | None:
     return "stop"
 
 
+def _apply_thinking_options(payload: dict[str, object], options: StreamOptions) -> None:
+    enabled = options.metadata.get("thinking_enabled")
+    if enabled is True:
+        payload["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": options.metadata.get("thinking_budget_tokens", 1024),
+        }
+
+
+def _public_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in metadata.items() if key not in _INTERNAL_METADATA_KEYS}
+
+
+def _adjust_max_tokens_for_thinking(
+    base_max_tokens: int,
+    model_max_tokens: int,
+    reasoning_level: str,
+    custom_budgets: dict[str, int] | None = None,
+) -> dict[str, int]:
+    budgets = {"minimal": 1024, "low": 2048, "medium": 8192, "high": 16384}
+    budgets.update(custom_budgets or {})
+    level = "high" if reasoning_level == "xhigh" else reasoning_level
+    thinking_budget = budgets[level]
+    max_tokens = min(base_max_tokens + thinking_budget, model_max_tokens)
+    if max_tokens <= thinking_budget:
+        thinking_budget = max(0, max_tokens - 1024)
+    return {"max_tokens": max_tokens, "thinking_budget": thinking_budget}
+
+
 def _convert_message(message: object) -> dict[str, object] | None:
     if isinstance(message, UserMessage):
         return {"role": "user", "content": _convert_user_content(message.content)}
@@ -400,4 +460,5 @@ __all__ = [
     "build_anthropic_messages_params",
     "get_cache_control",
     "stream_anthropic_messages",
+    "stream_anthropic_messages_simple",
 ]

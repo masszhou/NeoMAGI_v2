@@ -1,0 +1,9 @@
+{
+  "cacheRetention": "long",
+  "directExpected": {
+    "cacheControl": {"type": "ephemeral", "ttl": "1h"}
+  },
+  "proxyExpected": {
+    "cacheControl": {"type": "ephemeral"}
+  }
+}

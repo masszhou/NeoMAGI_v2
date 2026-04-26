@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from ai_provider.credentials import resolve_api_key
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
-from ai_provider.runtime_types import StreamOptions, ensure_stream_options
+from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -79,6 +79,7 @@ def build_openai_responses_params(
         payload["temperature"] = options.temperature
     if options.max_tokens is not None:
         payload["max_output_tokens"] = options.max_tokens
+    _apply_reasoning_options(payload, model, options)
 
     headers: dict[str, str] = {}
     retention = resolve_cache_retention(options.cache_retention)
@@ -103,6 +104,21 @@ def stream_openai_responses(
     stream, partial = start_stream(model)
     schedule_provider_task(stream, _run_openai_responses(stream, partial, model, context, options))
     return stream
+
+
+def stream_openai_responses_simple(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions | None = None,
+) -> AssistantMessageEventStream:
+    metadata: dict[str, object] = {}
+    if model.reasoning:
+        if options and options.reasoning:
+            metadata["reasoning_effort"] = _map_reasoning_effort(options.reasoning)
+            metadata["reasoning_summary"] = "auto"
+        else:
+            metadata["reasoning_disabled"] = True
+    return stream_openai_responses(model, context, stream_options_from_simple(options, metadata=metadata))
 
 
 async def _run_openai_responses(
@@ -323,6 +339,23 @@ def _response_stop_reason(response: object, partial: AssistantMessage) -> str:
     return "stop"
 
 
+def _apply_reasoning_options(payload: dict[str, object], model: Model, options: StreamOptions) -> None:
+    if not model.reasoning:
+        return
+    if options.metadata.get("reasoning_effort"):
+        payload["reasoning"] = {
+            "effort": options.metadata["reasoning_effort"],
+            "summary": options.metadata.get("reasoning_summary", "auto"),
+        }
+        payload["include"] = ["reasoning.encrypted_content"]
+    elif options.metadata.get("reasoning_disabled"):
+        payload["reasoning"] = {"effort": "none"}
+
+
+def _map_reasoning_effort(reasoning: str) -> str:
+    return "high" if reasoning == "xhigh" else reasoning
+
+
 def _is_direct_openai(base_url: str) -> bool:
     return urlparse(base_url).netloc == "api.openai.com"
 
@@ -384,4 +417,5 @@ __all__ = [
     "decode_text_signature",
     "encode_text_signature",
     "stream_openai_responses",
+    "stream_openai_responses_simple",
 ]

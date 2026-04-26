@@ -89,6 +89,34 @@ def ensure_stream_options(options: StreamOptions | None = None) -> StreamOptions
     return options if options is not None else StreamOptions()
 
 
+def stream_options_from_simple(
+    options: SimpleStreamOptions | None,
+    *,
+    metadata: dict[str, Any] | None = None,
+    max_tokens: int | None = None,
+) -> StreamOptions:
+    if options is None:
+        return StreamOptions(metadata=metadata or {})
+    merged_metadata = dict(options.metadata)
+    if metadata:
+        merged_metadata.update(metadata)
+    return StreamOptions(
+        temperature=options.temperature,
+        max_tokens=options.max_tokens if max_tokens is None else max_tokens,
+        signal=options.signal,
+        api_key=options.api_key,
+        transport=options.transport,
+        cache_retention=options.cache_retention,
+        session_id=options.session_id,
+        on_payload=options.on_payload,
+        on_response=options.on_response,
+        headers=options.headers,
+        max_retry_delay_ms=options.max_retry_delay_ms,
+        metadata=merged_metadata,
+        client=options.client,
+    )
+
+
 __all__ = [
     "PayloadCallback",
     "ProviderAdapter",
@@ -99,4 +127,5 @@ __all__ = [
     "StreamFunction",
     "StreamOptions",
     "ensure_stream_options",
+    "stream_options_from_simple",
 ]

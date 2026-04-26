@@ -12,8 +12,9 @@ For each of the 8 core M0 fixtures we:
 5. Verify opaque fields (``textSignature`` / ``thinkingSignature`` /
    ``thoughtSignature`` / ``responseId``) survive the round-trip.
 
-M2 extends the fixture tree with provider/cache scenes; placeholder fixtures
-only need ``README.md`` until their milestone owns full input/expected pairs.
+M2 extends the fixture tree with provider/cache scenes. Those machine-readable
+fixtures are exercised by the provider behavior tests rather than by
+file-existence assertions here.
 """
 
 from __future__ import annotations
@@ -86,7 +87,6 @@ ALL_SCENES = (
     "tool_execution_success",
     "usage_cache_normalization",
 )
-
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #

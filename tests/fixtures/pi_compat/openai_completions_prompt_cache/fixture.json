@@ -1,0 +1,18 @@
+{
+  "directOpenAI": {
+    "cacheRetention": "long",
+    "sessionId": "session-1",
+    "expectedPayload": {
+      "prompt_cache_key": "session-1",
+      "prompt_cache_retention": "24h"
+    }
+  },
+  "compatibleProvider": {
+    "sessionId": "session-1",
+    "expectedHeaders": {
+      "session_id": "session-1",
+      "x-client-request-id": "session-1",
+      "x-session-affinity": "session-1"
+    }
+  }
+}

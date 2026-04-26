@@ -1,0 +1,8 @@
+{
+  "cacheRetention": "short",
+  "expected": {
+    "systemCacheControl": {"type": "ephemeral"},
+    "lastToolCacheControl": {"type": "ephemeral"},
+    "lastUserCacheControl": {"type": "ephemeral"}
+  }
+}
