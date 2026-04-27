@@ -59,3 +59,11 @@ doc_id_assigned_at: 2026-04-25T18:57:04+02:00
 - Evidence: `dev_docs/logs/p1_m2_closeout.md`, `src/ai_provider/{runtime_types,streaming,api_registry,model_registry,models,prompt_cache,credentials,tools,usage,convert}.py`, `src/ai_provider/providers/{faux,anthropic,openai_responses,openai_completions}.py`, `tests/ai_provider/test_*.py`（34 条离线 provider/core 用例），`tests/fixtures/pi_compat/usage_cache_normalization/*.json`。
 - Next: 进入 P1-M3，把 `agent_core` loop 接到 `ai_provider.stream()`，并在工具 dispatch 前使用 `validate_tool_arguments()`。
 - Risk: 真实 provider smoke 未运行（未启用 `NEOMAGI_PROVIDER_SMOKE=1` / 未使用真实 key）；SDK runtime 已通过 fake client contract 锁 payload、headers、usage 和 stream 映射。
+
+## 2026-04-27 23:11 (local) | P1-M2 manual provider sign-off
+- Status: done
+- Done: 完成 `dev_docs/user_tests/p1_m2_manual_test_plan.md` 当前范围内的真实 provider 手测，并修复手测发现的问题：Anthropic 内建模型更新为 `claude-haiku-4-5-20251001`；Anthropic SDK stream recursion 修复；OpenAI Responses tool call `id`/`call_id` alias 修复；新增 OpenAI Codex OAuth-backed `openai-codex-responses` adapter；新增本地 OAuth auth storage；Codex request 改为 Pi 同构 `instructions` + Responses-format input；Codex prompt cache request/usage 手测补齐。
+- Evidence: `dev_docs/logs/p1_m2_manual_provider_smoke_findings.md`, `dev_docs/user_tests/p1_m2_manual_test_plan.md`, `src/ai_provider/auth_storage.py`, `src/ai_provider/providers/openai_codex_responses.py`, `src/ai_provider/{api_registry,credentials,model_registry,oauth}.py`, `src/ai_provider/providers/{_shared,openai_responses}.py`, `tests/ai_provider/test_auth_storage.py`, `tests/ai_provider/test_openai_codex_responses_provider.py`, `tests/ai_provider/test_streaming.py`, `tests/ai_provider/test_openai_responses_provider.py`；手测结果包括 Anthropic/OpenAI direct streaming、Anthropic/OpenAI direct cache read、OpenAI tool call streaming、OpenAI OAuth 登录落盘、Codex OAuth streaming、Codex cache read（`cacheRead=11904`）。
+- Verification: `uv run pytest tests/ -q` **298 passed**；`just lint` green（ruff passed，`complexity_guard regressions=0`）；`git diff --check` clean。
+- Next: 进入 P1-M3，把 `agent_core` loop 接到 provider runtime；真实 TUI `/login` / credential source UI / TUI cache UI 另属后续 runtime/TUI 接入范围。
+- Risk: OpenAI Codex cache 的 `short` / `long` 当前只控制是否发送 `prompt_cache_key`，不发送 TTL 字段；这与 pi-mono adapter 对齐，手测说明已标注。Anthropic OAuth 不属于 P1 core。
