@@ -12,18 +12,32 @@ Pi-mono source map (commit 97a38bf6, see ADR-0011):
 
 from .api_registry import get_api, register_api, stream, stream_simple, unregister_api
 from .model_registry import get_model, list_models, register_model, resolve_model
+from .oauth import (
+    OAuthCredentials,
+    OAuthLoginCallbacks,
+    OpenAIOAuthProvider,
+    get_oauth_api_key,
+    get_oauth_provider,
+    list_oauth_providers,
+)
 from .runtime_types import ProviderResponse, SimpleStreamOptions, StreamOptions
 from .streaming import AssistantMessageEventStream, create_assistant_message_event_stream
 
 __all__ = [
     "AssistantMessageEventStream",
+    "OAuthCredentials",
+    "OAuthLoginCallbacks",
+    "OpenAIOAuthProvider",
     "ProviderResponse",
     "SimpleStreamOptions",
     "StreamOptions",
     "create_assistant_message_event_stream",
     "get_api",
     "get_model",
+    "get_oauth_api_key",
+    "get_oauth_provider",
     "list_models",
+    "list_oauth_providers",
     "register_api",
     "register_model",
     "resolve_model",
