@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -43,6 +44,15 @@ class FakeCallbackServer:
 
     def close(self) -> None:
         self.closed = True
+
+
+@dataclass(slots=True)
+class LoginProbe:
+    credentials: OAuthCredentials
+    server: FakeCallbackServer
+    states: list[str]
+    auth_urls: list[str]
+    token_posts: list[tuple[str, Mapping[str, str]]]
 
 
 def _jwt_with_account(account_id: str) -> str:
@@ -86,76 +96,86 @@ def test_parse_authorization_input_accepts_url_query_and_raw_code() -> None:
     assert parsed.state == "state-4"
 
 
+async def _login_with_manual_fallback() -> LoginProbe:
+    states: list[str] = []
+    auth_urls: list[str] = []
+    token_posts: list[tuple[str, Mapping[str, str]]] = []
+    fake_server = FakeCallbackServer()
+
+    async def fake_token_post(
+        url: str,
+        data: Mapping[str, str],
+    ) -> Mapping[str, Any]:
+        token_posts.append((url, dict(data)))
+        return {
+            "access_token": _jwt_with_account("acct-123"),
+            "refresh_token": "refresh-1",
+            "expires_in": 3600,
+        }
+
+    provider = OpenAIOAuthProvider(
+        token_post=fake_token_post,
+        callback_server_factory=lambda state: states.append(state) or fake_server,
+        now_ms=lambda: 10_000,
+    )
+
+    async def on_prompt(prompt: OAuthPrompt) -> str:
+        assert "authorization code" in prompt.message
+        return f"http://localhost:1455/auth/callback?code=manual-code&state={states[0]}"
+
+    credentials = await provider.login(
+        OAuthLoginCallbacks(
+            on_auth=lambda info: auth_urls.append(info.url),
+            on_prompt=on_prompt,
+        )
+    )
+    return LoginProbe(credentials, fake_server, states, auth_urls, token_posts)
+
+
+def _assert_openai_authorize_url(auth_url: str, state: str) -> None:
+    parsed_auth = urlparse(auth_url)
+    auth_params = parse_qs(parsed_auth.query)
+    assert f"{parsed_auth.scheme}://{parsed_auth.netloc}{parsed_auth.path}" == (
+        OPENAI_CODEX_AUTHORIZE_URL
+    )
+    assert auth_params["client_id"] == [OPENAI_CODEX_CLIENT_ID]
+    assert auth_params["redirect_uri"] == [OPENAI_CODEX_REDIRECT_URI]
+    assert auth_params["code_challenge_method"] == ["S256"]
+    assert auth_params["state"] == [state]
+    assert auth_params["codex_cli_simplified_flow"] == ["true"]
+    assert auth_params["originator"] == ["pi"]
+    assert auth_params["code_challenge"][0]
+
+
+def _assert_authorization_code_exchange(
+    token_posts: list[tuple[str, Mapping[str, str]]],
+) -> None:
+    assert token_posts == [
+        (
+            OPENAI_CODEX_TOKEN_URL,
+            {
+                "grant_type": "authorization_code",
+                "client_id": OPENAI_CODEX_CLIENT_ID,
+                "code": "manual-code",
+                "code_verifier": token_posts[0][1]["code_verifier"],
+                "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
+            },
+        )
+    ]
+    assert token_posts[0][1]["code_verifier"]
+
+
 def test_openai_login_uses_pkce_manual_fallback_and_exchanges_code() -> None:
     async def run() -> None:
-        states: list[str] = []
-        auth_urls: list[str] = []
-        token_posts: list[tuple[str, Mapping[str, str]]] = []
-        fake_server = FakeCallbackServer()
+        probe = await _login_with_manual_fallback()
 
-        async def fake_token_post(
-            url: str,
-            data: Mapping[str, str],
-        ) -> Mapping[str, Any]:
-            token_posts.append((url, dict(data)))
-            return {
-                "access_token": _jwt_with_account("acct-123"),
-                "refresh_token": "refresh-1",
-                "expires_in": 3600,
-            }
-
-        provider = OpenAIOAuthProvider(
-            token_post=fake_token_post,
-            callback_server_factory=lambda state: states.append(state) or fake_server,
-            now_ms=lambda: 10_000,
-        )
-
-        async def on_prompt(prompt: OAuthPrompt) -> str:
-            assert "authorization code" in prompt.message
-            return (
-                "http://localhost:1455/auth/callback"
-                f"?code=manual-code&state={states[0]}"
-            )
-
-        credentials = await provider.login(
-            OAuthLoginCallbacks(
-                on_auth=lambda info: auth_urls.append(info.url),
-                on_prompt=on_prompt,
-            )
-        )
-
-        assert fake_server.closed is True
-        assert credentials.access == _jwt_with_account("acct-123")
-        assert credentials.refresh == "refresh-1"
-        assert credentials.expires == 3_610_000
-        assert credentials.account_id == "acct-123"
-
-        parsed_auth = urlparse(auth_urls[0])
-        auth_params = parse_qs(parsed_auth.query)
-        assert f"{parsed_auth.scheme}://{parsed_auth.netloc}{parsed_auth.path}" == (
-            OPENAI_CODEX_AUTHORIZE_URL
-        )
-        assert auth_params["client_id"] == [OPENAI_CODEX_CLIENT_ID]
-        assert auth_params["redirect_uri"] == [OPENAI_CODEX_REDIRECT_URI]
-        assert auth_params["code_challenge_method"] == ["S256"]
-        assert auth_params["state"] == [states[0]]
-        assert auth_params["codex_cli_simplified_flow"] == ["true"]
-        assert auth_params["originator"] == ["pi"]
-        assert auth_params["code_challenge"][0]
-
-        assert token_posts == [
-            (
-                OPENAI_CODEX_TOKEN_URL,
-                {
-                    "grant_type": "authorization_code",
-                    "client_id": OPENAI_CODEX_CLIENT_ID,
-                    "code": "manual-code",
-                    "code_verifier": token_posts[0][1]["code_verifier"],
-                    "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
-                },
-            )
-        ]
-        assert token_posts[0][1]["code_verifier"]
+        assert probe.server.closed is True
+        assert probe.credentials.access == _jwt_with_account("acct-123")
+        assert probe.credentials.refresh == "refresh-1"
+        assert probe.credentials.expires == 3_610_000
+        assert probe.credentials.account_id == "acct-123"
+        _assert_openai_authorize_url(probe.auth_urls[0], probe.states[0])
+        _assert_authorization_code_exchange(probe.token_posts)
 
     asyncio.run(run())
 
