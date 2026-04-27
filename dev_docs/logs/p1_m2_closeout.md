@@ -175,3 +175,33 @@ Tool execution remains out of provider scope: providers emit `ToolCall`; M3 vali
 - `test_anthropic_stream_simple_*` 已改为用 reasoning-capable model copy 覆盖 enabled thinking budget，用 `claude-3-5-haiku-20241022` 覆盖 unsupported model 不发送 `thinking` 的回归。
 - M2 provider fixtures 已从文件存在断言改为行为断言：Anthropic cache 与 stream fixture、OpenAI Responses / Chat Completions prompt-cache fixture、provider abort fixture、cross-provider opaque fixture、tool argument validation fixture 均由对应 provider/core 测试加载并与实际 payload、event order 或 normalized result 比对。
 - `tests/test_fixture_round_trip.py::test_m2_provider_scene_has_machine_readable_fixture` 已删除，避免把 file-existence scaffolding 重新包装成验收证据。
+
+## 2026-04-27 三轮评审
+
+针对二轮修复追加段（commit `33d8d9e`）逐项核对，确认 `pytest tests/` **280 passed**、`just lint` green、`complexity_guard regressions=0`、working tree clean。二轮评审遗留的 3 项全部关闭，无新发现 follow-up。
+
+### 关闭确认
+
+- **Anthropic `stream_simple` thinking-payload 真实 bug** — 关闭。
+  - `stream_anthropic_messages_simple` 现以 `if not model.reasoning or options is None or not options.reasoning: return stream_anthropic_messages(model, context, stream_options_from_simple(options))` 早退，与 OpenAI Responses simple 路径对称。
+  - `_apply_thinking_options` 删除了 `enabled is False` 写 `{"type": "disabled"}` 的分支，仅在 `enabled is True` 写 `payload["thinking"]`；非 reasoning 模型的 outgoing payload 不会再出现 `thinking` 键。
+  - `test_anthropic_stream_simple_omits_thinking_for_non_reasoning_model`（haiku-3.5，无 reasoning）和 `test_anthropic_stream_simple_ignores_reasoning_for_non_reasoning_model`（haiku-3.5 + caller 传 `reasoning="low"`）双向锁定：unsupported model 即使被 caller 误用 simple API 也不会发 `thinking` 字段。
+  - `test_anthropic_stream_simple_sets_thinking_budget` 通过 `model.model_copy(deep=True); model.reasoning = True` 覆盖 enabled-budget 路径，并新增 `assert "metadata" not in payload`。
+- **Bonus 修复（顺手关掉的潜在泄漏）**：新增 `_INTERNAL_METADATA_KEYS = {"thinking_enabled", "thinking_budget_tokens"}` + `_public_metadata`，把 simple-path 注入的内部控制键从 `options.metadata` 中过滤掉，再决定是否落到 Anthropic `metadata` 请求字段。这是我之前评审"`options.metadata` 直接塞 Anthropic payload `metadata`" 那条记账项的真实风险面，已经被修补。
+- **Fixture follow-up 4** — 关闭。
+  - 10 个 M2 provider fixture 全部从"文件占位"升级为"行为单一真值"：`fixture.json` / `events.json` 内容结构化为 `{provider, model, providerEvents, expected.{...}}`（或 cache 场景的 `{cacheRetention, expectedPayload, expectedHeaders, forbiddenKeys}`），并由对应 provider/core 测试 `_json_fixture` / `_stream_fixture` helper 加载，与实际 `build_*_params` 输出、stream event order、normalized usage 直接比对。
+  - 抽样验证：`test_anthropic_stream_text_fixture` 与 `test_anthropic_stream_text_and_tool_call` 现在 `events == expected["eventTypes"]`、`result.response_id == expected["responseId"]`、`result.usage.cache_read == expected["usage"]["cacheRead"]` 全部走 fixture；`test_openai_responses_prompt_cache_fields_and_headers` 走 `expectedPayload` / `expectedHeaders` / `forbiddenText` 三组键；`test_provider_abort_fixture_drives_faux_abort_path`、`test_opaque_fields_survive_cross_provider_handoff_*`、`test_validate_tool_arguments_*` 同样走 fixture。
+  - inline `*_TEXT_TOOL_EVENTS` Python 字面量已从 `test_anthropic_provider.py` 删除；fixture 与测试断言之间不再有两套真值漂移风险。
+  - 之前的 file-existence regression `test_m2_provider_scene_has_machine_readable_fixture` 已删除，round-trip 测试 docstring 同步更新为 "Those machine-readable fixtures are exercised by the provider behavior tests rather than by file-existence assertions here."。这正面回应了二轮评审引用的 CLAUDE.md 条款。
+- **测试数量回退（287 → 280）说明**：二轮新增的 file-existence parametrize（10 项）被删除，被等价 fixture-driven behavior assertion 吸收到原有 provider 测试用例中；新增了 anthropic simple-path 的 unsupported-model 与 ignores-reasoning 用例。net 减 7 是有意识的质量收敛，不是覆盖回退。CLAUDE.md "不要把测试数量当质量信号" 的约束被遵守。
+
+### 仍开着但本期不阻塞 done 的项
+
+- 一轮评审记录的 follow-up 4（已关）、follow-up 1/2/3/5（已关）；剩余 follow-up 仅有"复杂度 target findings 拆 helper"，本身就是 plan 验收语之外的轻量优化（baseline 不掩盖 provider parser 已二轮核对确认），可放到 M3 内部清理或按需推迟。
+- Plan W7 `compat.supports_strict_mode` 的修复采用"默认发 `strict: false`，明确 False 时省略" 的 pi-mono 兼容默认。这是 closeout 一轮记录的设计决定，不再翻案。
+- 仍未运行真实 provider smoke；按 closeout "未运行项" 段表述保留，留给后续真实集成轮。
+
+### 三轮判定
+
+M2 closeout 可以保留 `Status: done`。所有评审追加段中标记为 follow-up / 必修 / 部分落实的项目均已在 commit `33d8d9e` 中落到代码、测试或文档。下一步可直接进入 P1-M3 plan 起草。
+
