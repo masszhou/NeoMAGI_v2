@@ -10,11 +10,18 @@ from ai_provider.types import Context, Model, ModelCost, UserMessage
 
 def test_builtin_models_cover_m2_api_families() -> None:
     api_families = {model.api for model in list_models()}
-    assert {"anthropic-messages", "openai-responses", "openai-completions", "faux"} <= api_families
+    assert {
+        "anthropic-messages",
+        "openai-codex-responses",
+        "openai-responses",
+        "openai-completions",
+        "faux",
+    } <= api_families
 
 
 def test_get_api_registers_builtin_api_families() -> None:
     assert get_api("openai-responses").api_name == "openai-responses"
+    assert get_api("openai-codex-responses").api_name == "openai-codex-responses"
     assert get_api("openai-completions").api_name == "openai-completions"
 
 

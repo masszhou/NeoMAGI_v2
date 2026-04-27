@@ -192,7 +192,7 @@ class OpenAIOAuthProvider:
                     "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
                 }
             )
-            return self._credentials_from_token_response(token_data)
+            return _openai_credentials_from_token_response(token_data, self._now_ms)
         finally:
             server.close()
 
@@ -204,7 +204,7 @@ class OpenAIOAuthProvider:
                 "client_id": OPENAI_CODEX_CLIENT_ID,
             }
         )
-        return self._credentials_from_token_response(token_data)
+        return _openai_credentials_from_token_response(token_data, self._now_ms)
 
     def get_api_key(self, credentials: OAuthCredentials) -> str:
         return credentials.access
@@ -233,26 +233,6 @@ class OpenAIOAuthProvider:
         response = self._token_post(OPENAI_CODEX_TOKEN_URL, data)
         resolved = await response if inspect.isawaitable(response) else response
         return resolved
-
-    def _credentials_from_token_response(
-        self, token_data: Mapping[str, Any]
-    ) -> OAuthCredentials:
-        access = token_data.get("access_token")
-        refresh = token_data.get("refresh_token")
-        expires_in = token_data.get("expires_in")
-        if not isinstance(access, str) or not isinstance(refresh, str):
-            raise OAuthError("OpenAI token response missing access or refresh token")
-        if not isinstance(expires_in, int | float):
-            raise OAuthError("OpenAI token response missing expires_in")
-        account_id = extract_openai_account_id(access)
-        if not account_id:
-            raise OAuthError("OpenAI token response missing ChatGPT account id claim")
-        return OAuthCredentials(
-            access=access,
-            refresh=refresh,
-            expires=self._now_ms() + int(expires_in * 1000),
-            account_id=account_id,
-        )
 
     def _start_callback_server(self, state: str) -> OAuthCallbackServer:
         if self._callback_server_factory is not None:
@@ -286,6 +266,22 @@ def build_openai_authorization_url(*, challenge: str, state: str, originator: st
         }
     )
     return f"{OPENAI_CODEX_AUTHORIZE_URL}?{query}"
+
+
+def refresh_openai_oauth_credentials_sync(
+    credentials: OAuthCredentials,
+    *,
+    now_ms: Callable[[], int] | None = None,
+) -> OAuthCredentials:
+    token_data = _post_form_json_sync(
+        OPENAI_CODEX_TOKEN_URL,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": credentials.refresh,
+            "client_id": OPENAI_CODEX_CLIENT_ID,
+        },
+    )
+    return _openai_credentials_from_token_response(token_data, now_ms or _now_ms)
 
 
 def parse_authorization_input(value: str) -> AuthorizationInput:
@@ -424,6 +420,28 @@ def _coerce_credentials(
     if isinstance(credentials, OAuthCredentials):
         return credentials
     return OAuthCredentials.from_mapping(credentials)
+
+
+def _openai_credentials_from_token_response(
+    token_data: Mapping[str, Any],
+    now_ms: Callable[[], int],
+) -> OAuthCredentials:
+    access = token_data.get("access_token")
+    refresh = token_data.get("refresh_token")
+    expires_in = token_data.get("expires_in")
+    if not isinstance(access, str) or not isinstance(refresh, str):
+        raise OAuthError("OpenAI token response missing access or refresh token")
+    if not isinstance(expires_in, int | float):
+        raise OAuthError("OpenAI token response missing expires_in")
+    account_id = extract_openai_account_id(access)
+    if not account_id:
+        raise OAuthError("OpenAI token response missing ChatGPT account id claim")
+    return OAuthCredentials(
+        access=access,
+        refresh=refresh,
+        expires=now_ms() + int(expires_in * 1000),
+        account_id=account_id,
+    )
 
 
 def _optional_str(value: object) -> str | None:
@@ -639,6 +657,7 @@ __all__ = [
     "parse_and_validate_authorization_input",
     "parse_authorization_input",
     "register_oauth_provider",
+    "refresh_openai_oauth_credentials_sync",
     "reset_oauth_providers_for_tests",
     "unregister_oauth_provider",
 ]

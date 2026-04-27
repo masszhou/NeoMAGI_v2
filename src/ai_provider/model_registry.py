@@ -83,6 +83,18 @@ BUILTIN_MODELS: tuple[Model, ...] = (
         max_tokens=16384,
     ),
     _make_model(
+        id="gpt-5.3-codex",
+        name="GPT-5.3 Codex",
+        api="openai-codex-responses",
+        provider="openai-codex",
+        base_url="https://chatgpt.com/backend-api",
+        reasoning=True,
+        input=["text", "image"],
+        cost={"input": 1.75, "output": 14, "cacheRead": 0.175, "cacheWrite": 0},
+        context_window=272000,
+        max_tokens=128000,
+    ),
+    _make_model(
         id="glm-5",
         name="GLM-5",
         api="openai-completions",

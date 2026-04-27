@@ -69,11 +69,16 @@ def _ensure_builtin_apis() -> None:
         return
     from .providers.anthropic import stream_anthropic_messages, stream_anthropic_messages_simple
     from .providers.faux import stream_faux
+    from .providers.openai_codex_responses import (
+        stream_openai_codex_responses,
+        stream_openai_codex_responses_simple,
+    )
     from .providers.openai_completions import stream_openai_completions, stream_openai_completions_simple
     from .providers.openai_responses import stream_openai_responses, stream_openai_responses_simple
 
     register_api("anthropic-messages", stream_anthropic_messages, stream_anthropic_messages_simple)
     register_api("faux", stream_faux)
+    register_api("openai-codex-responses", stream_openai_codex_responses, stream_openai_codex_responses_simple)
     register_api("openai-completions", stream_openai_completions, stream_openai_completions_simple)
     register_api("openai-responses", stream_openai_responses, stream_openai_responses_simple)
     _builtins_registered = True
