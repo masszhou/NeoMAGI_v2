@@ -219,15 +219,19 @@ def _start_response_tool_call(
     item: object,
     state: dict[str, object],
 ) -> None:
-    call_id = str(event_value(item, "call_id") or event_value(item, "id"))
+    item_id = str(event_value(item, "id") or "")
+    call_id = str(event_value(item, "call_id") or item_id)
     index = len(partial.content)
-    state["tool_indexes"][call_id] = index
-    state["tool_json"][call_id] = event_value(item, "arguments", "") or ""
+    arguments = event_value(item, "arguments", "") or ""
+    for alias in {call_id, item_id}:
+        if alias:
+            state["tool_indexes"][alias] = index
+            state["tool_json"][alias] = arguments
     partial.content.append(
         ToolCall(
             id=call_id,
             name=event_value(item, "name", ""),
-            arguments=parse_json_object(state["tool_json"][call_id]),
+            arguments=parse_json_object(arguments),
         )
     )
     stream.push(StreamToolCallStart(contentIndex=index, partial=clone_message(partial)))
@@ -272,10 +276,12 @@ def _handle_response_tool_delta(
     if call_id not in state["tool_indexes"]:
         _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
     text = event_value(event, "delta", "") or ""
-    state["tool_json"][call_id] += text
+    index = state["tool_indexes"][call_id]
+    for alias in _tool_aliases_for_index(state, index):
+        state["tool_json"][alias] = state["tool_json"].get(alias, "") + text
     stream.push(
         StreamToolCallDelta(
-            contentIndex=state["tool_indexes"][call_id],
+            contentIndex=index,
             delta=text,
             partial=clone_message(partial),
         )
@@ -300,6 +306,10 @@ def _handle_response_output_item_done(
     block.name = event_value(item, "name", block.name)
     block.arguments = parse_json_object(event_value(item, "arguments", state["tool_json"].get(call_id, "")))
     stream.push(StreamToolCallEnd(contentIndex=index, toolCall=block, partial=clone_message(partial)))
+
+
+def _tool_aliases_for_index(state: dict[str, object], index: int) -> list[str]:
+    return [alias for alias, value in state["tool_indexes"].items() if value == index]
 
 
 def _handle_response_completed(

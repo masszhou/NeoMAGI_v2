@@ -67,7 +67,7 @@ def test_anthropic_cache_control_rules(monkeypatch) -> None:
 def test_anthropic_payload_marks_system_last_tool_and_last_user() -> None:
     fixture = _json_fixture("anthropic_cache_short")
     expected = fixture["expected"]
-    model = get_model("anthropic", "claude-3-5-haiku-20241022")
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
     payload = build_anthropic_messages_params(
         model,
         _context(),
@@ -81,7 +81,7 @@ def test_anthropic_payload_marks_system_last_tool_and_last_user() -> None:
 
 def test_anthropic_cache_none_forbids_cache_markers() -> None:
     fixture = _json_fixture("anthropic_cache_none")
-    model = get_model("anthropic", "claude-3-5-haiku-20241022")
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
     payload = build_anthropic_messages_params(
         model,
         _context(),
@@ -140,8 +140,7 @@ def test_anthropic_stream_text_and_tool_call() -> None:
 
 def test_anthropic_stream_simple_sets_thinking_budget() -> None:
     async def run() -> None:
-        model = get_model("anthropic", "claude-3-5-haiku-20241022").model_copy(deep=True)
-        model.reasoning = True
+        model = get_model("anthropic", "claude-haiku-4-5-20251001")
         fake = FakeAnthropicClient([{"type": "message_stop"}])
         await stream_simple(
             model,
@@ -150,7 +149,7 @@ def test_anthropic_stream_simple_sets_thinking_budget() -> None:
         ).result()
 
         payload = fake.messages.last_payload
-        assert payload["max_tokens"] == model.max_tokens
+        assert payload["max_tokens"] == 33234
         assert payload["thinking"] == {"type": "enabled", "budget_tokens": 1234}
         assert "metadata" not in payload
 
@@ -159,7 +158,7 @@ def test_anthropic_stream_simple_sets_thinking_budget() -> None:
 
 def test_anthropic_stream_simple_omits_thinking_for_non_reasoning_model() -> None:
     async def run() -> None:
-        model = get_model("anthropic", "claude-3-5-haiku-20241022")
+        model = get_model("anthropic", "claude-haiku-4-5-20251001")
         fake = FakeAnthropicClient([{"type": "message_stop"}])
         await stream_simple(model, _context(), SimpleStreamOptions(client=fake)).result()
         assert "thinking" not in fake.messages.last_payload
@@ -169,10 +168,11 @@ def test_anthropic_stream_simple_omits_thinking_for_non_reasoning_model() -> Non
 
 def test_anthropic_stream_simple_ignores_reasoning_for_non_reasoning_model() -> None:
     async def run() -> None:
-        model = get_model("anthropic", "claude-3-5-haiku-20241022")
+        model = get_model("anthropic", "claude-haiku-4-5-20251001").model_copy(deep=True)
+        model.reasoning = False
         fake = FakeAnthropicClient([{"type": "message_stop"}])
         await stream_simple(model, _context(), SimpleStreamOptions(client=fake, reasoning="low")).result()
         assert "thinking" not in fake.messages.last_payload
-        assert fake.messages.last_payload["max_tokens"] == model.max_tokens
+        assert fake.messages.last_payload["max_tokens"] == 32000
 
     asyncio.run(run())

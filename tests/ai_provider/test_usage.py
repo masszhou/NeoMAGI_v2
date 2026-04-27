@@ -30,7 +30,7 @@ def _assert_usage(actual, expected: dict) -> None:
 
 def test_anthropic_usage_fixture() -> None:
     row = _load("anthropic.json")
-    model = get_model("anthropic", "claude-3-5-haiku-20241022")
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
     _assert_usage(normalize_anthropic_usage(row["raw"], model), row["expected"])
 
 

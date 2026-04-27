@@ -138,14 +138,14 @@ def parse_json_object(text: str) -> dict[str, Any]:
 async def iterate_provider_stream(source: Any) -> AsyncIterator[Any]:
     if inspect.isawaitable(source):
         source = await source
+    if hasattr(source, "__aiter__"):
+        async for event in source:
+            yield event
+        return
     if hasattr(source, "__aenter__"):
         async with source as entered:
             async for event in iterate_provider_stream(entered):
                 yield event
-        return
-    if hasattr(source, "__aiter__"):
-        async for event in source:
-            yield event
         return
     if isinstance(source, list | tuple):
         for event in source:

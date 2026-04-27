@@ -3,9 +3,51 @@ from __future__ import annotations
 import asyncio
 
 from ai_provider.model_registry import get_model
-from ai_provider.providers._shared import initial_message
+from ai_provider.providers._shared import initial_message, iterate_provider_stream
 from ai_provider.streaming import create_assistant_message_event_stream
 from ai_provider.types import StreamDone, StreamTextDelta, StreamTextStart, TextContent
+
+
+class AsyncIterableContext:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    async def __aenter__(self) -> "AsyncIterableContext":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def __aiter__(self):
+        for event in self.events:
+            yield event
+
+
+class AsyncManager:
+    def __init__(self, entered: AsyncIterableContext) -> None:
+        self.entered = entered
+
+    async def __aenter__(self) -> AsyncIterableContext:
+        return self.entered
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def test_iterate_provider_stream_prefers_async_iterator_over_context_manager() -> None:
+    async def run() -> None:
+        source = AsyncIterableContext(["one", "two"])
+        assert [event async for event in iterate_provider_stream(source)] == ["one", "two"]
+
+    asyncio.run(run())
+
+
+def test_iterate_provider_stream_enters_manager_once() -> None:
+    async def run() -> None:
+        source = AsyncManager(AsyncIterableContext(["one"]))
+        assert [event async for event in iterate_provider_stream(source)] == ["one"]
+
+    asyncio.run(run())
 
 
 def test_stream_result_matches_done_message() -> None:
@@ -41,4 +83,3 @@ def test_stream_close_emits_aborted_error() -> None:
         assert result.stop_reason == "aborted"
 
     asyncio.run(run())
-

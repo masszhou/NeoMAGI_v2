@@ -47,16 +47,16 @@ def _make_model(
 
 BUILTIN_MODELS: tuple[Model, ...] = (
     _make_model(
-        id="claude-3-5-haiku-20241022",
-        name="Claude Haiku 3.5",
+        id="claude-haiku-4-5-20251001",
+        name="Claude Haiku 4.5",
         api="anthropic-messages",
         provider="anthropic",
         base_url="https://api.anthropic.com",
-        reasoning=False,
+        reasoning=True,
         input=["text", "image"],
-        cost={"input": 0.8, "output": 4, "cacheRead": 0.08, "cacheWrite": 1},
+        cost={"input": 1, "output": 5, "cacheRead": 0.1, "cacheWrite": 1.25},
         context_window=200000,
-        max_tokens=8192,
+        max_tokens=64000,
     ),
     _make_model(
         id="gpt-4o-mini",

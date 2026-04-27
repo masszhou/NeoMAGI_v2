@@ -37,7 +37,7 @@ def test_opaque_fields_survive_cross_provider_handoff_without_mutating_source() 
         ],
         api="anthropic-messages",
         provider="anthropic",
-        model="claude-3-5-haiku-20241022",
+        model="claude-haiku-4-5-20251001",
         responseId=opaque["responseId"],
         usage=Usage(input=1, output=1, cacheRead=1, cacheWrite=1, totalTokens=4),
         stopReason="toolUse",
@@ -52,7 +52,7 @@ def test_opaque_fields_survive_cross_provider_handoff_without_mutating_source() 
     assert cloned.content[2].text_signature == opaque["textSignature"]
 
     openai_model = get_model("openai", "gpt-4o-mini-chat-completions")
-    anthropic_model = get_model("anthropic", "claude-3-5-haiku-20241022")
+    anthropic_model = get_model("anthropic", "claude-haiku-4-5-20251001")
     openai_payload, _ = build_openai_completions_params(openai_model, clone_context(context), StreamOptions())
     anthropic_payload = build_anthropic_messages_params(anthropic_model, clone_context(context), StreamOptions())
 

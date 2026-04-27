@@ -43,8 +43,8 @@ OPENAI_RESPONSES_TEXT_TOOL_EVENTS = [
         "type": "response.output_item.added",
         "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "read"},
     },
-    {"type": "response.function_call_arguments.delta", "call_id": "call_1", "delta": "{\"path\":\""},
-    {"type": "response.function_call_arguments.delta", "call_id": "call_1", "delta": "README.md\"}"},
+    {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": "{\"path\":\""},
+    {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": "README.md\"}"},
     {
         "type": "response.output_item.done",
         "item": {
@@ -147,6 +147,7 @@ def test_openai_responses_stream_text_and_tool_call() -> None:
         assert result.response_id == "resp_1"
         assert result.stop_reason == "toolUse"
         assert result.content[0].text == "hi"
+        assert len(result.content) == 2
         assert result.content[1].arguments == {"path": "README.md"}
         assert result.usage.input == 13
         assert fake.responses.last_payload["prompt_cache_key"] == "session-1"
