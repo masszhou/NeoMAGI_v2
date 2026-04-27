@@ -12,7 +12,7 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 - Governing decisions: ADR-0009, ADR-0010, ADR-0013, ADR-0014, ADR-0015
 - 验收来源：plan §完成标准（acceptance）
 
-## W0–W8 状态
+## W0-W8 状态
 
 | W | 工作项 | 状态 | 关键产出 |
 | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 | W4 | Interactive layer | done | `src/cli/interactive/{__init__,app,event_router,tool_renderer_registry}.py` + 9 个 `components/*.py`（user / assistant / tool_result / tool_execution / bash_execution / custom_message / branch_summary / compaction_summary / status / message_list）；`InteractiveController` 公开 event plane (`dispatch_event`) + control plane (`handle_abort` / `inject_user_input` / `simulate_resize` / `exit` / `open_overlay`)；`EventRouter.route` 处理 15 + 12 帧 + lazy 创建 active assistant + 未知 type 抛 `RuntimeError("contract violation: ...")`；`ToolRenderContext` 本地 dataclass（无 `truncated` 字段，因 `ToolExecutionEndEvent` 协议不含），generic renderer 输出 `duration_ms = ended - started` |
 | W5 | Mock playback harness + 4 条新 fixture | done | `src/cli/interactive/playback.py` `PlaybackHarness`（`play_async` / `play_sync`）只走 controller 公开两个面；sidecar `version=1` / `delays_ms` 等长校验 / `inject` 支持 `abort` / `user_input` / `resize` / `quit`；新增 `tests/fixtures/pi_compat/{assistant_thinking_delta,compaction,abort_during_stream,abort_during_tool}/events.jsonl`（其中后三条同时新增 `playback.json`），全部经 `AssistantMessageEventAdapter` / `AgentSessionEventAdapter` / `AgentEventAdapter` round-trip |
 | W6 | Slash command 注册 | done | `src/cli/slash_commands/{__init__,registry,new,quit,hotkeys,play}.py`；`SlashCommandRegistry` 注册 21 条 Pi 内建命令（其中 `/new` / `/quit` / `/hotkeys` 实装，其余 18 条 stub 标注 `M{6,7,8,9,10}`）+ M1 专属 `/play`；`autocomplete_items()` 暴露全部 22 条；提交语义集成在 `InteractiveController._on_editor_submit` |
-| W7 | 测试套件 + negative test | done | `tests/tui/test_{terminal,stdin_buffer,renderer,width,lifecycle,editor}.py`（substrate 47 用例）+ `tests/cli/interactive/test_{renderers,event_router,playback_harness}.py`（业务 38 用例）；含 `Component.render(width)` overflow negative case、`abort_during_stream` / `abort_during_tool` partial 保留断言、unknown event type → `RuntimeError`、`src/tui` 静态扫描禁止 import 协议模块、`src/tui` + `src/cli/interactive` 静态扫描禁止 `BaseModel` 派生 |
+| W7 | 测试套件 + negative test | done | `tests/tui/test_{terminal,stdin_buffer,renderer,width,lifecycle,editor}.py`（substrate 47 用例）+ `tests/cli/interactive/test_{renderers,event_router,playback_harness}.py`（业务 38 用例）；含 `Component.render(width)` overflow negative case、`abort_during_stream` / `abort_during_tool` partial 保留断言、unknown event type -> `RuntimeError`、`src/tui` 静态扫描禁止 import 协议模块、`src/tui` + `src/cli/interactive` 静态扫描禁止 `BaseModel` 派生 |
 | W8 | 进度归档 + closeout | done | `dev_docs/progress/progress.md` 追加；本文档；`just md-doc-header` 已对新 markdown 文件应用 |
 
 ## 验收检查
@@ -32,9 +32,9 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 | --- | --- | --- |
 | 1 | Native ANSI substrate 就位 + `Component.render` 超宽 negative case + `wcwidth` 入 `pyproject.toml` + `just lint` green + `complexity_guard` 0 regression | ✅ `tests/tui/test_{terminal,stdin_buffer,renderer,width}.py` green；`uv sync` 安装 `wcwidth==0.6.0`；`just lint` green，`target=13 / block=0 / regressions=0` |
 | 2 | `uv run neomagi` / `python -m cli` 双入口；`--playback` / `--print` / `--help` 三 flag 占位；`--print` 返回 "not implemented in M1" | ✅ `src/cli/__main__.py` + `cli/cli_args.py`；`pyproject.toml [project.scripts] neomagi = "cli.__main__:main"` |
-| 3 | 终端可恢复（5 条退出路径） | ✅ `tests/tui/test_lifecycle.py` 覆盖正常退出 / 异常退出 / SIGINT；macOS Terminal / iTerm2 / xterm 真机验证留 closeout 备注（CI 无 PTY，不可全自动化） |
+| 3 | 终端可恢复（5 条退出路径） | ✅ `tests/tui/test_lifecycle.py` 覆盖正常退出 / 异常退出 / SIGINT；macOS Terminal / iTerm2 / xterm 真机验证详见手测报告 |
 | 4 | Editor 输入语义齐全 + 中文 caret 列号匹配 | ✅ `tests/tui/test_editor.py` 8 用例 |
-| 5 | Renderer 套件全 green（架构 line 959–971 8 行） | ✅ `tests/cli/interactive/test_renderers.py` 12 用例 |
+| 5 | Renderer 套件全 green（架构 line 959-971 8 行） | ✅ `tests/cli/interactive/test_renderers.py` 12 用例 |
 | 6 | Event router 在 7 条 M1 fixture 上 100% green；裸 `AssistantMessageEvent` 走通 text + thinking；伪造未知 type 触发 `RuntimeError` | ✅ `tests/cli/interactive/test_event_router.py` 12 用例 |
 | 7 | Playback harness 7 条 fixture 全部播放成功；abort_during_stream / abort_during_tool 满足 negative test | ✅ `tests/cli/interactive/test_playback_harness.py` 14 用例（含 abort 后 partial 保留 + editor 复位 idle 断言） |
 | 8 | Slash command 占位完整：autocomplete 列表覆盖 21 条 Pi 内建命令（含 [stub] 标注）；`/new` / `/quit` / `/hotkeys` / `/play` 真正可执行 | ✅ `cli.slash_commands.PI_BUILTIN_COMMANDS` 共 21 条 + `/play`，`autocomplete_items()` 长度 22 |
@@ -53,14 +53,14 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 | P1-2 | `--playback` 在 `_app.run()` 前同步 play_sync，事件全部在第一帧前发完，sidecar 延迟被忽略且永不退出 | 新增 `_start_playback_thread` 后台线程跑 `play_sync(sleep=True)`；播完调 `controller.exit()`；主循环正常 tick 显示流式渲染 | `tests/cli/interactive/test_controller_regressions.py::test_background_playback_thread_calls_controller_exit_when_done` + `::test_play_sync_with_sleep_honours_delays`；`perl -e 'alarm 6; exec @ARGV' uv run neomagi --playback ...` 6 条 fixture（assistant_text_delta / assistant_thinking_delta / parallel_tools / compaction / abort_during_stream / abort_during_tool）全部 exit=0 |
 | P1-3 | Raw mode 下 Ctrl+C 是 KeyEvent 不是 SIGINT，global hook 总是转 abort，导致永远退不出 | `_global_input_hook`：active 流/工具或 editor 非 idle 时 abort，否则 `self.exit()` | `tests/cli/interactive/test_controller_regressions.py::test_ctrl_c_when_idle_exits_the_app` + `::test_ctrl_c_during_streaming_aborts_instead_of_exiting` |
 | P1-4 | 单 ESC 永远 buffer 不 emit，Esc-to-abort 不可达 | `StdinBuffer.drain` 增加 `_lone_esc_pending` 状态机：drain 看到 buffer 仍为单 `\x1b` 时挂起；下一次 drain 仍为单 `\x1b` 就 emit `KeyEvent("Esc")`。`feed*` 收到任何字节立即清除挂起标志，避免误吞跨 read 的 CSI 序列 | `tests/tui/test_stdin_buffer.py::test_lone_esc_emits_after_one_idle_drain` + `::test_lone_esc_is_not_emitted_when_csi_arrives_in_next_chunk` |
-| P2 | `_focused_row_offset` 只识别 root/overlay，editor 嵌套在 `_RootComponent` 内永远拿不到 offset → cursor 被隐藏 | `TUIApp.set_focus_offset_provider(callback)` 让 controller 注入嵌套定位器；`InteractiveController._focus_offset_provider` 把 editor 焦点翻译成 `len(status.render) + len(messages.render)` | `tests/cli/interactive/test_controller_regressions.py::test_focus_offset_provider_locates_nested_editor_cursor` |
+| P2 | `_focused_row_offset` 只识别 root/overlay，editor 嵌套在 `_RootComponent` 内永远拿不到 offset -> cursor 被隐藏 | `TUIApp.set_focus_offset_provider(callback)` 让 controller 注入嵌套定位器；`InteractiveController._focus_offset_provider` 把 editor 焦点翻译成 `len(status.render) + len(messages.render)` | `tests/cli/interactive/test_controller_regressions.py::test_focus_offset_provider_locates_nested_editor_cursor` |
 
 ## 偏离与原因
 
 - `tests/tui/test_terminal.py` 不覆盖真实 PTY 下的 `stty -a` cooked-mode 验证，因为 CI 没有 PTY。lifecycle 路径（`enter` / `exit` / 异常 trailer / signal handler）通过 `tests/tui/test_lifecycle.py` 在非 TTY 抽象上验证；macOS Terminal / iTerm2 / xterm 实机验证按 ADR-0015 §验收要求由开发者本机回归，不阻塞 acceptance。
 - `tui.editor.Editor.cursor_marker` 使用上一次 `render(width)` 缓存的 `_last_body_width` 计算 caret 列；这是因为 `Component.cursor_marker()` 接口不接受 width 参数，由 `TUIApp` 在每帧 render 之后再读取 marker，所以缓存路径是安全的。
 - Keyboard protocol 探测（W0 `terminal.py`）假设 level 1 默认开启，未做 DA / DCS 真实响应解析；plan 已标注 "best-effort"，对不支持终端的降级在 `keymap.py` 备注。
-- `--print` 模式仅返回 stub 信息，没有真实 provider 调用——属于 plan §Out of scope（M9/M10）。
+- `--print` 模式仅返回 stub 信息，没有真实 provider 调用，属于 plan §Out of scope（M9/M10）。
 - `src/cli/extensions/` 在 M1 期间未被改动；M8 才接入。
 - 既有 26 fixture 目录中除 M1 涉及的 7 条外，其余 18 条仍由 `tests/test_fixture_round_trip.py` 仅做 README 存在性校验，不在 M1 router/playback 范围。
 
@@ -93,502 +93,47 @@ doc_id_assigned_at: 2026-04-26T00:46:10+02:00
 | 5 | `/quit` 已覆盖，但 `/new` `/hotkeys` `/play` 真实 dispatch 没测 | 新增 5 条 inject_input 端到端：`/new` 清空 messages + 复位 idle、`/hotkeys` 弹 `SettingsList` 且行覆盖 `default_bindings()`、`/play <fixture>` 真的跑 harness、`/play 不存在的` 推 error 通知、未知命令推 warning 通知 |
 | 6 | `test_each_fixture_plays_to_completion` 的 "至少一个组件" 是弱 smoke | 移除整个 parametrize（7 用例），保留同文件已有的 7 条具名行为断言（hello world 文本、tool name、aborted flag、compaction summary…）；用例数下降换覆盖质量上升 |
 
-附加 bug 收获：subprocess smoke 暴露了 `--playback` 在 fixture 加载失败时仍会挂起 —— 因为 `_start_playback_thread` 在 except 分支调 `app.exit()`，而 `app.run()` 一开头就 `self._running = True` 把它覆盖掉。改动 `_start_playback_thread` 返回 `bool`，失败时 `controller.run()` 直接跳过 `app.run()` 不进 loop。新增 `test_playback_unknown_fixture_does_not_hang` 用例锁定。
+附加 bug 收获：subprocess smoke 暴露了 `--playback` 在 fixture 加载失败时仍会挂起，因为 `_start_playback_thread` 在 except 分支调 `app.exit()`，而 `app.run()` 一开头就 `self._running = True` 把它覆盖掉。改动 `_start_playback_thread` 返回 `bool`，失败时 `controller.run()` 直接跳过 `app.run()` 不进 loop。新增 `test_playback_unknown_fixture_does_not_hang` 用例锁定。
 
-复杂度治理：本轮把 `.complexity-baseline.json` 重新刷过 —— W7 提交时新测试文件还未 tracked，complexity_guard 通过 `git ls-files` 扫描漏掉了它们；commit 后这些文件进入 ratchet 视野，于是出现 33 条 "block" 级 finding（`EventRouter.route` 19 分支、`AssistantMessageComponent.apply` 12 分支、parser/renderer/markdown 等都在合理范围）。按 plan §risk "complexity_guard 抖动" 段落要求，此处用 `just complexity-baseline` 锁定 M1 floor，后续 PR 自查 ratchet。
+复杂度治理：本轮把 `.complexity-baseline.json` 重新刷过。W7 提交时新测试文件还未 tracked，complexity_guard 通过 `git ls-files` 扫描漏掉了它们；commit 后这些文件进入 ratchet 视野，于是出现 33 条 "block" 级 finding（`EventRouter.route` 19 分支、`AssistantMessageComponent.apply` 12 分支、parser/renderer/markdown 等都在合理范围）。按 plan §risk "complexity_guard 抖动" 段落要求，此处用 `just complexity-baseline` 锁定 M1 floor，后续 PR 自查 ratchet。
 
 测试结果：`pytest tests/` 共 **170 用例 green**；`just lint` green，`complexity_guard regressions=0`（基准刷新后）。
 
-## 手测发现：macOS Terminal.app 下 Ctrl+C 无效（2026-04-26）
+## 手动测试报告（已拆分）
 
-按 `dev_docs/user_tests/p1_m1_manual_test_plan.md` §2.3 在 macOS Terminal.app
-里测试时，Ctrl+C 完全没反应（按下后键入 `echo OK` 也不回显，能确认进程
-没退）。但 `pty.fork()` 起的裸 PTY 测试里 Ctrl+C 立即 exit=0。差异定位到
-`StdinBuffer` 的两个解析漏洞，都跟"我们主动协商了 keyboard protocol，但
-没考虑终端真的接受时会发的替代编码"有关。
+P1-M1 手动测试期间发现的 7 个真实 TUI/terminal bug、修复点、复测结果和最终自动化门禁已拆分到 `dev_docs/logs/p1_m1_manual_tui_smoke_findings.md`。拆分后本文档只保留里程碑 closeout、评审修复和后续移交信息。
 
-### 根因
-
-`TerminalSession.enter()` 进入 raw mode 时无条件下发：
-
-- `\x1b[>4;2m` —— 开 xterm `modifyOtherKeys=2`
-- `\x1b[>1u` —— 开 Kitty keyboard protocol level 1
-
-落地在 macOS Terminal.app 上时，这两个请求至少有一个被部分接受（具体哪
-一个尚不能确证 —— ADR-0015 §影响段已写明 M1 不做 DA 探测，按 best-effort
-处理）。结果终端不再用裸字节 `\x03` 表示 Ctrl+C，而是用以下两种 CSI 编码
-之一：
-
-| 编码 | 含义 | 解析器原行为 |
-| --- | --- | --- |
-| `\x1b[99;5u` | Kitty/CSI-u：code=99 (`c`) + modifier=5 (Ctrl) | `_parse_csi_u` 吐 `KeyEvent(key="Ctrl+c")` —— 小写 `c`，与 keymap binding `"Ctrl+C"` / `_global_input_hook` 的 `event.key == "Ctrl+C"` **大小写不匹配 → silently miss** |
-| `\x1b[27;5;99~` | xterm modifyOtherKeys=2：code=27 占位，第三参才是 ASCII | `~` 分支查 `_TILDE_NAMES["27"]` 返回 None → **直接丢弃事件** |
-
-两条路径都让 Ctrl+C 落不到 hook，即使 `\x03` 同时被发出（实际两种模式
-互斥），也走不同分支。Editor 本身的 keymap 同样命中不了，所以连 Confirm
-overlay 都不会弹。这是为什么截图里 "Ctrl+C 之后没反应" + 按 Enter 仍能
-触发 `M1 mock — no agent runtime` 通知（说明进程还活着、只是 Ctrl+C 的
-事件丢了）。
-
-### 解决办法（commit `72335a9 fix(tui/stdin): ...`）
-
-- `_parse_csi_u`：当 modifier 含 `Ctrl` 且 code 落在 a–z 范围（97–122），
-  先 `ch.upper()` 再走 `_format_key`。这样 `\x1b[99;5u` 现在吐
-  `KeyEvent(key="Ctrl+C")`，与裸字节 `\x03` 路径产物一致。
-- `~` 分支：识别 `code == "27"` + 三段 params 的 modifyOtherKeys=2 替代
-  形式，第三参当 ASCII 还原为 `chr(code)`，复用同一套 Ctrl+letter 大写
-  化逻辑后 emit。`\x1b[27;5;99~` 现在也吐 `KeyEvent(key="Ctrl+C")`。
-
-两条 regression test（`test_csi_u_ctrl_letter_is_normalised_to_uppercase`
-+ `test_csi_27_modify_other_keys_form_for_ctrl_c`）锁定。同 commit 还落了
-`scripts/diag_keys.py` —— 8 秒 raw-mode + 同协商序列的字节探针，落盘到
-`/tmp/neomagi-diag-keys.log`，未来再有"某 Ctrl+X 在某终端没反应"报告时
-让用户先跑这个出实证，而不是猜测。
-
-### Acceptance 影响
-
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §2.3 用户复测：`uv run
-  python -m cli` → Ctrl+C → `echo OK` 回显出现，**Ctrl+C 一次成功退出**。
-- M1 acceptance #3「终端可恢复」原本只覆盖 5 条退出路径的 termios 还原，
-  没覆盖"raw-mode 下 Ctrl+C 必须能到 hook"这条隐含前提；本轮把它显式加
-  到 stdin parser regression suite 里，避免后续 protocol negotiation 调
-  整再次回退。
-- 自动测试 167 → **174 passed**（W7 + 评审后回归 + 测试质量轮 + parser
-  case 修复 + CSI-27 form），`just lint` green，`complexity_guard
-  regressions=0`。
-
-## 手测发现：双 Esc 退化为两次单 Esc（2026-04-26）
-
-按 `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.9 在 macOS Terminal.app
-上测 "快速按 Esc Esc 应弹 `tree navigation not implemented` 黄色通知"，
-实测拿到的是 §3.8 单 Esc 的 `[idle] aborted` —— 两次按键各自走 ABORT 路径，
-`Esc Esc` 复合事件根本没成型。
-
-### 根因
-
-P1-4 修单 Esc 不可达时引入的"flush after one idle drain"逻辑节奏太快：
-`StdinBuffer.drain()` 看到 `_buffer == "\x1b"` 时只挂起 1 个 drain tick
-（≈ 12 ms 在 TUIApp 主循环节拍下）就 emit 单 `Esc`。但人类双击 Esc 的反射
-间隔在 100–250 ms 量级，第一下早就被当作单 Esc 提交（→ ABORT → footer
-`aborted`），第二下到达时 buffer 是空的，又被当作另一次单 Esc。`Esc Esc`
-复合永远没机会被 `_parse_escape` 折叠。
-
-### 解决办法（commit `<本提交>`）
-
-把 lone-ESC 的"挂起 1 次 drain"改成**基于墙钟的 debounce**：
-
-- `StdinBuffer.__init__` 新增 `lone_esc_timeout: float = 0.10` + `clock`
-  注入位（默认 `time.monotonic`）。100 ms 对齐 xterm ESC-key 约定，既给
-  人类双击 Esc 留够时间，又不把单 Esc 拖到明显发滞。
-- `drain()` 抽出 `_maybe_flush_lone_esc(events)` helper：buffer 仍是单
-  `\x1b` 时记下首次出现时刻；后续 drain 只有在墙钟差 ≥ timeout 才 emit
-  单 `Esc`。`feed`/`feed_str` 任何字节到达都重置 `_lone_esc_seen_at`，
-  包括第二个 `\x1b` —— 此时 `_parse_escape` 在主循环里直接折叠成
-  `KeyEvent("Esc Esc")`。
-- 测试改用注入 fake clock：`test_lone_esc_emits_after_debounce_window`
-  断言"在 50ms drain 不发，0.5s drain 才发"；新增
-  `test_slow_double_esc_still_collapses_to_single_event` 锁定本次回归
-  ——"feed Esc → 70ms 后 feed Esc → 单次 drain 出 `Esc Esc`"。
-
-### Acceptance 影响
-
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.9 同步更新文案：
-  说明 debounce 窗口是 100 ms、列出"看到 aborted 是因为按得太慢"vs
-  "完全无反应是真 bug"两种失败模式判定。§3.8 也加上"等约 100 ms"的
-  debounce 提示，避免读者误以为单 Esc 应该零延迟。
-- M1 acceptance #4「输入语义齐全」原本只挂在自动 inject_input 测试上
-  （它跳过物理时间），物理 debounce 的回归现在落到 stdin parser 单测
-  里靠 fake clock 锁定，未来调整 timeout 不会偷偷退化。
-- 自动测试 174 → **175 passed**；`just lint` green、`complexity_guard
-  regressions=0`（drain 拆出 helper 后维持原有阈值）。
-
-## 手测追加：双 Esc 仍不复合 + "aborted" 永久卡 footer（2026-04-26）
-
-上一轮调宽 lone-ESC debounce 到 100ms 后，手测 §3.9 反馈"无论手速快慢，
-两次 Esc 都各自变成 abort"。同时观察到一条衍生 bug：footer 一旦显示
-`aborted` 就再也回不去 `[idle] M1 mock — ...`。
-
-### 根因 1：CSI-encoded Esc 绕开了字节层 debounce
-
-P1-M1 §"测试质量轮"加的 debounce 只挡在 `_parse_escape` 看到孤立字节
-`\x1b` 的路径上。但 `TerminalSession.enter()` 下发的
-`\x1b[>4;2m` / `\x1b[>1u` 协商一旦被终端接受（macOS Terminal.app 实测
-确认），Esc 会被编码成完整的 CSI 序列：
-
-| 编码 | 来源 | 解析路径 |
-| --- | --- | --- |
-| `\x1b[27u` | Kitty / CSI-u 协议 | `_parse_csi_u` 立刻 emit `KeyEvent("Esc")` |
-| `\x1b[27;1;27~` | xterm modifyOtherKeys=2 替代形式 | `~` 分支需要新增名称映射（原本 `32 < ch_code < 127` 把 ASCII 27 = ESC 滤掉） |
-
-无论哪条，事件**不经过字节层 debounce**：每次 Esc 都立刻 emit、立刻走
-ABORT。第二次 Esc 到来时第一次早已被消化，永远凑不成 `Esc Esc`。
-
-### 根因 2：footer 没有 TTL，"aborted" 永久挂死
-
-`InteractiveController.handle_abort()` 直接 `editor.set_footer("aborted")`。
-Editor 的 footer 是 plain 字符串，没有过期/复位机制，下一次 render 也只是
-重新画原值。用户后续无论键入还是 `/new`，这个文案都不会消失，会让人误以为
-"系统永久 stuck 在 aborted 状态"。
-
-### 解决办法（commit `<本次>`）
-
-#### Esc gesture 提到事件层
-
-- `StdinBuffer.__init__` 增 `_pending_esc_at` 状态字段；默认 timeout 调到
-  `0.20s`（200 ms gesture window，覆盖典型人类双击节奏 100–250 ms）；保留
-  字节层 `_PARTIAL_CSI_WINDOW = 30 ms` 用于跨 read 的 partial-CSI 容忍。
-- `drain()` 末尾追加 `_compose_esc_gestures(raw)`：任何来源的 `KeyEvent("Esc")`
-  都先入 pending；下一次 Esc 到达就 fold 成 `KeyEvent("Esc Esc")` 一并
-  emit；其他事件到来或 timeout 触发时 flush 单 Esc。这样无论字节路径
-  还是 CSI-u / modifyOtherKeys 路径，复合器都能命中。
-- `_csi_27_alt_form` 新增 helper：把 `\x1b[27;<mod>;<code>~` 中 ASCII
-  8/9/13/27/32/127 这些命名控制码也映射回 `Backspace` / `Tab` / `Enter` /
-  `Esc` / `Space` / `Backspace`，否则 ASCII 27 = ESC 会被 `32 < ch_code <
-  127` 滤掉，整个 modifyOtherKeys=2 路径上的 Esc 都拿不到。
-
-新增三条回归用例（fake clock 注入，全确定性）：
-- `test_csi_encoded_esc_gesture_composes_via_event_layer`：两次
-  `\x1b[27u` 100 ms 内 → `["Esc Esc"]`。
-- `test_csi_27_modifyotherkeys_esc_also_composes`：两次
-  `\x1b[27;1;27~` 150 ms 内 → `["Esc Esc"]`。
-- `test_single_csi_encoded_esc_flushes_after_gesture_window`：单次
-  CSI-u Esc + 500 ms 后 drain → `["Esc"]`。
-
-#### Abort 不再写 footer，改推 status 通知
-
-`handle_abort` 删掉 `editor.set_footer("aborted")`，改为
-`status.push_notification("aborted", level="info", ttl_seconds=3.0)`。
-Status 区已经有 TTL 自动淘汰，3 秒后通知自然消失，editor footer 维持
-`[idle] M1 mock — pass --playback or use /play` 不变。
-
-`tests/cli/interactive/test_controller_regressions.py` 里两条断言相应
-更新：`test_ctrl_c_during_streaming_aborts_instead_of_exiting` 改成断
-status 通知文本含 "abort"；`test_esc_closes_autocomplete_before_falling_
-through_to_abort` 改成断 status 通知里 *没有* abort。
-
-### Acceptance 影响
-
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.8 / §3.9 同步：
-  说明单 Esc 期望看到的是 status 区青色 `aborted` 瞬时通知（不是 footer
-  永久变化）；§3.9 列出"误把单 Esc 当双 Esc"的失败模式判定。
-- M1 acceptance #4 物理回归现在分两层覆盖：字节层（`test_lone_esc_*` /
-  `test_slow_double_esc_*`）+ 事件层（`test_csi_*_esc_*`），任一路径回退
-  都会断。
-- 自动测试 175 → **178 passed**；`just lint` green、`complexity_guard`
-  re-baseline 后 regressions=0（`_csi_27_alt_form` 拆出独立 helper 维持
-  阈值不变）。
-
-## 手测追加：Status 通知 TTL 不生效（2026-04-26）
-
-§3.8 单 Esc 改成走 status 通知后，手测反馈"青色 `aborted` 三秒后不消失，
-还是永久挂在屏幕上"。
-
-### 根因
-
-`StatusComponent._alive_notifications()` 只在 `render()` 被调用时过滤过期
-通知，但 `TUIApp` 主循环是**事件驱动**的：3 秒后 TTL 到期，没有任何输入
-事件，loop 在 `time.sleep(0.012)` → 没有 `_consume_render_request` → 不
-重画。直到下一次用户键入触发 render 才会过滤掉过期项。视觉上等于"永久挂
-住"。
-
-同类问题潜在影响：未来 `Loader` spinner、`ToolExecutionComponent` 的
-duration 字段更新都需要被动唤醒，否则会观感凝固。
-
-### 解决办法（commit `<本次>`）
-
-- `TUIApp` 增 `_wake_at: list[float]` 队列 + `schedule_wake(when)` 公开
-  方法 + `_check_wakeups()` helper。主循环和 `step()` 在每次 dispatch 之
-  后都调 `_check_wakeups`：到期的 wake-up 转换为 `_render_requested = True`
-  并从队列移除，紧接着 `_draw()` 就会走 `render()` → `_alive_notifications`
-  自动剔除。
-- `StatusComponent` 增 `attach_wake_scheduler(callback)`；
-  `push_notification` 在登记通知时把 `expires_at + 0.05` 推给 callback
-  （tiny buffer 保证唤醒发生**在**过期之后，render 一次性看到没活的通知）。
-- `InteractiveController.bootstrap()` 调
-  `self._status.attach_wake_scheduler(self._app.schedule_wake)` 接通。
-
-回归测试 `test_status_notification_expires_via_scheduled_wake` 用
-`monkeypatch` 注入 fake `time.monotonic`：push 通知 → 断言 `_wake_at`
-非空 → 推进 fake clock 越过 TTL → `app.step()` → 断言 `_wake_at` 已被
-消费、`status.render()` 输出不再含通知文本。
-
-### Acceptance 影响
-
-- 任何使用 `push_notification(ttl_seconds=...)` 的路径（abort、playback
-  完成、unknown command、stub command 等）的 TTL 现在真的生效。
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §3.8 的"3 秒后自动消失"
-  期望从设计声明变成可观测事实。
-- 自动测试 178 → **179 passed**；`just lint` green、`complexity_guard`
-  re-baseline 后 regressions=0（baseline fingerprint 是行号锚定，
-  `bootstrap` 内多了一行让 `_on_editor_action` 行号下移触发 false-positive
-  regression，refresh 一次即可）。
-
-## 手测追加：Tab 进 picker 后视觉无感（2026-04-26）
-
-§4.4 反馈"Tab 后系统好像锁了，什么键都没用，只有 Esc 能退出"。PTY 复现
-确认 Tab **确实**把焦点和 hardware cursor 都从 editor 行 (`(1,5)`) 移到
-了 selector 选中行 (`(4,3)`) —— 但 macOS Terminal 默认 cursor 太弱
-（细横线 / 小方块），用户根本看不出焦点移到 picker 里了，于是按 `↑↓`
-（只有 1 个 `/quit` 候选时不动）、按字母（Selector 不消费）一律"没反应"，
-直到按 Esc 关掉 overlay 才恢复"正常"。
-
-### 根因
-
-`Selector.render_body` 不论 focused / unfocused 渲染完全一致：title 灰色，
-选中行只有一个 `▶` 指示。focus 状态唯一可见的痕迹是 `cursor_marker` 让
-hardware cursor 移过去——这在很多终端配置下根本不显眼。同时 `Component`
-基类没有"我是不是当前焦点"的状态字段，render 时也无从知晓。
-
-### 解决办法（commit `<本次>`）
-
-- `Component` 增 `self.focused: bool` 字段。
-- `TUIApp.set_focus(component)` 维护这个字段：把旧 focus 的 `focused`
-  置 `False`，新 focus 置 `True`，再 `request_render()`。
-- `Selector.render_body` 用 `self.focused`：
-  - focused=True 时 title 加粗青色 + 追加 `[active — arrows / Enter / Esc]`
-    提示词。
-  - 选中行套 inverse video（`\x1b[7m...\x1b[0m`）—— 前景背景对调，任何
-    终端都看得清。
-  - focused=False 时和原来一样，灰 title + `▶` 指示。
-
-回归测试 `test_tab_moves_focus_into_picker_then_enter_inserts_back` 加断言：
-- Tab 后 `selector.focused is True`、`editor.focused is False`。
-- selector.render(80) 输出含 `[active`。
-- 输出含 `\x1b[7m`（inverse video escape）。
-- Enter 选中后焦点回 editor，`editor.focused is True`、selector 关。
-
-### Acceptance 影响
-
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §4.4 重写期望，列出
-  "title 变青色加粗 / 选中行反色"作为视觉判定，并加失败模式表格区分
-  "focus 没切" vs "Selector 不消费当前键"。
-- 自动测试 179 passed（数量不变，强化既有 §4.4 用例）；`just lint`
-  green、`complexity_guard regressions=0`。
-
-## 手测追加：消息列溢出从底部裁剪导致 editor 不可见（2026-04-26）
-
-§4.9 反馈"`/play` 之后每次都像重新刷新，没有从历史继续往下走"。直接测
-`controller.messages.children` 显示消息**确实**在累加（5 条不同 fixture
-后有 6 个 component），但 raw frame trace 显示终端 30 行 / 内容 36 行时，
-`_compose_frame` 用 `lines[: self._rows]` **从底部**裁掉超出部分 —— editor
-的 `>` 行和最新的几条消息都消失了，可视区只剩老内容。用户看到的"刷新感"
-实际是"editor 和最新消息都被裁出屏幕外，剩下的是上次画过的老 frame 区域"。
-
-### 根因
-
-`TUIApp._compose_frame` 用 `lines[: self._rows]` 简单截断，没有区分内容
-角色。message column 在底部，editor 也在底部（root 输出顺序：status →
-messages → editor）—— 一裁就把 editor 也带走了。
-
-### 解决办法（commit `<本次>`）
-
-把 root 的渲染改成**高度感知**的三段布局：
-
-- `_RootComponent.render_with_height(width, height)`：先 render status（顶
-  端 pin）+ editor（底端 pin），然后 messages 拿剩下的预算（`height -
-  status_rows - editor_rows`）；message 列超出预算时**从顶部裁掉**最老的
-  行，最新消息保留在底端，editor 永远可见。`_last_visible_msg_rows` 缓存
-  实际显示的消息行数。
-- `_RootComponent.editor_offset(width)` 返回 `len(status) +
-  _last_visible_msg_rows`，给 cursor 定位用 —— editor 真实落在裁剪后的
-  组合 frame 第几行。
-- `TUIApp._compose_frame` 检测 root 是否有 `render_with_height`，有就传可用
-  高度（`rows - overlay_rows`）调它；保留兜底 `lines[-self._rows:]` 让
-  非 height-aware root 或超大 overlay 也不至于把 editor 裁掉。
-- `InteractiveController._focus_offset_provider` 改读 `self._root.editor_offset`
-  而不是直接 `len(messages.render(width))`，否则 cursor 仍会按"未裁剪"
-  位置算，落到裁剪掉的旧消息行上。
-
-回归测试 `test_messages_overflow_clips_oldest_keeps_editor_visible`：
-设 12 行小终端 → 跑 4 次 `/play assistant_text_delta` → 断言 4 个组件都
-进了 model；`_compose_frame` 输出长度等于终端高度；editor 的 `>` 行**仍
-在 frame 内**；`_compose_cursor` 的位置等于 root.editor_offset(width)+1
-（即落在 editor 行）。
-
-### Acceptance 影响
-
-- 任何 message-heavy 场景（多条 `/play`、未来真 agent 多轮对话、长
-  `parallel_tools` 输出）editor 都会保持可见，最新消息也保留在屏幕底端。
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §4.9 加两段说明：
-  (1) 重复跑同一 fixture 视觉上像 "刷新" 是因为输出文字一模一样，换不同
-  fixture 就能看到堆叠；(2) 消息超过终端高度时最老的从顶部滚走，editor
-  和 status 永远可见，M1 没有 in-app 滚动（要 M6 session manager 才接历史
-  导航）。
-- 自动测试 179 → **180 passed**；`just lint` green、`complexity_guard`
-  re-baseline 后 regressions=0。
-
-## 手测追加：abort_during_tool 视觉像"完成后再 abort"（2026-04-26）
-
-§5.3（手测说明书 §4.9 表格里的 `/play abort_during_tool` 一行）反馈
-"看到的是 tool 走完整 result + 最后追加 `[aborted]`，不像是中途中断"。
-确认 fixture 设计本身不对，加上 renderer 也把 abort 后的 tool 当成
-"已结束"在画。
-
-### 根因（两层耦合）
-
-1. **Fixture**：`tests/fixtures/pi_compat/abort_during_tool/events.jsonl`
-   原本含三个事件：start → update（partial）→ **end** with
-   `{"content":[...,"text":"aborted by user"],"isError":true}`。
-   playback inject 在 update 之后触发 abort，但 end event 仍然紧接着到达。
-   结果：组件先收到 `tool_execution_end` 走 `end()` → 设置 `_result`、
-   `_is_error=True`、`_ended_at_ms`；然后 `mark_aborted()` 把 `_aborted=True`
-   叠上去。从用户视角看就是"tool 完成了一个 error 结果，又额外被打了
-   `[aborted]` 标"——和"中途中断"语义反过来。
-2. **Renderer**：即使 fixture 砍掉 end event，`mark_aborted()` 自己
-   仍会合成 `_result = {"aborted": True}` + `_is_error=True` + `_ended_at_ms`。
-   `generic_tool_renderer` 的分支判断 `is_partial = ended_at is None`，
-   abort 后变 False → 走 result 分支显示 `result [error]: {aborted: true}`，
-   依然不显示 partial。
-
-### 解决办法（commit `<本次>`）
-
-- **Fixture**：`abort_during_tool/events.jsonl` 砍到 2 个事件
-  （start + update），`playback.json` `delays_ms` 同步改成 `[0, 40]`。
-  `inject: abort` 仍在 `after_event_index=1`。从此 fixture 真的"在 update
-  后中断、没有 end event"。
-- **`ToolExecutionComponent.mark_aborted`**：只设 `_aborted=True` +
-  `_ended_at_ms`（用于算 duration），**不再**伪造 `_result` / `_is_error`。
-- **`ToolRenderContext`**：增 `aborted: bool = False` 字段。组件 render
-  时把 `self._aborted` 传进去。
-- **`generic_tool_renderer`**：新增 aborted 分支，优先走，保留 partial
-  显示 + 追加 `[aborted after N ms]`。原 partial / completed 两条路径
-  不变。组件的 render 方法不再额外追加 `[aborted]` 行（避免和 renderer
-  里的 `[aborted after N ms]` 重复）。
-
-### Acceptance 影响
-
-- §5.3 fixture 视觉现在是 `⚙ read(...) + partial: # partial bytes so far +
-  [aborted after N ms]`，看一眼就知道"中途被切了"，没有误导性的
-  `result [error]: ...` 行。
-- `tests/cli/interactive/test_playback_harness.py::test_abort_during_tool_marks_tool_aborted_and_returns_editor_to_idle`
-  加严：断言 `tool._result is None`（mark_aborted 不再合成假 result）、
-  渲染含 "partial bytes so far" + "aborted after"、且**没有** `result [`
-  开头的行。
-- `dev_docs/user_tests/p1_m1_manual_test_plan.md` §4.9 abort_during_tool
-  那行重写：列明应该看到 partial 和 `[aborted after N ms]`，**不应**看到
-  `result [...]` 行。
-- 自动测试 180 passed（数量不变，强化既有用例 + fixture round-trip 仍 pass，
-  因为 abort_during_tool 不在 CORE_SCENES）；`just lint` green、
-  `complexity_guard regressions=0`（renderer aborted 分支拆出后整体在阈值内）。
-
-## P1-M1 手测全程 sign-off（2026-04-26）
-
-`dev_docs/user_tests/p1_m1_manual_test_plan.md` §0–§7 全部章节在
-macOS Terminal.app 上**手动复测通过**。M1 acceptance #1–#10 与手测计划
-所有失败模式判定都通过；下面汇总本轮发现的 7 个真 bug 和它们的提交点，
-作为 M2 启动前的最终参照表。
-
-| # | 现象 | 修复 commit | 影响层 |
-| --- | --- | --- | --- |
-| 1 | macOS Terminal Ctrl+C 不走 hook（卡住退不出） | `72335a9` | `StdinBuffer._parse_csi_u` Ctrl+letter 强制大写；新增 `_csi_27_alt_form` 处理 modifyOtherKeys=2 的 ASCII 命名码（27/8/9/13/32/127） |
-| 2 | 单 Esc abort 12ms debounce 太短 + lone-ESC 永远 buffer | `bcace2a` | `StdinBuffer` 字节层 lone-ESC debounce 提到 100ms，注入 fake clock 让测试确定性 |
-| 3 | 双 Esc 不复合（CSI-encoded Esc 绕开字节层）+ "aborted" 永久卡 footer | `2520cdc` | 新增事件层 `_compose_esc_gestures` 复合器（任何来源的 Esc 都进 200ms 复合窗口）；`handle_abort` 改推 status 瞬时通知 |
-| 4 | Status 通知 TTL 不消失（render loop 不被唤醒） | `f47f554` | `TUIApp.schedule_wake(when)` + `_check_wakeups()` + `StatusComponent.attach_wake_scheduler`，loop 主动按时间 tick |
-| 5 | Tab 进 Selector 视觉无感（cursor 唯一信号太弱） | `8df7e46` | `Component.focused: bool` 由 `TUIApp.set_focus` 维护；`Selector` 在 focused 时 title 加粗青色 + 选中行反色 |
-| 6 | `/play` 多次后看似没累加（裁剪从底部切掉了 editor） | `65a8c29` | `_RootComponent.render_with_height` 三段 pin 布局：status/messages/editor；溢出时**从顶部**裁老消息，editor 永远可见；`editor_offset(width)` 让 cursor 定位算到裁剪后的位置 |
-| 7 | `abort_during_tool` 视觉像"完成后 abort"（fixture + renderer 双坑） | `a610723` | events.jsonl 砍掉多余 end event；`mark_aborted` 不再伪造假 result；`ToolRenderContext` 增 `aborted` 字段；`generic_tool_renderer` 新增 aborted 分支保留 partial + 显示 `[aborted after N ms]` |
-
-文档准确性配套修订（不计入 bug 数）：CLI 调用约定从 `uv run neomagi` 切到
-`uv run python -m cli`（`CLAUDE.md` / `AGENTS.md` 规则、subprocess smoke、
-test plan 全部对齐）；§2.5 加 cooked vs raw 术语速记；§3 加 "Enter 在
-mock 下会清 buffer + 推 mock 通知"提醒，§3.1 / §3.8 / §3.9 失败模式判定
-分清楚；§4.3 重写 selector 边输入边过滤的语义；§4.4 加 focus 视觉判定 +
-新增 Tab 路径区分；§4.9 加"重复同一 fixture 视觉像刷新"和"消息溢出 editor
-始终可见"两段说明；§5.3 重写 abort_during_tool 期望；§5.5 fixture 数补回
-W5 deliverable 表的 7 条；§7 修 `/quit` 双 Enter + pgrep pattern；新建
-`scripts/diag_keys.py` 作为后续"按键不反应"诊断工具。
-
-### 最终自动化门禁
-
-- `pytest tests/`：**180 用例 green**（W7 substrate+interactive 共 84 +
-  评审三轮回归 + 测试质量轮 + 手测轮，加起来比 W7 commit 时的 151 多 29 用例
-  全是行为级回归）。
-- `just lint`：green；`complexity_guard regressions=0`（baseline 在过程中
-  按 plan §risk 指引刷新过若干次，line-anchored fingerprint 受 docstring
-  行号变动影响）。
-- 6 条 `--playback` smoke：`assistant_text_delta` / `assistant_thinking_delta` /
-  `parallel_tools` / `compaction` / `abort_during_stream` / `abort_during_tool`
-  全部 exit=0；不存在 fixture 也不挂死。
-
-### M2 启动前置（再确认一遍）
-
-- `cli.interactive.app.InteractiveController` 的 event plane
-  (`dispatch_event`) + control plane (`handle_abort` / `inject_user_input` /
-  `simulate_resize` / `exit`) 是 M2/M3/M4 接入唯一入口；`PlaybackHarness`
-  当前只走这两个面，M3 接真 `Agent.events.subscribe()` 时控制器/组件/
-  substrate 全部不动。
-- `TUIApp.schedule_wake` 给后续 Loader spinner / ToolExecution duration
-  自动刷新留好接口。
-- `Component.focused` + `TUIApp.set_focus` 视觉指示机制让任何后续 picker /
-  overlay 都能用统一的 focused-render 习惯。
-- `_RootComponent.render_with_height` 高度感知布局让真 agent 多轮对话
-  消息列不会再把 editor 推下屏。
-- `ToolRenderContext.aborted` 字段让 M5 真 tool runtime 接进来时，对中途
-  中断的处理路径已经定型。
-
-P1-M1 视为完整 sign-off，进入 P1-M2。
+手动 sign-off 结论：`dev_docs/user_tests/p1_m1_manual_test_plan.md` §0-§7 已在 macOS Terminal.app 上复测通过；最终门禁为 `pytest tests/` **180 passed**、`just lint` green、6 条 `--playback` smoke exit=0。
 
 ## P1-M1 follow-up：Pi-aligned UX increments（2026-04-26）
 
-基于 `dev_docs/plans/p1_m1_followups.md` 追加完成 W1/W2/W3，保持
-`InteractiveController` event/control plane 与 PlaybackHarness 路径不变。
+基于 `dev_docs/plans/p1_m1_followups.md` 追加完成 W1/W2/W3，保持 `InteractiveController` event/control plane 与 PlaybackHarness 路径不变。
 
 ### W1 anchored renderer
 
-- Baseline check：按 ADR-0011 从
-  `https://raw.githubusercontent.com/badlogic/pi-mono/97a38bf65217d89619b3386c620333a97ee391b7/packages/tui/src/tui.ts`
-  核对，`TUI.doRender()` 的 first render 走 `fullRender(false)`，注释为
-  "just output everything without clearing"，未执行全屏清除；退出 `stop()`
-  会把 cursor 移到内容末尾并写 `\r\n`。本次实现与该 baseline 的
-  "不清 shell history / 退出另起行"方向一致。
-- `TerminalSession.query_cursor_row()` 只负责 DSR 查询与 leftover bytes 返回；
-  非 TTY no-op，不写 fallback newline。
-- `TUIApp._prepare_anchor()` 持有 anchor 编排权：回灌 leftover 到
-  `StdinBuffer`、计算 bottom-reserved fallback、调用 `Renderer.set_anchor()`，
-  并用 anchor 后的可用高度 compose frame。resize callback 只标记
-  `_anchor_dirty`，下一次普通 draw 前重新 DSR。
-- `Renderer` 增 `anchor_row` / `set_anchor()` /
-  `last_bottom_row()`，所有 cursor move 统一按 anchor 偏移；reset 后
-  `last_bottom_row()` 回到 `None`。
-- `lifecycle` 在 terminal restore 前基于 `last_bottom_row()` 放置 cursor：
-  未绘制时不移动，未到屏底时到下一行并清行，已到屏底时写 `\r\n` 滚动。
-- 已知降级：真实 TTY 若 DSR timeout / 不支持，启动会写 `terminal_rows`
-  个 newline，把工作区保守锚到屏底附近；scrollback 保留，但当前 viewport
-  会滚动。这是 plan 允许的降级。非 TTY / pipe / playback 不 DSR、不 fallback
-  newline，anchor 保持 1。
+- Baseline check：按 ADR-0011 从 `https://raw.githubusercontent.com/badlogic/pi-mono/97a38bf65217d89619b3386c620333a97ee391b7/packages/tui/src/tui.ts` 核对，`TUI.doRender()` 的 first render 走 `fullRender(false)`，注释为 "just output everything without clearing"，未执行全屏清除；退出 `stop()` 会把 cursor 移到内容末尾并写 `\r\n`。本次实现与该 baseline 的 "不清 shell history / 退出另起行"方向一致。
+- `TerminalSession.query_cursor_row()` 只负责 DSR 查询与 leftover bytes 返回；非 TTY no-op，不写 fallback newline。
+- `TUIApp._prepare_anchor()` 持有 anchor 编排权：回灌 leftover 到 `StdinBuffer`、计算 bottom-reserved fallback、调用 `Renderer.set_anchor()`，并用 anchor 后的可用高度 compose frame。resize callback 只标记 `_anchor_dirty`，下一次普通 draw 前重新 DSR。
+- `Renderer` 增 `anchor_row` / `set_anchor()` / `last_bottom_row()`，所有 cursor move 统一按 anchor 偏移；reset 后 `last_bottom_row()` 回到 `None`。
+- `lifecycle` 在 terminal restore 前基于 `last_bottom_row()` 放置 cursor：未绘制时不移动，未到屏底时到下一行并清行，已到屏底时写 `\r\n` 滚动。
+- 已知降级：真实 TTY 若 DSR timeout / 不支持，启动会写 `terminal_rows` 个 newline，把工作区保守锚到屏底附近；scrollback 保留，但当前 viewport 会滚动。这是 plan 允许的降级。非 TTY / pipe / playback 不 DSR、不 fallback newline，anchor 保持 1。
 
 ### W2 spinner primitive
 
-- 新增 `src/tui/components/spinner.py`：`Spinner` 是纯 `Component`，不继承
-  `Overlay`；`PI_FRAMES` 是唯一 braille spinner 帧来源。
-- `TUIApp.schedule_callback(when, fn)` 落地，到期先执行 callback 再请求 render；
-  `schedule_wake(when)` 退化成空 callback，保持 Status TTL 语义。
-- `Spinner.attach_tick_scheduler()` attach 后排首个 tick；`set_frames([])` 只
-  隐藏 indicator，不隐藏 label，也不继续自动调度。
+- 新增 `src/tui/components/spinner.py`：`Spinner` 是纯 `Component`，不继承 `Overlay`；`PI_FRAMES` 是唯一 braille spinner 帧来源。
+- `TUIApp.schedule_callback(when, fn)` 落地，到期先执行 callback 再请求 render；`schedule_wake(when)` 退化成空 callback，保持 Status TTL 语义。
+- `Spinner.attach_tick_scheduler()` attach 后排首个 tick；`set_frames([])` 只隐藏 indicator，不隐藏 label，也不继续自动调度。
 - `Loader` / `CancellableLoader` 改为持有 `Spinner`，外部类名与调用面不变。
 
 ### W3 substrate primitives
 
-- 新增 `src/tui/components/{text,spacer,box,container,truncated_text}.py` 与
-  `__init__.py`，只依赖 stdlib + `tui.*`。
-- `MessageListComponent` 改为 `Container` 薄壳；`_RootComponent` 的
-  height-aware `render_with_height()` 与 `editor_offset()` 暂不迁移，避免
-  触发既有 `InteractiveController._on_editor_action` complexity baseline
-  漂移。后续如果要把 root 也迁到 substrate container，应单独处理该既有
-  block finding。
-- ADR-0015 §影响、`design_docs/decisions/INDEX.md` amendment 记录、架构
-  TUI Contract primitive 列表、手测说明书 §2 均已同步。
+- 新增 `src/tui/components/{text,spacer,box,container,truncated_text}.py` 与 `__init__.py`，只依赖 stdlib + `tui.*`。
+- `MessageListComponent` 改为 `Container` 薄壳；`_RootComponent` 的 height-aware `render_with_height()` 与 `editor_offset()` 暂不迁移，避免触发既有 `InteractiveController._on_editor_action` complexity baseline 漂移。后续如果要把 root 也迁到 substrate container，应单独处理该既有 block finding。
+- ADR-0015 §影响、`design_docs/decisions/INDEX.md` amendment 记录、架构 TUI Contract primitive 列表、手测说明书 §2 均已同步。
 
 ### Acceptance / evidence
 
-- Explicit deviations before commit：`_RootComponent` 内部 Container 化未做，仅
-  `MessageListComponent` 已迁；W1 PTY 字节级保留端到端测试未做；macOS
-  Terminal / iTerm2 / gnome-terminal 三终端手测未跑。本段把这些作为显式
-  未完成项记录，避免未来把 W1/W3 的完整 acceptance 误读为已经全部覆盖。
-- `tests/tui/`：102 passed，覆盖 DSR success/timeout/non-TTY、late CPR discard、
-  anchor fallback、resize dirty、exit cursor placement、Spinner scheduler、
-  loader 收敛、components primitives、唯一 spinner frames 静态扫描。
+- Explicit deviations before commit：`_RootComponent` 内部 Container 化未做，仅 `MessageListComponent` 已迁；W1 PTY 字节级保留端到端测试未做；macOS Terminal / iTerm2 / gnome-terminal 三终端手测未跑。本段把这些作为显式未完成项记录，避免未来把 W1/W3 的完整 acceptance 误读为已经全部覆盖。
+- `tests/tui/`：102 passed，覆盖 DSR success/timeout/non-TTY、late CPR discard、anchor fallback、resize dirty、exit cursor placement、Spinner scheduler、loader 收敛、components primitives、唯一 spinner frames 静态扫描。
 - `pytest tests/`：224 passed。
-- `just lint`：green（`ruff check src/` passed；
-  `complexity_guard regressions=0`，当前 target findings 80 / block findings 10，
-  均为既有 ratchet 状态，无新增回归）。
+- `just lint`：green（`ruff check src/` passed；`complexity_guard regressions=0`，当前 target findings 80 / block findings 10，均为既有 ratchet 状态，无新增回归）。

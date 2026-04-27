@@ -67,3 +67,10 @@ doc_id_assigned_at: 2026-04-25T18:57:04+02:00
 - Verification: `uv run pytest tests/ -q` **298 passed**；`just lint` green（ruff passed，`complexity_guard regressions=0`）；`git diff --check` clean。
 - Next: 进入 P1-M3，把 `agent_core` loop 接到 provider runtime；真实 TUI `/login` / credential source UI / TUI cache UI 另属后续 runtime/TUI 接入范围。
 - Risk: OpenAI Codex cache 的 `short` / `long` 当前只控制是否发送 `prompt_cache_key`，不发送 TTL 字段；这与 pi-mono adapter 对齐，手测说明已标注。Anthropic OAuth 不属于 P1 core。
+
+## 2026-04-27 23:19 (local) | P1-M1 manual log split
+- Status: done
+- Done: 将 `dev_docs/logs/p1_m1_closeout.md` 中混入的 P1-M1 手测发现、根因分析、最终 sign-off 拆到 `dev_docs/logs/p1_m1_manual_tui_smoke_findings.md`，并把 closeout 收敛回里程碑验收、评审修复、handoff 与 follow-up 记录。
+- Evidence: `dev_docs/logs/p1_m1_closeout.md`, `dev_docs/logs/p1_m1_manual_tui_smoke_findings.md`。
+- Next: 无；这是文档结构整理，不改变 M1/M2 验收结论。
+- Risk: 无；原 7 个手测 bug 的原因、修复和 pass/fail 结论仍在新 report 中保留。
