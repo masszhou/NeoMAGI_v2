@@ -164,6 +164,8 @@ async def _parse_response_events(
     state: dict[str, object] = {
         "text_index": None,
         "text_item_id": None,
+        "text_phase": None,
+        "text_done": False,
         "tool_indexes": {},
         "tool_json": {},
         "stop_reason": "stop",
@@ -174,6 +176,7 @@ async def _parse_response_events(
         "response.output_text.delta": _handle_response_text_delta,
         "response.refusal.delta": _handle_response_text_delta,
         "response.function_call_arguments.delta": _handle_response_tool_delta,
+        "response.function_call_arguments.done": _handle_response_tool_done,
         "response.output_item.done": _handle_response_output_item_done,
         "response.completed": _handle_response_completed,
     }
@@ -209,6 +212,7 @@ def _handle_response_output_item_added(
     item = event_value(event, "item", {})
     if event_value(item, "type") == "message":
         state["text_item_id"] = event_value(item, "id")
+        state["text_phase"] = event_value(item, "phase")
     elif event_value(item, "type") == "function_call":
         _start_response_tool_call(stream, partial, item, state)
 
@@ -261,7 +265,10 @@ def _start_response_text(
     state["text_index"] = text_index
     partial.content.append(TextContent(text=""))
     if state["text_item_id"]:
-        partial.content[text_index].text_signature = encode_text_signature(state["text_item_id"])
+        partial.content[text_index].text_signature = encode_text_signature(
+            str(state["text_item_id"]),
+            _text_phase(state),
+        )
     stream.push(StreamTextStart(contentIndex=text_index, partial=clone_message(partial)))
 
 
@@ -288,6 +295,35 @@ def _handle_response_tool_delta(
     )
 
 
+def _handle_response_tool_done(
+    stream: AssistantMessageEventStream,
+    partial: AssistantMessage,
+    model: Model,
+    event: object,
+    state: dict[str, object],
+) -> None:
+    call_id = str(event_value(event, "call_id") or event_value(event, "item_id"))
+    if call_id not in state["tool_indexes"]:
+        _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
+    arguments = event_value(event, "arguments", "") or ""
+    index = state["tool_indexes"][call_id]
+    previous = state["tool_json"].get(call_id, "")
+    for alias in _tool_aliases_for_index(state, index):
+        state["tool_json"][alias] = arguments
+    block = partial.content[index]
+    block.arguments = parse_json_object(arguments)
+    if isinstance(arguments, str) and isinstance(previous, str) and arguments.startswith(previous):
+        delta = arguments[len(previous) :]
+        if delta:
+            stream.push(
+                StreamToolCallDelta(
+                    contentIndex=index,
+                    delta=delta,
+                    partial=clone_message(partial),
+                )
+            )
+
+
 def _handle_response_output_item_done(
     stream: AssistantMessageEventStream,
     partial: AssistantMessage,
@@ -296,7 +332,11 @@ def _handle_response_output_item_done(
     state: dict[str, object],
 ) -> None:
     item = event_value(event, "item", {})
-    if event_value(item, "type") != "function_call":
+    item_type = event_value(item, "type")
+    if item_type == "message":
+        _finish_response_text_item(stream, partial, item, state)
+        return
+    if item_type != "function_call":
         return
     call_id = str(event_value(item, "call_id") or event_value(item, "id"))
     index = state["tool_indexes"].get(call_id)
@@ -306,6 +346,55 @@ def _handle_response_output_item_done(
     block.name = event_value(item, "name", block.name)
     block.arguments = parse_json_object(event_value(item, "arguments", state["tool_json"].get(call_id, "")))
     stream.push(StreamToolCallEnd(contentIndex=index, toolCall=block, partial=clone_message(partial)))
+
+
+def _finish_response_text_item(
+    stream: AssistantMessageEventStream,
+    partial: AssistantMessage,
+    item: object,
+    state: dict[str, object],
+) -> None:
+    item_id = event_value(item, "id") or state.get("text_item_id")
+    if item_id:
+        state["text_item_id"] = item_id
+    phase = event_value(item, "phase")
+    if isinstance(phase, str):
+        state["text_phase"] = phase
+    item_text = _response_message_text(item)
+    text_index = state["text_index"]
+    if text_index is None and item_text is not None:
+        _start_response_text(stream, partial, state)
+        text_index = state["text_index"]
+    if text_index is None or partial.content[text_index].type != "text":
+        return
+    block = partial.content[text_index]
+    if item_text is not None:
+        block.text = item_text
+    if item_id:
+        block.text_signature = encode_text_signature(str(item_id), _text_phase(state, item))
+    stream.push(StreamTextEnd(contentIndex=text_index, content=block.text, partial=clone_message(partial)))
+    state["text_done"] = True
+
+
+def _text_phase(state: dict[str, object], item: object | None = None) -> str | None:
+    phase = event_value(item, "phase") if item is not None else state.get("text_phase")
+    if phase is None:
+        phase = state.get("text_phase")
+    return phase if isinstance(phase, str) else None
+
+
+def _response_message_text(item: object) -> str | None:
+    content = event_value(item, "content")
+    if not isinstance(content, list):
+        return None
+    parts: list[str] = []
+    for part in content:
+        part_type = event_value(part, "type")
+        if part_type == "output_text":
+            parts.append(event_value(part, "text", "") or "")
+        elif part_type == "refusal":
+            parts.append(event_value(part, "refusal", "") or "")
+    return "".join(parts)
 
 
 def _tool_aliases_for_index(state: dict[str, object], index: int) -> list[str]:
@@ -333,7 +422,7 @@ def _finish_response_stream(
     state: dict[str, object],
 ) -> None:
     text_index = state["text_index"]
-    if text_index is not None and partial.content[text_index].type == "text":
+    if text_index is not None and not state["text_done"] and partial.content[text_index].type == "text":
         text = partial.content[text_index].text
         stream.push(StreamTextEnd(contentIndex=text_index, content=text, partial=clone_message(partial)))
     partial.stop_reason = state["stop_reason"]

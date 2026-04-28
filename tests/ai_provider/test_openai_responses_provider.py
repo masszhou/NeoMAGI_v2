@@ -87,6 +87,10 @@ def _fixture(scene: str) -> dict:
     return json.loads((FIXTURE_ROOT / scene / "fixture.json").read_text())
 
 
+def _stream_fixture(scene: str) -> dict:
+    return json.loads((FIXTURE_ROOT / scene / "events.json").read_text())
+
+
 def test_text_signature_round_trip() -> None:
     signature = encode_text_signature("item_1", "final_answer")
     assert decode_text_signature(signature) == {"v": 1, "id": "item_1", "phase": "final_answer"}
@@ -152,6 +156,33 @@ def test_openai_responses_stream_text_and_tool_call() -> None:
         assert result.usage.input == 13
         assert fake.responses.last_payload["prompt_cache_key"] == "session-1"
         assert fake.responses.last_headers["session_id"] == "session-1"
+
+    asyncio.run(run())
+
+
+def test_openai_responses_stream_done_arguments_and_text_phase_fixture() -> None:
+    async def run() -> None:
+        fixture = _stream_fixture("openai_responses_stream_tool_call")
+        expected = fixture["expected"]
+        model = get_model(fixture["provider"], fixture["model"])
+        fake = FakeOpenAIClient(fixture["providerEvents"])
+        stream = stream_openai_responses(model, _context(), StreamOptions(client=fake))
+        frames = [event async for event in stream]
+        events = [event.type for event in frames]
+        result = await stream.result()
+
+        assert events == expected["eventTypes"]
+        assert [event.delta for event in frames if event.type == "toolcall_delta"] == expected["toolDeltas"]
+        assert result.response_id == expected["responseId"]
+        assert result.stop_reason == expected["stopReason"]
+        assert result.content[0].text == expected["text"]
+        assert decode_text_signature(result.content[0].text_signature) == expected["textSignature"]
+        assert result.content[1].id == expected["toolCall"]["id"]
+        assert result.content[1].name == expected["toolCall"]["name"]
+        assert result.content[1].arguments == expected["toolCall"]["arguments"]
+        assert result.usage.input == expected["usage"]["input"]
+        assert result.usage.output == expected["usage"]["output"]
+        assert result.usage.cache_read == expected["usage"]["cacheRead"]
 
     asyncio.run(run())
 

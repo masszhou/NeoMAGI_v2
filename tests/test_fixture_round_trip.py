@@ -69,6 +69,7 @@ ALL_SCENES = (
     "model_change",
     "openai_completions_prompt_cache",
     "openai_responses_prompt_cache",
+    "openai_responses_stream_tool_call",
     "overflow_error_patterns",
     "parallel_tools",
     "prepare_arguments_repair",
