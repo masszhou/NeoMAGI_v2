@@ -9,7 +9,7 @@ doc_id_assigned_at: 2026-04-25T20:30:21+02:00
 - Date: 2026-04-25
 - Authority: `design_docs/decisions/0011-freeze-pi-mono-baseline-at-97a38bf6.md` (ADR-0011)
 - Cross-references: `design_docs/architecture/pi_behavior_matrix.md` (W1)
-- Plan: `dev_docs/plans/p1_m0_pi_baseline_and_fixtures.md` § W5
+- Roadmap: `design_docs/roadmap/p1_engine_pi.md` § P1-M0
 
 ## 1. 基线声明
 
@@ -147,7 +147,7 @@ doc_id_assigned_at: 2026-04-25T20:30:21+02:00
 
 ## 3. 升级与漂移政策
 
-- **不静默升级**：开发期间发现 upstream 有修复或新行为时，按 ADR-0011 默认入 backlog，并在 `dev_docs/logs/p1_m0_closeout.md` 的 “Upstream observed but deferred” 段记录。
+- **不静默升级**：开发期间发现 upstream 有修复或新行为时，按 ADR-0011 默认入 backlog，并在后续 baseline upgrade ADR 的 diff review 中记录。
 - **行号失效不更新基线**：本索引的行号面向 `97a38bf6`；如果发现 upstream 行号已变，必须在升级 ADR 中重写本文件。
 - **本仓库局部修复偏离**：如果 NeoMAGI 选择修正 `97a38bf6` 中的缺陷，必须在对应代码或 fixture 处显式注释偏离原因，并在 closeout 段做最小记录。
 

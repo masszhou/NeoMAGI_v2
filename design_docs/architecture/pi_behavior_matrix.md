@@ -9,7 +9,7 @@ doc_id_assigned_at: 2026-04-25T20:34:09+02:00
 - Date: 2026-04-25
 - Baseline: pi-mono `97a38bf6` ([file index](pi_mono_baseline.md), ADR-0011)
 - Architecture: `design_docs/architecture/p1_pi_cli_technical_architecture.md`
-- Plan: `dev_docs/plans/p1_m0_pi_baseline_and_fixtures.md` § W1
+- Roadmap: `design_docs/roadmap/p1_engine_pi.md` § P1-M0
 
 > 行号引用一律指向 pi-mono `97a38bf6`，路径为 pi-mono 仓库相对路径（`packages/...`）。
 > 优先级：**Core** = P1 必交；**Stretch** = P1 可选；**Optional** = P1 后置 / parity backlog。

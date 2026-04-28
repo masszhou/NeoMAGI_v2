@@ -8,7 +8,7 @@ doc_id_assigned_at: 2026-04-25T18:56:31+02:00
 - Status: accepted
 - Date: 2026-04-25
 - Related: `design_docs/decisions/0009-pi-cli-product-equivalence-contract.md`
-- Roadmap: `dev_docs/plans/p1_m0_pi_baseline_and_fixtures.md`
+- Roadmap: `design_docs/roadmap/p1_engine_pi.md` § P1-M0
 
 ## 选了什么
 

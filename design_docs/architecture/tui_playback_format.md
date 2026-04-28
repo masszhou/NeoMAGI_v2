@@ -9,7 +9,7 @@ doc_id_assigned_at: 2026-04-25T20:48:47+02:00
 - Date: 2026-04-25
 - Architecture: `design_docs/architecture/p1_pi_cli_technical_architecture.md`
   § P1 Implementation Acceptance (line 1158)
-- Plan: `dev_docs/plans/p1_m0_pi_baseline_and_fixtures.md` § W6
+- Roadmap: `design_docs/roadmap/p1_engine_pi.md` § P1-M0
 - Consumers: M1 mock harness (drives the TUI without an agent runtime),
   M2/M3 runtime tests (replay events without harness control).
 

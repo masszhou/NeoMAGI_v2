@@ -6,7 +6,7 @@ doc_id_assigned_at: 2026-04-06T21:49:14+02:00
 # Glossary
 
 > 目的：为 NeoMAGI 提供轻量级、可持续维护的 Domain Ontology。  
-> 口径优先级：`decisions/` > `design_docs/` > `dev_docs/`。  
+> 口径优先级：`design_docs/decisions/` > `design_docs/`。开发过程文档不入库，不作为长期口径。
 > 范围：只收录跨文档反复出现、且容易混淆的核心术语；不追求枚举所有代码符号。
 
 ## 使用原则
