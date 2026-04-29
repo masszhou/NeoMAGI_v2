@@ -1,13 +1,16 @@
 """Line-diff renderer (ADR-0015 §影响 `src/tui/renderer.py`).
 
 The substrate's ANSI line model is the single source of truth. Components
-produce ``list[str]`` per frame; ``Renderer.present`` writes only the rows
-that changed, wrapped in a synchronized-output envelope so terminals draw
-the frame atomically.
+produce ``list[str]`` per frame; canvas rendering writes only the rows that
+changed, while command rendering appends committed transcript rows and
+rewrites a bounded live region. Frame rewrites are wrapped in a
+synchronized-output envelope so terminals draw them atomically.
 
-Public surface is intentionally one method: :meth:`present`. Cursor
-positioning is part of the same call so business code can never split
-"frame" and "cursor" into races.
+The public surface is mode-specific: :meth:`present` owns anchored canvas
+frames, while :meth:`commit_lines`, :meth:`present_live`, and
+:meth:`clear_live_region` own command-mode scrollback + live-region output.
+Cursor positioning remains part of the same live/canvas frame call so
+business code cannot split "frame" and "cursor" into races.
 """
 
 from __future__ import annotations
@@ -30,6 +33,16 @@ def _move_cursor(row: int, col: int) -> str:
     return f"\x1b[{max(1, row)};{max(1, col)}H"
 
 
+def _cursor_up(rows: int) -> str:
+    if rows <= 0:
+        return ""
+    return f"\x1b[{rows}A"
+
+
+def _cursor_col(col: int) -> str:
+    return f"\x1b[{max(1, col)}G"
+
+
 def _erase_line() -> str:
     return "\x1b[2K"
 
@@ -48,6 +61,8 @@ class Renderer:
         self._last_presented_frame_height: int | None = None
         self._anchor_row: int = 1
         self._cursor_visible: bool = False
+        self._command_live_height: int = 0
+        self._command_cursor_row: int = 1
 
     def reset(self) -> None:
         """Drop the previous-frame snapshot.
@@ -78,6 +93,75 @@ class Renderer:
             return None
         return self._anchor_row + self._last_presented_frame_height - 1
 
+    def commit_lines(self, lines: list[str]) -> None:
+        """Append completed transcript rows to terminal scrollback.
+
+        Command render mode keeps committed transcript outside the live
+        diff region. Before appending new transcript rows, clear the current
+        editor/status/streaming tail and then write each row as normal
+        newline-terminated terminal output.
+        """
+
+        chunks: list[str] = []
+        self._append_clear_command_live(chunks)
+        for line in lines:
+            self._append_command_line(chunks, line)
+            chunks.append("\n")
+        if not chunks:
+            return
+        if self._write("".join(chunks)):
+            self._command_live_height = 0
+            self._command_cursor_row = 1
+            self._last_presented_frame_height = None
+
+    def present_live(
+        self,
+        frame: list[str],
+        cursor: CursorPosition | None = None,
+    ) -> None:
+        """Render a bounded command-mode live region.
+
+        This path never addresses the terminal by absolute screen row and
+        never clears content above the previous live region.
+        """
+
+        body: list[str] = []
+        self._append_clear_command_live(body)
+        for index, line in enumerate(frame):
+            if index:
+                body.append("\n")
+            self._append_command_line(body, line)
+
+        if cursor is not None and cursor.visible and frame:
+            row = min(max(1, cursor.row), len(frame))
+            body.append(_cursor_up(len(frame) - row))
+            body.append(_cursor_col(cursor.col))
+            if not self._cursor_visible:
+                body.append(_CURSOR_SHOW)
+                self._cursor_visible = True
+            cursor_row = row
+        else:
+            self._append_cursor_hide(body)
+            cursor_row = max(1, len(frame))
+
+        if not body:
+            return
+        chunks = [_SYNC_BEGIN, *body, _SYNC_END]
+        if self._write("".join(chunks)):
+            self._command_live_height = len(frame)
+            self._command_cursor_row = cursor_row
+            self._last_presented_frame_height = len(frame)
+
+    def clear_live_region(self) -> None:
+        """Erase the current command-mode live region, if any."""
+
+        chunks: list[str] = []
+        self._append_clear_command_live(chunks)
+        if chunks and self._write("".join(chunks)):
+            self._command_live_height = 0
+            self._command_cursor_row = 1
+            self._last_presented_frame_height = None
+
     def present(
         self,
         frame: list[str],
@@ -90,7 +174,6 @@ class Renderer:
         forbidden anywhere outside the substrate.
         """
 
-        out = self._out
         previous = self._previous
         chunks: list[str] = [_SYNC_BEGIN]
 
@@ -102,10 +185,7 @@ class Renderer:
         self._append_cursor(chunks, cursor)
         chunks.append(_SYNC_END)
 
-        try:
-            out.write("".join(chunks))
-            out.flush()
-        except (OSError, ValueError):
+        if not self._write("".join(chunks)):
             # Output may close during shutdown; swallow to keep teardown clean.
             return
 
@@ -162,6 +242,25 @@ class Renderer:
         if self._cursor_visible:
             chunks.append(_CURSOR_HIDE)
             self._cursor_visible = False
+
+    def _append_command_line(self, chunks: list[str], line: str) -> None:
+        chunks.append(line.rstrip())
+        chunks.append(_RESET_SGR)
+
+    def _append_clear_command_live(self, chunks: list[str]) -> None:
+        if self._command_live_height <= 0:
+            return
+        chunks.append(_cursor_up(self._command_cursor_row - 1))
+        chunks.append("\r")
+        chunks.append(_erase_below())
+
+    def _write(self, data: str) -> bool:
+        try:
+            self._out.write(data)
+            self._out.flush()
+            return True
+        except (OSError, ValueError):
+            return False
 
 
 __all__ = ["Renderer"]

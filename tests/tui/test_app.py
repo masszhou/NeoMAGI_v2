@@ -7,6 +7,7 @@ import threading
 import time
 
 from tui.app import TUIApp
+from tui.component import CursorPosition
 from tui.renderer import Renderer
 from tui.stdin_buffer import KeyEvent
 from tui.terminal import CursorQueryResult, TerminalSize
@@ -40,6 +41,7 @@ def _make_app(
     result: CursorQueryResult,
     *,
     anchor_reserved_height: int | None = 8,
+    render_mode: str = "canvas",
 ) -> tuple[TUIApp, Renderer, _FakeTerminal]:
     out = io.StringIO()
     renderer = Renderer(out_stream=out)
@@ -49,6 +51,7 @@ def _make_app(
         renderer=renderer,
         out_stream=out,
         anchor_reserved_height=anchor_reserved_height,
+        render_mode=render_mode,  # type: ignore[arg-type]
     )
     app._cols = 20  # noqa: SLF001
     app._rows = 10  # noqa: SLF001
@@ -124,6 +127,43 @@ def test_draw_after_resize_requeries_anchor_when_dirty() -> None:
     assert terminal.query_calls == 1
     assert renderer.anchor_row == 4
     assert app._anchor_dirty is False  # noqa: SLF001
+
+
+def test_command_draw_does_not_prepare_full_screen_anchor() -> None:
+    app, _, terminal = _make_app(
+        CursorQueryResult(row=9, leftover=b"", attempted=True, fallback_allowed=True),
+        render_mode="command",
+    )
+    app._draw()  # noqa: SLF001
+    assert terminal.query_calls == 0
+    assert terminal.writes == []
+
+
+def test_command_resize_clears_old_live_region_on_next_step() -> None:
+    out = io.StringIO()
+    renderer = Renderer(out_stream=out)
+    terminal = _FakeTerminal(
+        CursorQueryResult(row=9, leftover=b"", attempted=True, fallback_allowed=True)
+    )
+    app = TUIApp(
+        terminal=terminal,  # type: ignore[arg-type]
+        renderer=renderer,
+        out_stream=out,
+        render_mode="command",
+    )
+    renderer.present_live(
+        ["stale live row", "stale footer"],
+        cursor=CursorPosition(row=1, col=1),
+    )
+    out.truncate(0)
+    out.seek(0)
+
+    app.simulate_resize(40, 12)
+    app.step()
+
+    text = out.getvalue()
+    assert "\x1b[J" in text
+    assert "stale live row" not in text
 
 
 def test_schedule_callback_runs_due_callback_before_render(monkeypatch) -> None:

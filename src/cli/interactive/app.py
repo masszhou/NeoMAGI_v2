@@ -21,7 +21,7 @@ from tui.app import TUIApp
 from tui.editor import Editor, EditorState, EditorSubmission
 from tui.keymap import Action, Keymap
 from tui.overlay import Confirm
-from tui.stdin_buffer import KeyEvent
+from tui.stdin_buffer import KeyEvent, MouseWheelEvent
 
 from .components import MessageListComponent, StatusComponent
 from .event_router import EventRouter
@@ -142,6 +142,7 @@ class InteractiveController:
 
     def dispatch_event(self, event: Any) -> None:
         self._router.route(event)
+        self._flush_command_transcript()
         self._app.request_render()
 
     # ------------------------------------------------------------------ #
@@ -173,6 +174,7 @@ class InteractiveController:
         # they kept typing or ran another command. Notifications already
         # carry a TTL (Status component fades them after a few seconds).
         self._status.push_notification("aborted", level="info", ttl_seconds=3.0)
+        self._flush_command_transcript()
         self._app.request_render()
 
     def inject_user_input(self, text: str) -> None:
@@ -266,9 +268,14 @@ class InteractiveController:
         if self._runtime is not None:
             aborted_previous = self._runtime.state.is_running
             self._runtime.reset()
+        self._flush_command_transcript()
         self._messages.clear()
         self._router.clear_active()
         self._status.set_queue([], [])
+        if self._app.render_mode == "command":
+            self._app.commit_lines(
+                ["", "--- [new session] previous runtime transcript cleared ---", ""]
+            )
         if aborted_previous:
             self._status.push_notification(
                 "new session; previous run aborted",
@@ -287,6 +294,12 @@ class InteractiveController:
     # ------------------------------------------------------------------ #
 
     def _global_input_hook(self, event: Any) -> bool:
+        if isinstance(event, MouseWheelEvent):
+            if self._app.render_mode != "canvas":
+                return False
+            amount = 3 if event.direction == "up" else -3
+            self._messages.scroll_lines(amount)
+            return True
         if isinstance(event, KeyEvent):
             if event.key == "Ctrl+C":
                 # Pi convention: Ctrl+C aborts when there is something to
@@ -373,6 +386,11 @@ class InteractiveController:
             self._action_handler(action)
 
     def _handle_scroll_action(self, action: Action) -> bool:
+        if self._app.render_mode == "command" and action in {
+            Action.SCROLL_PAGE_UP,
+            Action.SCROLL_PAGE_DOWN,
+        }:
+            return True
         if action == Action.SCROLL_PAGE_UP:
             self._messages.scroll_page_up()
             return True
@@ -458,6 +476,13 @@ class InteractiveController:
                 self._editor.set_state(EditorState.IDLE)
                 self._status.set_queue([], [])
                 self._editor.set_footer(runtime.footer_summary)
+
+    def _flush_command_transcript(self) -> None:
+        if self._app.render_mode != "command":
+            return
+        rows = self._messages.commit_ready_rows(max(20, self._app.cols))
+        if rows:
+            self._app.commit_lines(rows)
 
     def _on_editor_buffer_change(self, text: str) -> None:
         """Live filter: open / refresh / close the autocomplete overlay as
@@ -647,6 +672,14 @@ class _RootComponent:
         # status + editor are pinned; messages get whatever's left.
         budget = max(0, height - len(status_rows) - len(editor_rows))
         msg_rows = self._messages.render_tail(width, budget)
+        self._last_visible_msg_rows = len(msg_rows)
+        return status_rows + msg_rows + editor_rows
+
+    def render_command_with_height(self, width: int, height: int) -> list[str]:
+        status_rows = self._status.render(width)
+        editor_rows = self._editor.render(width)
+        budget = max(0, height - len(status_rows) - len(editor_rows))
+        msg_rows = self._messages.render_uncommitted_tail(width, budget)
         self._last_visible_msg_rows = len(msg_rows)
         return status_rows + msg_rows + editor_rows
 

@@ -45,7 +45,7 @@ def _run_interactive(opts: CliOptions) -> int:
     from tui.app import TUIApp
     from tui.lifecycle import lifecycle
 
-    tui_app = TUIApp()
+    tui_app = TUIApp(render_mode=_resolve_render_mode(opts))
     runtime = None
     if opts.playback is None:
         runtime = InteractiveAgentRuntime(
@@ -62,6 +62,12 @@ def _run_interactive(opts: CliOptions) -> int:
     with lifecycle(tui_app):
         controller.run()
     return 0
+
+
+def _resolve_render_mode(opts: CliOptions) -> str:
+    if opts.tui_render_mode is not None:
+        return opts.tui_render_mode
+    return "canvas" if opts.playback is not None else "command"
 
 
 if __name__ == "__main__":

@@ -35,6 +35,8 @@ _MODIFY_OTHER_KEYS_OFF = "\x1b[>4;0m"
 # Kitty keyboard protocol level 1.
 _KITTY_KEYS_ON = "\x1b[>1u"
 _KITTY_KEYS_OFF = "\x1b[<u"
+_SGR_MOUSE_ON = "\x1b[?1000h\x1b[?1006h"
+_SGR_MOUSE_OFF = "\x1b[?1006l\x1b[?1000l"
 _CURSOR_POSITION_RE = re.compile(rb"\x1b\[(\d+);(\d+)R")
 
 
@@ -68,11 +70,13 @@ class TerminalSession:
         out_stream: TextIO | None = None,
         use_alt_screen: bool = False,
         hide_cursor: bool = True,
+        enable_mouse_tracking: bool = False,
     ) -> None:
         self._in_stream: IO[bytes] | None = in_stream
         self._out_stream: TextIO = out_stream if out_stream is not None else sys.stdout
         self._use_alt_screen = use_alt_screen
         self._hide_cursor = hide_cursor
+        self._enable_mouse_tracking = enable_mouse_tracking
 
         self._fd: int | None = None
         self._old_termios: list | None = None  # type: ignore[type-arg]
@@ -124,6 +128,8 @@ class TerminalSession:
             out.write(_ALT_SCREEN_ON)
         if self._hide_cursor:
             out.write(_CURSOR_HIDE)
+        if self._enable_mouse_tracking:
+            out.write(_SGR_MOUSE_ON)
         out.write(_BRACKETED_PASTE_ON)
         # Best-effort keyboard protocol negotiation; terminals that don't
         # understand will silently ignore.
@@ -155,6 +161,8 @@ class TerminalSession:
             out.write(_KITTY_KEYS_OFF)
             out.write(_MODIFY_OTHER_KEYS_OFF)
             out.write(_BRACKETED_PASTE_OFF)
+            if self._enable_mouse_tracking:
+                out.write(_SGR_MOUSE_OFF)
             if self._hide_cursor:
                 out.write(_CURSOR_SHOW)
             if self._use_alt_screen:
@@ -236,6 +244,16 @@ class TerminalSession:
             self._out_stream.flush()
         except (OSError, ValueError):
             pass
+
+    def set_mouse_tracking(self, enabled: bool) -> None:
+        """Configure SGR mouse tracking before terminal entry.
+
+        This is intentionally a pre-enter knob; render mode is fixed for a
+        ``TerminalSession`` lifetime, so this method does not emit runtime
+        on/off sequences after :meth:`enter`.
+        """
+
+        self._enable_mouse_tracking = enabled
 
     def query_cursor_row(self, timeout_ms: int = 100) -> CursorQueryResult:
         """Query the terminal cursor row with DSR (``CSI 6 n``).

@@ -53,7 +53,7 @@ doc_id_assigned_at: 2026-04-25T23:12:00+02:00
 - `TerminalSession.query_cursor_row()` 是低层 TTY helper：发 `\x1b[6n` DSR 查询并返回 `CursorQueryResult(row, leftover, attempted, fallback_allowed)`；非 TTY no-op 且 `fallback_allowed=False`，不写 stdout；不拥有 fallback anchor 计算、不接触 `Renderer` / `StdinBuffer`。
 - `src/tui/stdin_buffer.py` 必须处理 partial ESC / CSI / OSC / APC sequence 与 bracketed paste；不能把半个 escape sequence 当普通输入转发。
 - `src/tui/stdin_buffer.py` 必须丢弃 `CSI <digits>;<digits> R` cursor position report；这是 terminal response，不是用户输入，即使作为 late DSR response 进入 normal input path，也不能产生事件。
-- `src/tui/renderer.py` 必须以 ANSI line model 为权威，提供 anchored first render、line diff、synchronized output、resize full redraw、content shrink clear。first render 使用 `\x1b[<anchor>;1H` + `\x1b[J`，只清锚点以下，shell history 在锚点之上字节级保留。
+- `src/tui/renderer.py` 必须以 ANSI line model 为权威，并按 render mode 提供受控入口：`present()` 负责 anchored canvas frame，`present_live()` / `commit_lines()` / `clear_live_region()` 负责 command-mode live region 与 append-oriented scrollback。canvas first render 使用 `\x1b[<anchor>;1H` + `\x1b[J`，只清锚点以下；command mode 不做全屏 anchor，不清已提交 scrollback。所有 renderer 入口必须在行写入后 reset SGR；live/canvas frame rewrite 必须使用 synchronized output；cursor positioning 必须与对应 frame/live-region 更新在同一次 renderer 调用内完成。
 - `src/tui/app.py` 的 `TUIApp._prepare_anchor()` 是 anchored renderer owner：在 `terminal.enter()` 后、第一次 render 前调用 DSR helper，把 leftover bytes 回灌 `self._stdin.feed()`，计算 bottom-reserved fallback，调用 `renderer.set_anchor()`，并用同一 anchor 计算 compose height。SIGWINCH 回调只标记 `_anchor_dirty`，下一次普通 loop tick 才重新 DSR。
 - `src/tui/lifecycle.py` 退出路径在 termios 还原前调用 `Renderer.last_bottom_row()`；返回 `None` 时只做 terminal restore，未到屏底则移动到下一行 col=1，已到屏底则写 `\r\n` 滚动一行，保证 shell 新 prompt 起干净行。
 - `src/tui/overlay.py` 中 spinner 帧推进与字符串来源归 `tui.components.spinner.Spinner`；overlay 只负责定位和焦点，不得自存 spinner 帧字符或推进逻辑。`tui.components.spinner.PI_FRAMES` 是 substrate 唯一 braille spinner 帧来源。
@@ -68,7 +68,7 @@ doc_id_assigned_at: 2026-04-25T23:12:00+02:00
 - `wcwidth` 作为直接生产依赖进入 `pyproject.toml`，`uv sync` 成功。
 - `TerminalSession` 在正常退出、Ctrl+C、SIGTERM、异常崩溃后恢复 cooked mode、关闭 bracketed paste、显示 cursor、移除 resize handler。
 - stdin buffer 单测覆盖 partial ESC、CSI、OSC、APC、bracketed paste。
-- renderer 单测覆盖 first render、line diff、resize full redraw、content shrink clear、synchronized output 包裹。
+- renderer 单测覆盖 first render、line diff、resize full redraw、content shrink clear、synchronized output 包裹，以及 command-mode live region / committed transcript 的 SGR reset 与非全屏清理行为。
 - width 单测覆盖 CJK、emoji、combining mark、ANSI color、tab、截断和 wrapping。
 - `Component.render(width)` 输出超宽时必须截断或 fail-fast，测试覆盖 negative case。
 - `just lint` green，`complexity_guard` 0 regression。

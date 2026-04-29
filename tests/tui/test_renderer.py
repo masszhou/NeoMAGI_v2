@@ -103,3 +103,49 @@ def test_cursor_visibility_toggled_through_present_only() -> None:
     out.seek(0)
     r.present(["alpha"], cursor=CursorPosition(row=1, col=1, visible=True))
     assert "\x1b[?25h" in out.getvalue()
+
+
+def test_first_command_live_render_does_not_clear_or_home_screen() -> None:
+    r, out = _make()
+    r.present_live(["> hello", "[idle]"], cursor=CursorPosition(row=1, col=3))
+    text = out.getvalue()
+    assert "> hello" in text
+    assert text.startswith("\x1b[?2026h")
+    assert text.endswith("\x1b[?2026l")
+    assert "\x1b[1;1H" not in text
+    assert "\x1b[J" not in text
+
+
+def test_command_commit_appends_transcript_without_rewriting_history() -> None:
+    r, out = _make()
+    r.present_live(["> draft", "[idle]"], cursor=CursorPosition(row=1, col=3))
+    out.truncate(0)
+    out.seek(0)
+
+    r.commit_lines(["\x1b[1muser\x1b[0m", "  hello", ""])
+    committed = out.getvalue()
+    assert "user" in committed
+    assert "hello\x1b[0m\n" in committed
+    assert "\x1b[1;1H" not in committed
+
+    out.truncate(0)
+    out.seek(0)
+    r.present_live(["> next", "[idle]"], cursor=CursorPosition(row=1, col=3))
+    live = out.getvalue()
+    assert "> next" in live
+    assert "hello" not in live
+
+
+def test_command_paths_reset_sgr_after_each_row() -> None:
+    r, out = _make()
+    r.commit_lines(["\x1b[1mbold"])
+    assert "\x1b[1mbold\x1b[0m\n" in out.getvalue()
+
+    out.truncate(0)
+    out.seek(0)
+    r.present_live(
+        ["\x1b[1mlive", "plain"],
+        cursor=CursorPosition(row=2, col=1, visible=True),
+    )
+    text = out.getvalue()
+    assert "\x1b[1mlive\x1b[0m\nplain\x1b[0m" in text

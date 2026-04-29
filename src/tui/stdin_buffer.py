@@ -9,7 +9,7 @@ events:
 - :class:`ResizeEvent` — fed in by ``TerminalSession`` SIGWINCH handler;
   not parsed from stdin but re-exported here so the upstream keymap sees
   one unified event type.
-- :class:`MouseEvent` — placeholder type for M2+; M1 does not consume.
+- :class:`MouseEvent` / :class:`MouseWheelEvent` — generic SGR mouse input.
 
 These are *substrate-internal* dataclasses, **not** Pi-compatible protocol
 models. They never persist, never enter ``events.jsonl``, never escape the
@@ -23,6 +23,7 @@ import codecs
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Literal
 
 # Bracketed-paste markers (DEC).
 PASTE_BEGIN = "\x1b[200~"
@@ -56,15 +57,24 @@ class ResizeEvent:
 
 @dataclass(frozen=True)
 class MouseEvent:
-    """Placeholder for M2+. Not emitted in M1."""
+    """Generic SGR mouse press/release event."""
 
     button: int
     col: int
     row: int
     pressed: bool
+    modifiers: frozenset[str] = field(default_factory=frozenset)
 
 
-Event = KeyEvent | PasteEvent | ResizeEvent | MouseEvent
+@dataclass(frozen=True)
+class MouseWheelEvent:
+    direction: Literal["up", "down"]
+    col: int
+    row: int
+    modifiers: frozenset[str] = field(default_factory=frozenset)
+
+
+Event = KeyEvent | PasteEvent | ResizeEvent | MouseEvent | MouseWheelEvent
 
 
 # Mapping from bare CSI / SS3 final-byte sequences to logical key names.
@@ -304,7 +314,7 @@ class StdinBuffer:
     # Escape parsing                                                      #
     # ------------------------------------------------------------------ #
 
-    def _parse_escape(self, buf: str, start: int) -> tuple[KeyEvent | None, int] | None:
+    def _parse_escape(self, buf: str, start: int) -> tuple[Event | None, int] | None:
         # Look at the byte after ESC.
         if start + 1 >= len(buf):
             return None
@@ -345,7 +355,7 @@ class StdinBuffer:
         # return None to wait; callers force a flush by feeding any byte.
         return KeyEvent("Esc", raw="\x1b"), start + 1
 
-    def _parse_csi(self, buf: str, start: int) -> tuple[KeyEvent | None, int] | None:
+    def _parse_csi(self, buf: str, start: int) -> tuple[Event | None, int] | None:
         # CSI is ESC [ <params> <intermediate> <final>. Final byte is in
         # 0x40..0x7e. Parameters are digits / ';'. Intermediate is 0x20..0x2f.
         end = start + 2
@@ -368,9 +378,12 @@ class StdinBuffer:
         # Truncated CSI — wait for more input.
         return None
 
-    def _csi_to_event(self, params: str, final: str, raw: str) -> KeyEvent | None:
+    def _csi_to_event(self, params: str, final: str, raw: str) -> Event | None:
         modifiers: frozenset[str] = frozenset()
         name: str | None = None
+
+        if final in {"M", "m"} and params.startswith("<"):
+            return self._parse_sgr_mouse(params, final)
 
         if final == "u":
             # CSI <code> ; <mod> u  — Kitty / xterm modifyOtherKeys=2.
@@ -409,6 +422,31 @@ class StdinBuffer:
 
         # Unknown CSI — drop silently rather than corrupt the stream.
         return None
+
+    def _parse_sgr_mouse(self, params: str, final: str) -> Event | None:
+        parts = params[1:].split(";")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts):
+            return None
+        code, col, row = (int(part) for part in parts)
+        modifiers = _mouse_modifiers(code)
+        if code & 64:
+            button = code & 0b11
+            if button == 0:
+                return MouseWheelEvent(
+                    direction="up", col=col, row=row, modifiers=modifiers
+                )
+            if button == 1:
+                return MouseWheelEvent(
+                    direction="down", col=col, row=row, modifiers=modifiers
+                )
+            return None
+        return MouseEvent(
+            button=code & 0b11,
+            col=col,
+            row=row,
+            pressed=final == "M",
+            modifiers=modifiers,
+        )
 
     def _csi_27_alt_form(self, parts: list[str], raw: str) -> KeyEvent | None:
         """xterm modifyOtherKeys=2 alternate encoding ``CSI 27 ; mod ; ascii ~``.
@@ -548,10 +586,22 @@ def _is_cursor_position_report(params: str) -> bool:
     return len(parts) == 2 and all(part.isdigit() and part for part in parts)
 
 
+def _mouse_modifiers(code: int) -> frozenset[str]:
+    modifiers: set[str] = set()
+    if code & 4:
+        modifiers.add("Shift")
+    if code & 8:
+        modifiers.add("Alt")
+    if code & 16:
+        modifiers.add("Ctrl")
+    return frozenset(modifiers)
+
+
 __all__ = [
     "Event",
     "KeyEvent",
     "MouseEvent",
+    "MouseWheelEvent",
     "PASTE_BEGIN",
     "PASTE_END",
     "PasteEvent",

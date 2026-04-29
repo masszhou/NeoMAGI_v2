@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tui.stdin_buffer import KeyEvent, PasteEvent, StdinBuffer
+from tui.stdin_buffer import KeyEvent, MouseEvent, MouseWheelEvent, PasteEvent, StdinBuffer
 
 
 def _drain(text: str) -> list:
@@ -268,3 +268,19 @@ def test_late_cursor_position_report_is_discarded() -> None:
 def test_late_cursor_position_report_does_not_swallow_user_input() -> None:
     events = _drain("a\x1b[12;34Rb")
     assert [e.key for e in events] == ["a", "b"]
+
+
+def test_sgr_mouse_wheel_up_and_down_events() -> None:
+    events = _drain("\x1b[<64;10;5M\x1b[<65;10;6M")
+    assert events == [
+        MouseWheelEvent(direction="up", col=10, row=5),
+        MouseWheelEvent(direction="down", col=10, row=6),
+    ]
+
+
+def test_sgr_mouse_press_event_stays_distinct_from_wheel() -> None:
+    events = _drain("\x1b[<0;7;8M\x1b[<0;7;8m")
+    assert events == [
+        MouseEvent(button=0, col=7, row=8, pressed=True),
+        MouseEvent(button=0, col=7, row=8, pressed=False),
+    ]

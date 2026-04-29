@@ -19,6 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from cli.__main__ import _resolve_render_mode
+from cli.cli_args import CliOptions
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "pi_compat"
@@ -46,6 +49,23 @@ def _run_cli(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess[s
     )
 
 
+def _opts(
+    *,
+    playback: Path | None,
+    tui_render_mode: str | None,
+) -> CliOptions:
+    return CliOptions(
+        playback=playback,
+        print_only=False,
+        help=False,
+        print_message=None,
+        model_ref="faux/faux-1",
+        thinking_level="off",
+        cache_retention=None,
+        tui_render_mode=tui_render_mode,  # type: ignore[arg-type]
+    )
+
+
 def test_help_lists_runtime_and_fixture_flags() -> None:
     result = _run_cli("--help")
     assert result.returncode == 0
@@ -55,7 +75,26 @@ def test_help_lists_runtime_and_fixture_flags() -> None:
     assert "--model" in out
     assert "--thinking-level" in out
     assert "--cache-retention" in out
+    assert "--tui-render-mode" in out
     assert "--help" in out
+
+
+def test_default_tui_render_mode_is_command_for_runtime() -> None:
+    opts = _opts(playback=None, tui_render_mode=None)
+    assert _resolve_render_mode(opts) == "command"
+
+
+def test_default_tui_render_mode_is_canvas_for_playback() -> None:
+    opts = _opts(playback=FIXTURE_ROOT / "assistant_text_delta", tui_render_mode=None)
+    assert _resolve_render_mode(opts) == "canvas"
+
+
+def test_explicit_tui_render_mode_wins_for_playback() -> None:
+    opts = _opts(
+        playback=FIXTURE_ROOT / "assistant_text_delta",
+        tui_render_mode="command",
+    )
+    assert _resolve_render_mode(opts) == "command"
 
 
 def test_print_returns_stub_message() -> None:

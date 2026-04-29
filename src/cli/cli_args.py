@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from ai_provider.model_registry import resolve_model, validate_thinking_level_for_model
 from ai_provider.types import CacheRetention, ThinkingLevel
@@ -19,7 +20,10 @@ THINKING_LEVELS: tuple[ThinkingLevel, ...] = (
     "xhigh",
 )
 CACHE_RETENTIONS: tuple[CacheRetention, ...] = ("none", "short", "long")
-_RUNTIME_FLAGS = frozenset({"--model", "--thinking-level", "--cache-retention"})
+TUI_RENDER_MODES: tuple[Literal["command", "canvas"], ...] = ("command", "canvas")
+_RUNTIME_FLAGS = frozenset(
+    {"--model", "--thinking-level", "--cache-retention", "--tui-render-mode"}
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,7 @@ class CliOptions:
     model_ref: str
     thinking_level: ThinkingLevel
     cache_retention: CacheRetention | None
+    tui_render_mode: Literal["command", "canvas"] | None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,6 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Provider prompt-cache retention override.",
     )
+    parser.add_argument(
+        "--tui-render-mode",
+        choices=TUI_RENDER_MODES,
+        default=None,
+        help=(
+            "Interactive TUI render mode: command appends transcript to terminal "
+            "scrollback; canvas uses the fixed viewport."
+        ),
+    )
     return parser
 
 
@@ -109,7 +123,8 @@ def parse_args(argv: list[str] | None = None) -> CliOptions:
         model_ref=args.model,
         thinking_level=thinking_level,
         cache_retention=args.cache_retention,
+        tui_render_mode=args.tui_render_mode,
     )
 
 
-__all__ = ["CliOptions", "build_parser", "parse_args"]
+__all__ = ["CliOptions", "TUI_RENDER_MODES", "build_parser", "parse_args"]

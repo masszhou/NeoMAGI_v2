@@ -110,3 +110,47 @@ def test_query_cursor_row_non_tty_is_no_op() -> None:
         fallback_allowed=False,
     )
     assert out.getvalue() == ""
+
+
+def test_enter_exit_omits_mouse_tracking_when_disabled(monkeypatch) -> None:
+    import termios
+    import tty
+
+    out = _TTYOut()
+    ts = TerminalSession(
+        in_stream=_TTYIn(),
+        out_stream=out,
+        enable_mouse_tracking=False,
+    )
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: ["old"])
+    monkeypatch.setattr(termios, "tcsetattr", lambda *_args: None)
+    monkeypatch.setattr(tty, "setraw", lambda _fd: None)
+
+    ts.enter()
+    ts.exit()
+    text = out.getvalue()
+    assert "\x1b[?1000h" not in text
+    assert "\x1b[?1006h" not in text
+    assert "\x1b[?1006l" not in text
+    assert "\x1b[?1000l" not in text
+
+
+def test_enter_exit_pairs_sgr_mouse_tracking_when_enabled(monkeypatch) -> None:
+    import termios
+    import tty
+
+    out = _TTYOut()
+    ts = TerminalSession(
+        in_stream=_TTYIn(),
+        out_stream=out,
+        enable_mouse_tracking=True,
+    )
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: ["old"])
+    monkeypatch.setattr(termios, "tcsetattr", lambda *_args: None)
+    monkeypatch.setattr(tty, "setraw", lambda _fd: None)
+
+    ts.enter()
+    ts.exit()
+    text = out.getvalue()
+    assert "\x1b[?1000h\x1b[?1006h" in text
+    assert "\x1b[?1006l\x1b[?1000l" in text

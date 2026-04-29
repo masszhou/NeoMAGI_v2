@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import TextIO
+from typing import Literal
 
 from .component import Component, CursorMarker, CursorPosition
 from .renderer import Renderer
@@ -31,6 +32,8 @@ from .terminal import TerminalSize
 InputHook = Callable[[Event], bool]
 """Pre-dispatch hook. Return ``True`` to indicate the event was handled
 and shouldn't be forwarded to the focused component."""
+
+RenderMode = Literal["command", "canvas"]
 
 
 class TUIApp:
@@ -60,11 +63,19 @@ class TUIApp:
         out_stream: TextIO | None = None,
         tick_interval: float = 0.012,
         anchor_reserved_height: int | None = None,
+        render_mode: RenderMode = "canvas",
     ) -> None:
+        if render_mode not in ("command", "canvas"):
+            raise ValueError(f"unknown TUI render mode: {render_mode!r}")
         self._out: TextIO = out_stream if out_stream is not None else sys.stdout
+        self._render_mode: RenderMode = render_mode
         self._terminal: TerminalSession = terminal or TerminalSession(
-            out_stream=self._out
+            out_stream=self._out,
+            enable_mouse_tracking=render_mode == "canvas",
         )
+        set_mouse_tracking = getattr(self._terminal, "set_mouse_tracking", None)
+        if callable(set_mouse_tracking):
+            set_mouse_tracking(render_mode == "canvas")
         self._renderer: Renderer = renderer or Renderer(out_stream=self._out)
         self._stdin: StdinBuffer = stdin_buffer or StdinBuffer()
         self._tick_interval: float = tick_interval
@@ -151,6 +162,23 @@ class TUIApp:
     def terminal(self) -> TerminalSession:
         return self._terminal
 
+    @property
+    def render_mode(self) -> RenderMode:
+        return self._render_mode
+
+    @property
+    def cols(self) -> int:
+        return self._cols
+
+    def commit_lines(self, lines: list[str]) -> None:
+        if self._render_mode != "command" or not lines:
+            return
+        self._renderer.commit_lines(lines)
+
+    def clear_live_region(self) -> None:
+        if self._render_mode == "command":
+            self._renderer.clear_live_region()
+
     # ------------------------------------------------------------------ #
     # Render scheduling                                                   #
     # ------------------------------------------------------------------ #
@@ -224,7 +252,8 @@ class TUIApp:
 
         self._cols = max(20, cols)
         self._rows = max(5, rows)
-        self._renderer.reset()
+        if self._render_mode != "command":
+            self._renderer.reset()
         self._anchor_dirty = True
         self._injected.append(ResizeEvent(cols=self._cols, rows=self._rows))
         self.request_render()
@@ -298,12 +327,20 @@ class TUIApp:
                 # Hooks must not crash the loop; log via stderr in dev.
                 continue
         if isinstance(event, ResizeEvent):
-            return  # Already handled by simulate_resize → renderer.reset.
+            if self._render_mode == "command":
+                self._renderer.clear_live_region()
+                self._renderer.reset()
+            return
         if self._focus is not None and isinstance(event, KeyEvent | PasteEvent):
             self._focus.handle_input(event)
             self.request_render()
 
     def _draw(self) -> None:
+        if self._render_mode == "command":
+            frame = self._compose_command_frame()
+            cursor = self._compose_cursor(frame)
+            self._renderer.present_live(frame, cursor=cursor)
+            return
         if self._anchor_dirty:
             self._prepare_anchor(TerminalSize(cols=self._cols, rows=self._rows))
         frame = self._compose_frame()
@@ -371,6 +408,23 @@ class TUIApp:
             lines.extend([""] * (available_rows - len(lines)))
         return lines
 
+    def _compose_command_frame(self) -> list[str]:
+        lines: list[str] = []
+        overlay_lines: list[str] = []
+        for overlay in self._overlays:
+            overlay_lines.extend(overlay.render(self._cols))
+        if self._root is not None:
+            available = max(1, self._rows - len(overlay_lines))
+            render_with_height = getattr(self._root, "render_command_with_height", None)
+            if callable(render_with_height):
+                lines.extend(render_with_height(self._cols, available))
+            else:
+                lines.extend(self._root.render(self._cols))
+        lines.extend(overlay_lines)
+        if len(lines) > self._rows:
+            lines = lines[-self._rows :]
+        return lines
+
     def _compose_cursor(self, frame: list[str]) -> CursorPosition | None:
         if self._focus is None:
             return None
@@ -413,7 +467,7 @@ class TUIApp:
         return None
 
 
-__all__ = ["TUIApp", "InputHook"]
+__all__ = ["TUIApp", "InputHook", "RenderMode"]
 
 
 # ---------------------------------------------------------------------- #

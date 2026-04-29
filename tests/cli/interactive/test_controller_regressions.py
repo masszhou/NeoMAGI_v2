@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 from ai_provider.types import AssistantMessage, TextContent, Usage, UsageCost, UserMessage
+from cli.core.session_types import MessageStartEvent
 from cli.interactive.app import InteractiveController
 from cli.interactive.components import AssistantMessageComponent, UserMessageComponent
 from cli.interactive.playback import PlaybackHarness
 from tui.app import TUIApp
 from tui.editor import EditorState
 from tui.overlay import Selector
-from tui.stdin_buffer import KeyEvent
+from tui.stdin_buffer import KeyEvent, MouseWheelEvent
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "fixtures" / "pi_compat"
 
@@ -22,6 +24,14 @@ def _make_controller() -> tuple[TUIApp, InteractiveController]:
     c = InteractiveController(tui_app=app)
     c.bootstrap()
     return app, c
+
+
+def _make_command_controller() -> tuple[TUIApp, InteractiveController, io.StringIO]:
+    out = io.StringIO()
+    app = TUIApp(render_mode="command", out_stream=out)
+    c = InteractiveController(tui_app=app)
+    c.bootstrap()
+    return app, c, out
 
 
 # -------------------------------------------------------------------- #
@@ -472,6 +482,74 @@ def test_page_up_and_down_scroll_message_history_viewport() -> None:
         _inject(app, "PageDown")
     latest = "\n".join(app._compose_frame())  # noqa: SLF001
     assert "answer 6" in latest
+
+
+def test_canvas_mouse_wheel_scrolls_message_history_viewport() -> None:
+    app, c = _make_controller()
+    app._cols, app._rows = 80, 10  # noqa: SLF001
+    for index in range(1, 7):
+        c.messages.append(
+            UserMessageComponent(UserMessage(content=f"prompt {index}", timestamp=index))
+        )
+        c.messages.append(
+            AssistantMessageComponent(
+                AssistantMessage(
+                    role="assistant",
+                    content=[TextContent(text=f"answer {index}")],
+                    api="openai-responses",
+                    provider="openai",
+                    model="gpt-4o-mini",
+                    usage=_zero_usage(),
+                    stopReason="stop",
+                    timestamp=index,
+                )
+            )
+        )
+
+    bottom = "\n".join(app._compose_frame())  # noqa: SLF001
+    assert "answer 6" in bottom
+    for _ in range(8):
+        app.inject_input(MouseWheelEvent(direction="up", col=1, row=1))
+    app.step()
+    earlier = "\n".join(app._compose_frame())  # noqa: SLF001
+    assert "prompt 1" in earlier or "answer 1" in earlier
+
+
+def test_command_mode_commits_completed_messages_to_scrollback() -> None:
+    app, c, out = _make_command_controller()
+    c.dispatch_event(
+        MessageStartEvent(message=UserMessage(content="prompt one", timestamp=1))
+    )
+
+    written = out.getvalue()
+    assert "prompt one" in written
+    live = "\n".join(app._compose_command_frame())  # noqa: SLF001
+    assert "prompt one" not in live
+
+
+def test_command_page_up_is_noop_for_editor_and_transcript_viewport() -> None:
+    app, c, _ = _make_command_controller()
+    for ch in "draft":
+        c.editor.handle_input(KeyEvent(ch, raw=ch))
+
+    _inject(app, "PageUp")
+
+    assert c.editor.buffer.text == "draft"
+    assert c.messages._scroll_offset_rows == 0  # noqa: SLF001
+
+
+def test_command_new_session_appends_boundary_without_erasing_scrollback() -> None:
+    _, c, out = _make_command_controller()
+    c.dispatch_event(
+        MessageStartEvent(message=UserMessage(content="old prompt", timestamp=1))
+    )
+    out.truncate(0)
+    out.seek(0)
+
+    c.reset_session()
+
+    text = out.getvalue()
+    assert "[new session] previous runtime transcript cleared" in text
 
 
 def test_scrolled_message_history_keeps_cursor_on_editor_row() -> None:

@@ -117,6 +117,10 @@ def _restore_exit_signal_handlers(old_int: object, old_term: object) -> None:
 def _place_cursor_after_frame(app: TUIApp) -> None:
     if getattr(app.terminal, "is_tty", True) is False:
         return
+    if getattr(app, "render_mode", "canvas") == "command":
+        app.clear_live_region()
+        app.terminal.write("\r\n")
+        return
     bottom = app.renderer.last_bottom_row()
     if bottom is None:
         return

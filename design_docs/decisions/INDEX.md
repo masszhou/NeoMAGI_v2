@@ -30,3 +30,4 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 ## Amendments
 
 - 2026-04-26: ADR-0015 §影响 amended for P1-M1 follow-ups: anchored renderer / DSR ownership, lifecycle cursor placement, late CPR discard, Spinner primitive, and `src/tui/components/` substrate primitive boundary.
+- 2026-04-30: ADR-0015 §影响 amended for P1-M4 follow-up render modes: `present()` remains the canvas frame entry, while command mode uses `present_live()` / `commit_lines()` / `clear_live_region()` with SGR reset and synchronized live-region output.
