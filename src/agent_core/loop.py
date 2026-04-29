@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 from ai_provider.api_registry import stream_simple
@@ -21,6 +22,12 @@ from .types import (
     TurnStartEvent,
     AgentStartEvent,
 )
+
+
+@dataclass(slots=True)
+class _AssistantStreamState:
+    partial_message: AssistantMessage | None = None
+    added_partial: bool = False
 
 
 def default_convert_to_llm(messages: list[Any]) -> list[Message]:
@@ -92,51 +99,18 @@ async def _run_loop(
     while True:
         has_more_tool_calls = True
         while has_more_tool_calls or pending_messages:
-            if first_turn:
-                first_turn = False
-            else:
-                await _emit(emit, TurnStartEvent())
-
-            if pending_messages:
-                for message in pending_messages:
-                    await _emit(emit, MessageStartEvent(message=message))
-                    await _emit(emit, MessageEndEvent(message=message))
-                    current_context.messages.append(message)
-                    new_messages.append(message)
-                pending_messages = []
-
-            if signal and signal.is_set():
-                await _emit(emit, AgentEndEvent(messages=list(new_messages)))
+            first_turn, has_more_tool_calls, should_stop = await _run_one_turn(
+                current_context,
+                new_messages,
+                config,
+                signal,
+                emit,
+                first_turn,
+                pending_messages,
+            )
+            if should_stop:
                 return
-
-            message = await stream_assistant_response(current_context, config, signal, emit)
-            new_messages.append(message)
-
-            if message.stop_reason in {"error", "aborted"}:
-                await _emit(emit, TurnEndEvent(message=message, toolResults=[]))
-                await _emit(emit, AgentEndEvent(messages=list(new_messages)))
-                return
-
-            tool_calls = [block for block in message.content if block.type == "toolCall"]
-            has_more_tool_calls = bool(tool_calls)
-            tool_results = []
-            if has_more_tool_calls and not (signal and signal.is_set()):
-                tool_results = await execute_tool_calls(
-                    current_context,
-                    message,
-                    config,
-                    signal,
-                    emit,
-                )
-                for result in tool_results:
-                    current_context.messages.append(result)
-                    new_messages.append(result)
-
-            await _emit(emit, TurnEndEvent(message=message, toolResults=tool_results))
-            if signal and signal.is_set():
-                await _emit(emit, AgentEndEvent(messages=list(new_messages)))
-                return
-
+            pending_messages = []
             pending_messages = await _drain(config.get_steering_messages)
 
         follow_up_messages = await _drain(config.get_follow_up_messages)
@@ -148,94 +122,222 @@ async def _run_loop(
     await _emit(emit, AgentEndEvent(messages=list(new_messages)))
 
 
+async def _run_one_turn(
+    current_context: AgentContext,
+    new_messages: list[Any],
+    config: AgentLoopConfig,
+    signal: asyncio.Event | None,
+    emit: AgentEventSink,
+    first_turn: bool,
+    pending_messages: list[Any],
+) -> tuple[bool, bool, bool]:
+    first_turn = await _start_turn_if_needed(first_turn, emit)
+    await _emit_pending_messages(pending_messages, current_context, new_messages, emit)
+    if _signal_is_set(signal):
+        await _emit_agent_end(new_messages, emit)
+        return first_turn, False, True
+
+    message = await stream_assistant_response(current_context, config, signal, emit)
+    new_messages.append(message)
+    if message.stop_reason in {"error", "aborted"}:
+        await _emit(emit, TurnEndEvent(message=message, toolResults=[]))
+        await _emit_agent_end(new_messages, emit)
+        return first_turn, False, True
+
+    has_more_tool_calls, tool_results = await _execute_message_tools(
+        current_context,
+        new_messages,
+        message,
+        config,
+        signal,
+        emit,
+    )
+    await _emit(emit, TurnEndEvent(message=message, toolResults=tool_results))
+    if _signal_is_set(signal):
+        await _emit_agent_end(new_messages, emit)
+        return first_turn, has_more_tool_calls, True
+    return first_turn, has_more_tool_calls, False
+
+
+async def _start_turn_if_needed(first_turn: bool, emit: AgentEventSink) -> bool:
+    if first_turn:
+        return False
+    await _emit(emit, TurnStartEvent())
+    return False
+
+
+async def _emit_pending_messages(
+    pending_messages: list[Any],
+    current_context: AgentContext,
+    new_messages: list[Any],
+    emit: AgentEventSink,
+) -> None:
+    for message in pending_messages:
+        await _emit(emit, MessageStartEvent(message=message))
+        await _emit(emit, MessageEndEvent(message=message))
+        current_context.messages.append(message)
+        new_messages.append(message)
+
+
+async def _execute_message_tools(
+    current_context: AgentContext,
+    new_messages: list[Any],
+    message: AssistantMessage,
+    config: AgentLoopConfig,
+    signal: asyncio.Event | None,
+    emit: AgentEventSink,
+) -> tuple[bool, list[Any]]:
+    tool_calls = [block for block in message.content if block.type == "toolCall"]
+    has_more_tool_calls = bool(tool_calls)
+    tool_results: list[Any] = []
+    if has_more_tool_calls and not _signal_is_set(signal):
+        tool_results = await execute_tool_calls(current_context, message, config, signal, emit)
+        current_context.messages.extend(tool_results)
+        new_messages.extend(tool_results)
+    return has_more_tool_calls, tool_results
+
+
 async def stream_assistant_response(
     context: AgentContext,
     config: AgentLoopConfig,
     signal: asyncio.Event | None,
     emit: AgentEventSink,
 ) -> AssistantMessage:
-    messages: list[Any] = list(context.messages)
+    llm_context = await _build_llm_context(context, config, signal)
+    stream = await _open_assistant_stream(llm_context, config, signal)
+    if config.on_stream_created is not None:
+        config.on_stream_created(stream)
+    return await _consume_assistant_stream(context, stream, emit)
+
+
+async def _build_llm_context(
+    context: AgentContext,
+    config: AgentLoopConfig,
+    signal: asyncio.Event | None,
+) -> Context:
+    messages = list(context.messages)
     if config.transform_context is not None:
         messages = list(await maybe_await(config.transform_context(messages, signal)))
-
     convert_to_llm = config.convert_to_llm or default_convert_to_llm
     llm_messages = list(await maybe_await(convert_to_llm(messages)))
-    llm_context = Context(
+    return Context(
         systemPrompt=context.system_prompt,
         messages=llm_messages,
         tools=[tool.to_provider_tool() for tool in config.tools] or None,
     )
-    api_key = None
-    if config.get_api_key is not None:
-        api_key = await maybe_await(config.get_api_key(config.model.provider))
 
+
+async def _open_assistant_stream(
+    llm_context: Context,
+    config: AgentLoopConfig,
+    signal: asyncio.Event | None,
+) -> Any:
     stream_fn = config.stream_fn or stream_simple
-    stream = await maybe_await(
+    return await maybe_await(
         stream_fn(
             config.model,
             llm_context,
-            SimpleStreamOptions(
-                signal=signal,
-                api_key=api_key,
-                transport=config.transport,
-                cache_retention=config.cache_retention,
-                session_id=config.session_id,
-                on_payload=config.on_payload,
-                on_response=config.on_response,
-                max_retry_delay_ms=config.max_retry_delay_ms,
-                metadata=dict(config.metadata),
-                client=config.client,
-                reasoning=None if config.thinking_level == "off" else config.thinking_level,
-                thinking_budgets=dict(config.thinking_budgets),
-            ),
+            await _stream_options(config, signal),
         )
     )
-    if config.on_stream_created is not None:
-        config.on_stream_created(stream)
 
-    partial_message: AssistantMessage | None = None
-    added_partial = False
+
+async def _stream_options(
+    config: AgentLoopConfig,
+    signal: asyncio.Event | None,
+) -> SimpleStreamOptions:
+    api_key = None
+    if config.get_api_key is not None:
+        api_key = await maybe_await(config.get_api_key(config.model.provider))
+    return SimpleStreamOptions(
+        signal=signal,
+        api_key=api_key,
+        transport=config.transport,
+        cache_retention=config.cache_retention,
+        session_id=config.session_id,
+        on_payload=config.on_payload,
+        on_response=config.on_response,
+        max_retry_delay_ms=config.max_retry_delay_ms,
+        metadata=dict(config.metadata),
+        client=config.client,
+        reasoning=None if config.thinking_level == "off" else config.thinking_level,
+        thinking_budgets=dict(config.thinking_budgets),
+    )
+
+
+async def _consume_assistant_stream(
+    context: AgentContext,
+    stream: Any,
+    emit: AgentEventSink,
+) -> AssistantMessage:
+    state = _AssistantStreamState()
     async for event in stream:
         if event.type == "start":
-            partial_message = event.partial
-            context.messages.append(partial_message)
-            added_partial = True
-            await _emit(emit, MessageStartEvent(message=partial_message.model_copy(deep=True)))
+            await _handle_stream_start(context, state, event.partial, emit)
             continue
-
         if _is_update_event(event):
-            partial = getattr(event, "partial", None)
-            if partial is not None:
-                partial_message = partial
-                if added_partial:
-                    context.messages[-1] = partial_message
-                await _emit(
-                    emit,
-                    MessageUpdateEvent(
-                        message=partial_message.model_copy(deep=True),
-                        assistantMessageEvent=event,
-                    ),
-                )
+            await _handle_stream_update(context, state, event, emit)
             continue
-
         if event.type in {"done", "error"}:
-            final_message = await stream.result()
-            if added_partial:
-                context.messages[-1] = final_message
-            else:
-                context.messages.append(final_message)
-                await _emit(emit, MessageStartEvent(message=final_message.model_copy(deep=True)))
-            await _emit(emit, MessageEndEvent(message=final_message))
-            return final_message
+            return await _finish_stream_message(context, state, stream, emit)
+    return await _finish_stream_message(context, state, stream, emit)
 
+
+async def _handle_stream_start(
+    context: AgentContext,
+    state: _AssistantStreamState,
+    partial_message: AssistantMessage,
+    emit: AgentEventSink,
+) -> None:
+    state.partial_message = partial_message
+    state.added_partial = True
+    context.messages.append(partial_message)
+    await _emit(emit, MessageStartEvent(message=partial_message.model_copy(deep=True)))
+
+
+async def _handle_stream_update(
+    context: AgentContext,
+    state: _AssistantStreamState,
+    event: Any,
+    emit: AgentEventSink,
+) -> None:
+    partial_message = getattr(event, "partial", None)
+    if partial_message is None:
+        return
+    state.partial_message = partial_message
+    if state.added_partial:
+        context.messages[-1] = partial_message
+    await _emit(
+        emit,
+        MessageUpdateEvent(
+            message=partial_message.model_copy(deep=True),
+            assistantMessageEvent=event,
+        ),
+    )
+
+
+async def _finish_stream_message(
+    context: AgentContext,
+    state: _AssistantStreamState,
+    stream: Any,
+    emit: AgentEventSink,
+) -> AssistantMessage:
     final_message = await stream.result()
-    if added_partial:
+    if state.added_partial:
         context.messages[-1] = final_message
     else:
         context.messages.append(final_message)
         await _emit(emit, MessageStartEvent(message=final_message.model_copy(deep=True)))
     await _emit(emit, MessageEndEvent(message=final_message))
     return final_message
+
+
+async def _emit_agent_end(new_messages: list[Any], emit: AgentEventSink) -> None:
+    await _emit(emit, AgentEndEvent(messages=list(new_messages)))
+
+
+def _signal_is_set(signal: asyncio.Event | None) -> bool:
+    return signal is not None and signal.is_set()
 
 
 async def _drain(drain: Any) -> list[Any]:

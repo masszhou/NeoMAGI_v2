@@ -13,7 +13,17 @@ from ai_provider.providers.openai_responses import (
     stream_openai_responses,
 )
 from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions
-from ai_provider.types import Context, Tool, UserMessage
+from ai_provider.types import (
+    AssistantMessage,
+    Context,
+    TextContent,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UsageCost,
+    UserMessage,
+)
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "pi_compat"
 
@@ -83,6 +93,17 @@ def _context() -> Context:
     )
 
 
+def _usage() -> Usage:
+    return Usage(
+        input=0,
+        output=0,
+        cacheRead=0,
+        cacheWrite=0,
+        totalTokens=0,
+        cost=UsageCost(input=0, output=0, cacheRead=0, cacheWrite=0, total=0),
+    )
+
+
 def _fixture(scene: str) -> dict:
     return json.loads((FIXTURE_ROOT / scene / "fixture.json").read_text())
 
@@ -123,6 +144,63 @@ def test_openai_responses_cache_none_forbids_cache_fields() -> None:
     forbidden = {"prompt_cache_key", "prompt_cache_retention", "session_id", "x-client-request-id"}
     assert forbidden.isdisjoint(payload)
     assert forbidden.isdisjoint(headers)
+
+
+def test_openai_responses_flattens_tool_call_history_for_continuation() -> None:
+    model = get_model("openai", "gpt-4o-mini")
+    context = Context(
+        messages=[
+            UserMessage(content="Use read_file with README.md", timestamp=1),
+            AssistantMessage(
+                content=[
+                    ToolCall(
+                        id="call_read_1",
+                        name="read_file",
+                        arguments={"path": "README.md"},
+                    )
+                ],
+                api=model.api,
+                provider=model.provider,
+                model=model.id,
+                usage=_usage(),
+                stopReason="toolUse",
+                timestamp=2,
+            ),
+            ToolResultMessage(
+                toolCallId="call_read_1",
+                toolName="read_file",
+                content=[TextContent(text="README.md says this is NeoMAGI_v2.")],
+                details={"text": "README.md says this is NeoMAGI_v2."},
+                isError=False,
+                timestamp=3,
+            ),
+        ],
+        tools=[
+            Tool(
+                name="read_file",
+                description="Read a file",
+                parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+            )
+        ],
+    )
+
+    payload, _headers = build_openai_responses_params(model, context, StreamOptions(cache_retention="none"))
+
+    assert payload["input"] == [
+        {"role": "user", "content": "Use read_file with README.md"},
+        {
+            "type": "function_call",
+            "call_id": "call_read_1",
+            "name": "read_file",
+            "arguments": '{"path": "README.md"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_read_1",
+            "output": "README.md says this is NeoMAGI_v2.",
+        },
+    ]
+    assert "function_call" not in str(payload["input"][0].get("content"))
 
 
 def test_openai_responses_stream_text_and_tool_call() -> None:

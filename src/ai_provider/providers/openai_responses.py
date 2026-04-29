@@ -68,7 +68,7 @@ def build_openai_responses_params(
     options = ensure_stream_options(options)
     payload: dict[str, object] = {
         "model": model.id,
-        "input": [_convert_message(message) for message in context.messages],
+        "input": _convert_messages(context.messages),
         "tools": [_convert_tool(tool) for tool in context.tools or []],
         "store": False,
         "stream": True,
@@ -468,18 +468,38 @@ def _convert_tool(tool: object) -> dict[str, object]:
     }
 
 
-def _convert_message(message: object) -> dict[str, object]:
+def _convert_messages(messages: list[object]) -> list[dict[str, object]]:
+    converted: list[dict[str, object]] = []
+    for message in messages:
+        converted.extend(_convert_message(message))
+    return converted
+
+
+def _convert_message(message: object) -> list[dict[str, object]]:
     if isinstance(message, UserMessage):
-        return {"role": "user", "content": _convert_user_content(message.content)}
+        return [{"role": "user", "content": _convert_user_content(message.content)}]
     if isinstance(message, AssistantMessage):
-        return {
-            "role": "assistant",
-            "content": [_convert_assistant_block(block) for block in message.content],
-        }
+        return _convert_assistant_message(message)
     if isinstance(message, ToolResultMessage):
         text = "\n".join(block.text for block in message.content if block.type == "text")
-        return {"type": "function_call_output", "call_id": message.tool_call_id, "output": text}
+        return [{"type": "function_call_output", "call_id": message.tool_call_id, "output": text}]
     raise TypeError(f"unsupported message type for OpenAI Responses: {type(message)!r}")
+
+
+def _convert_assistant_message(message: AssistantMessage) -> list[dict[str, object]]:
+    converted: list[dict[str, object]] = []
+    message_content: list[dict[str, object]] = []
+    for block in message.content:
+        if isinstance(block, ToolCall):
+            if message_content:
+                converted.append({"role": "assistant", "content": message_content})
+                message_content = []
+            converted.append(_convert_tool_call(block))
+        else:
+            message_content.append(_convert_assistant_block(block))
+    if message_content:
+        converted.append({"role": "assistant", "content": message_content})
+    return converted
 
 
 def _convert_user_content(content: object) -> object:
@@ -503,6 +523,10 @@ def _convert_assistant_block(block: TextContent | ThinkingContent | ToolCall) ->
             "text": block.thinking,
             "encrypted_content": block.thinking_signature,
         }
+    return _convert_tool_call(block)
+
+
+def _convert_tool_call(block: ToolCall) -> dict[str, object]:
     return {
         "type": "function_call",
         "call_id": block.id,

@@ -24,6 +24,82 @@ def _text_result(text: str) -> AgentToolResult:
     return AgentToolResult(content=[{"type": "text", "text": text}], details={"text": text})
 
 
+class _FakeResponses:
+    def __init__(self, event_batches: list[list[dict[str, Any]]]) -> None:
+        self._event_batches = list(event_batches)
+        self.payloads: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> list[dict[str, Any]]:
+        kwargs.pop("extra_headers", None)
+        self.payloads.append(kwargs)
+        return self._event_batches.pop(0)
+
+
+class _FakeOpenAIClient:
+    def __init__(self, event_batches: list[list[dict[str, Any]]]) -> None:
+        self.responses = _FakeResponses(event_batches)
+
+
+OPENAI_TOOL_CALL_RESPONSE = [
+    {
+        "type": "response.output_item.added",
+        "item": {"type": "function_call", "id": "fc_read_1", "call_id": "call_read_1", "name": "read_file"},
+    },
+    {"type": "response.function_call_arguments.done", "item_id": "fc_read_1", "arguments": '{"path":"README.md"}'},
+    {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "id": "fc_read_1",
+            "call_id": "call_read_1",
+            "name": "read_file",
+            "arguments": '{"path":"README.md"}',
+        },
+    },
+    {"type": "response.completed", "response": {"id": "resp_1"}},
+]
+
+OPENAI_FINAL_TEXT_RESPONSE = [
+    {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+    {"type": "response.output_text.delta", "delta": "summary done"},
+    {"type": "response.completed", "response": {"id": "resp_2"}},
+]
+
+ECHO_PARAMETERS = {
+    "type": "object",
+    "properties": {"text": {"type": "string"}},
+    "required": ["text"],
+}
+
+
+def _runtime_tool(
+    name: str,
+    execute: Any,
+    *,
+    parameters: dict[str, Any] | None = None,
+) -> RuntimeAgentTool:
+    return RuntimeAgentTool(
+        name=name,
+        label=name.replace("_", " ").title(),
+        description=f"{name} test tool",
+        parameters=parameters or {"type": "object"},
+        execute=execute,
+    )
+
+
+def _assert_session_options(
+    options_seen: list[SimpleStreamOptions],
+    *,
+    session_id: str,
+    cache_retention: str,
+    api_key: str,
+) -> None:
+    for options in options_seen:
+        assert options.session_id == session_id
+        assert options.cache_retention == cache_retention
+        assert options.api_key == api_key
+
+
 def test_prompt_no_tool_turn_emits_core_events_and_updates_state() -> None:
     async def run() -> None:
         events: list[Any] = []
@@ -41,6 +117,47 @@ def test_prompt_no_tool_turn_emits_core_events_and_updates_state() -> None:
         assert events[-1].messages == agent.state.messages
         for event in events:
             AgentEventAdapter.validate_python(event.model_dump(by_alias=True, exclude_none=True))
+
+    asyncio.run(run())
+
+
+def test_openai_responses_agent_tool_loop_flattens_tool_history() -> None:
+    async def run() -> None:
+        fake = _FakeOpenAIClient([OPENAI_TOOL_CALL_RESPONSE, OPENAI_FINAL_TEXT_RESPONSE])
+
+        async def read_file(*_args: Any) -> AgentToolResult:
+            return _text_result("README.md says this is NeoMAGI_v2.")
+
+        agent = Agent(
+            model=get_model("openai", "gpt-4o-mini"),
+            client=fake,
+            cache_retention="none",
+            tools=[
+                _runtime_tool(
+                    "read_file",
+                    read_file,
+                    parameters={
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                )
+            ],
+        )
+
+        await agent.prompt("Use read_file with path README.md.")
+
+        assert [message.role for message in agent.state.messages] == [
+            "user",
+            "assistant",
+            "toolResult",
+            "assistant",
+        ]
+        assert agent.state.messages[-1].stop_reason == "stop"
+        assert len(fake.responses.payloads) == 2
+        second_input = fake.responses.payloads[1]["input"]
+        assert second_input[1]["type"] == "function_call"
+        assert second_input[2]["type"] == "function_call_output"
 
     asyncio.run(run())
 
@@ -149,17 +266,7 @@ def test_tool_call_result_is_fed_back_until_model_stops() -> None:
             cache_retention="none",
             get_api_key=lambda provider: f"key-for-{provider}",
             tools=[
-                RuntimeAgentTool(
-                    name="echo",
-                    label="Echo",
-                    description="Echo text",
-                    parameters={
-                        "type": "object",
-                        "properties": {"text": {"type": "string"}},
-                        "required": ["text"],
-                    },
-                    execute=execute,
-                )
+                _runtime_tool("echo", execute, parameters=ECHO_PARAMETERS)
             ],
         )
         events: list[str] = []
@@ -169,19 +276,16 @@ def test_tool_call_result_is_fed_back_until_model_stops() -> None:
 
         assert events.count("turn_start") == 2
         assert "tool_execution_update" in events
-        assert [message.role for message in agent.state.messages] == [
-            "user",
-            "assistant",
-            "toolResult",
-            "assistant",
-        ]
+        assert [message.role for message in agent.state.messages] == ["user", "assistant", "toolResult", "assistant"]
         assert agent.state.messages[-1].content[0].text == "final"
         assert len(contexts) == 2
         assert len(options_seen) == 2
-        for options in options_seen:
-            assert options.session_id == "session-1"
-            assert options.cache_retention == "none"
-            assert options.api_key == "key-for-faux"
+        _assert_session_options(
+            options_seen,
+            session_id="session-1",
+            cache_retention="none",
+            api_key="key-for-faux",
+        )
 
     asyncio.run(run())
 
