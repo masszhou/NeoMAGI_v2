@@ -46,12 +46,15 @@ def _run_cli(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess[s
     )
 
 
-def test_help_lists_all_three_p1_flags() -> None:
+def test_help_lists_runtime_and_fixture_flags() -> None:
     result = _run_cli("--help")
     assert result.returncode == 0
     out = result.stdout
     assert "--playback" in out
     assert "--print" in out
+    assert "--model" in out
+    assert "--thinking-level" in out
+    assert "--cache-retention" in out
     assert "--help" in out
 
 
@@ -61,6 +64,24 @@ def test_print_returns_stub_message() -> None:
     assert result.returncode == 0
     assert "not implemented in M1" in result.stderr
     assert "hello" in result.stderr
+
+
+def test_print_rejects_explicit_runtime_flags() -> None:
+    result = _run_cli("--print", "hello", "--model", "faux/faux-1")
+    assert result.returncode == 2
+    assert "cannot be combined" in result.stderr
+
+
+def test_runtime_flag_abbreviations_are_rejected() -> None:
+    result = _run_cli("--print", "hello", "--mod", "faux/faux-1")
+    assert result.returncode == 2
+    assert "unrecognized arguments" in result.stderr
+
+
+def test_unknown_model_fails_before_interactive_tui() -> None:
+    result = _run_cli("--model", "missing/nope", timeout=8.0)
+    assert result.returncode == 2
+    assert "unknown model" in result.stderr
 
 
 def test_playback_assistant_text_delta_exits_within_timeout() -> None:

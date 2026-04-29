@@ -265,15 +265,21 @@ class Agent:
         self._state.is_streaming = True
         self._state.streaming_message = None
         self._state.error_message = None
+        run_start_index = len(self._state.messages)
 
         try:
             await executor(signal)
         except Exception as exc:
-            await self._handle_run_failure(exc, signal.is_set())
+            await self._handle_run_failure(exc, signal.is_set(), run_start_index)
         finally:
             self._finish_run(active_run)
 
-    async def _handle_run_failure(self, error: Exception, aborted: bool) -> None:
+    async def _handle_run_failure(
+        self,
+        error: Exception,
+        aborted: bool,
+        run_start_index: int,
+    ) -> None:
         failure = AssistantMessage(
             role="assistant",
             content=[TextContent(text="")],
@@ -285,9 +291,11 @@ class Agent:
             errorMessage=str(error),
             timestamp=_now_ms(),
         )
-        self._state.messages.append(failure)
         self._state.error_message = failure.error_message
-        await self._process_event(AgentEndEvent(messages=[failure]))
+        await self._process_event(MessageStartEvent(message=failure))
+        await self._process_event(MessageEndEvent(message=failure))
+        await self._process_event(TurnEndEvent(message=failure, toolResults=[]))
+        await self._process_event(AgentEndEvent(messages=self._state.messages[run_start_index:]))
 
     def _finish_run(self, active_run: ActiveRun) -> None:
         self._state.is_streaming = False

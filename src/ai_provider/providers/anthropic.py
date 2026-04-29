@@ -80,7 +80,7 @@ def build_anthropic_messages_params(
     if metadata:
         payload["metadata"] = metadata
     _apply_thinking_options(payload, options)
-    if context.system_prompt is not None:
+    if context.system_prompt:
         system_block: dict[str, object] = {"type": "text", "text": context.system_prompt}
         if cache_control:
             system_block["cache_control"] = cache_control

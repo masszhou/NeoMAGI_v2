@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ai_provider.types import AssistantMessage, TextContent, Usage, UsageCost, UserMessage
 from cli.interactive.app import InteractiveController
+from cli.interactive.components import AssistantMessageComponent, UserMessageComponent
 from cli.interactive.playback import PlaybackHarness
 from tui.app import TUIApp
 from tui.editor import EditorState
@@ -33,6 +35,17 @@ def _inject(app: TUIApp, *keys: str) -> None:
         raw = k if len(k) == 1 else ""
         app.inject_input(KeyEvent(k, raw=raw))
     app.step()
+
+
+def _zero_usage() -> Usage:
+    return Usage(
+        input=0,
+        output=0,
+        cacheRead=0,
+        cacheWrite=0,
+        totalTokens=0,
+        cost=UsageCost(input=0, output=0, cacheRead=0, cacheWrite=0, total=0),
+    )
 
 
 def test_slash_keystroke_opens_non_focused_autocomplete_overlay() -> None:
@@ -185,6 +198,27 @@ def test_focus_offset_provider_locates_nested_editor_cursor() -> None:
     )
     # row is 1-based; marker.row 0 + offset + 1 == expected + 1
     assert cursor.row == expected + 1
+
+
+def test_editor_cursor_moves_visibly_with_left_and_right_keys() -> None:
+    app, c = _make_controller()
+    for ch in "Write 20 short lines":
+        c.editor.handle_input(KeyEvent(ch, raw=ch))
+    app._draw()  # noqa: SLF001
+    start = app._compose_cursor(app._compose_frame())  # noqa: SLF001
+    assert start is not None
+
+    c.editor.handle_input(KeyEvent("Left"))
+    app._draw()  # noqa: SLF001
+    left = app._compose_cursor(app._compose_frame())  # noqa: SLF001
+    assert left is not None
+    assert left.col == start.col - 1
+
+    c.editor.handle_input(KeyEvent("Right"))
+    app._draw()  # noqa: SLF001
+    right = app._compose_cursor(app._compose_frame())  # noqa: SLF001
+    assert right is not None
+    assert right.col == start.col
 
 
 # -------------------------------------------------------------------- #
@@ -373,6 +407,108 @@ def test_messages_overflow_clips_oldest_keeps_editor_visible() -> None:
     assert cursor.row == expected_row, (
         f"cursor at row {cursor.row}; expected editor row {expected_row}"
     )
+
+
+def test_stream_overflow_keeps_current_user_prompt_visible() -> None:
+    app, c = _make_controller()
+    app._cols, app._rows = 80, 10  # noqa: SLF001
+    prompt = "Write 20 short numbered lines. Include marker M4_ABORT_STREAM near the end."
+    c.messages.append(UserMessageComponent(UserMessage(content=prompt, timestamp=1)))
+    c.messages.append(
+        AssistantMessageComponent(
+            AssistantMessage(
+                role="assistant",
+                content=[TextContent(text="\n".join(f"{i}. line" for i in range(1, 21)))],
+                api="openai-responses",
+                provider="openai",
+                model="gpt-4o-mini",
+                usage=_zero_usage(),
+                stopReason="aborted",
+                errorMessage="Request was aborted",
+                timestamp=2,
+            )
+        )
+    )
+
+    frame = app._compose_frame()  # noqa: SLF001
+    visible = "\n".join(frame)
+    assert "M4_ABORT_STREAM" in visible
+    assert "[aborted" in visible
+    assert any(line.lstrip().startswith(">") for line in frame)
+
+
+def test_page_up_and_down_scroll_message_history_viewport() -> None:
+    app, c = _make_controller()
+    app._cols, app._rows = 80, 10  # noqa: SLF001
+    for index in range(1, 7):
+        c.messages.append(
+            UserMessageComponent(UserMessage(content=f"prompt {index}", timestamp=index))
+        )
+        c.messages.append(
+            AssistantMessageComponent(
+                AssistantMessage(
+                    role="assistant",
+                    content=[TextContent(text=f"answer {index}")],
+                    api="openai-responses",
+                    provider="openai",
+                    model="gpt-4o-mini",
+                    usage=_zero_usage(),
+                    stopReason="stop",
+                    timestamp=index,
+                )
+            )
+        )
+
+    bottom = "\n".join(app._compose_frame())  # noqa: SLF001
+    assert "prompt 1" not in bottom
+    assert "answer 6" in bottom
+
+    for _ in range(4):
+        _inject(app, "PageUp")
+    earlier = "\n".join(app._compose_frame())  # noqa: SLF001
+    assert "prompt 1" in earlier or "answer 1" in earlier
+
+    for _ in range(4):
+        _inject(app, "PageDown")
+    latest = "\n".join(app._compose_frame())  # noqa: SLF001
+    assert "answer 6" in latest
+
+
+def test_scrolled_message_history_keeps_cursor_on_editor_row() -> None:
+    app, c = _make_controller()
+    app._cols, app._rows = 80, 10  # noqa: SLF001
+    for index in range(1, 7):
+        c.messages.append(
+            UserMessageComponent(UserMessage(content=f"prompt {index}", timestamp=index))
+        )
+        c.messages.append(
+            AssistantMessageComponent(
+                AssistantMessage(
+                    role="assistant",
+                    content=[
+                        TextContent(
+                            text="\n".join(f"{index}.{line}" for line in range(5))
+                        )
+                    ],
+                    api="openai-responses",
+                    provider="openai",
+                    model="gpt-4o-mini",
+                    usage=_zero_usage(),
+                    stopReason="stop",
+                    timestamp=index,
+                )
+            )
+        )
+    for ch in "Write 50 short numbered lines":
+        c.editor.handle_input(KeyEvent(ch, raw=ch))
+    for _ in range(4):
+        _inject(app, "PageUp")
+
+    frame = app._compose_frame()  # noqa: SLF001
+    cursor = app._compose_cursor(frame)  # noqa: SLF001
+    editor_row = next(index for index, line in enumerate(frame) if line.startswith("> "))
+    assert cursor is not None
+    assert cursor.row == editor_row + 1
 
 
 def test_status_notification_expires_via_scheduled_wake(monkeypatch) -> None:

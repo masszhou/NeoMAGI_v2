@@ -4,7 +4,7 @@ Routes argv to either:
 
 - ``--print``: a stub one-shot mode (M1 just prints "not implemented").
 - ``--playback DIR``: enter TUI then drive ``PlaybackHarness``.
-- otherwise: enter the interactive TUI (M1 = mock; M3/M4 wires real Agent).
+- otherwise: enter the interactive TUI backed by ``agent_core.Agent``.
 
 Real work happens inside
 ``cli.interactive.app.InteractiveController`` — this file is just argv +
@@ -41,11 +41,23 @@ def _run_interactive(opts: CliOptions) -> int:
     # Lazy import: keeps `--help` / `--print` from paying the TUI import cost
     # and keeps a clean separation between argv routing and runtime.
     from cli.interactive.app import InteractiveController
+    from cli.interactive.runtime import InteractiveAgentRuntime
     from tui.app import TUIApp
     from tui.lifecycle import lifecycle
 
     tui_app = TUIApp()
-    controller = InteractiveController(tui_app=tui_app, playback_dir=opts.playback)
+    runtime = None
+    if opts.playback is None:
+        runtime = InteractiveAgentRuntime(
+            model_ref=opts.model_ref,
+            thinking_level=opts.thinking_level,
+            cache_retention=opts.cache_retention,
+        )
+    controller = InteractiveController(
+        tui_app=tui_app,
+        playback_dir=opts.playback,
+        runtime=runtime,
+    )
     controller.bootstrap()
     with lifecycle(tui_app):
         controller.run()

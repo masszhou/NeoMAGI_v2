@@ -94,6 +94,17 @@ def test_anthropic_cache_none_forbids_cache_markers() -> None:
         assert forbidden not in payload["messages"][-1]["content"][-1]
 
 
+def test_anthropic_payload_omits_empty_system_prompt() -> None:
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
+    payload = build_anthropic_messages_params(
+        model,
+        Context(systemPrompt="", messages=[UserMessage(content="hello", timestamp=1)]),
+        StreamOptions(cache_retention="none"),
+    )
+
+    assert "system" not in payload
+
+
 def test_anthropic_stream_text_fixture() -> None:
     async def run() -> None:
         fixture = _stream_fixture("provider_stream_text")

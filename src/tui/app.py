@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import select
 import sys
+import threading
 import time
 from collections.abc import Callable
 from typing import TextIO
@@ -58,7 +59,7 @@ class TUIApp:
         stdin_buffer: StdinBuffer | None = None,
         out_stream: TextIO | None = None,
         tick_interval: float = 0.012,
-        anchor_reserved_height: int = 8,
+        anchor_reserved_height: int | None = None,
     ) -> None:
         self._out: TextIO = out_stream if out_stream is not None else sys.stdout
         self._terminal: TerminalSession = terminal or TerminalSession(
@@ -79,7 +80,9 @@ class TUIApp:
         self._rows: int = 30
         self._anchor_row: int = 1
         self._anchor_dirty: bool = True
-        self._anchor_reserved_height: int = max(1, anchor_reserved_height)
+        self._anchor_reserved_height: int | None = (
+            None if anchor_reserved_height is None else max(1, anchor_reserved_height)
+        )
         self._injected: list[Event] = []
         self._focus_offset_provider: Callable[[Component, int], int | None] | None = (
             None
@@ -94,6 +97,7 @@ class TUIApp:
         """Sorted-ish list of callbacks due at monotonic timestamps. Used by
         transient components for passive expiry and by spinner-like widgets
         for frame advancement without direct terminal writes."""
+        self._wake_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # Component tree                                                      #
@@ -164,7 +168,8 @@ class TUIApp:
     def schedule_callback(self, when: float, fn: Callable[[], None]) -> None:
         """Run ``fn`` once the event loop reaches ``when``, then redraw."""
 
-        self._wake_callbacks.append((when, fn))
+        with self._wake_lock:
+            self._wake_callbacks.append((when, fn))
 
     def _consume_render_request(self) -> bool:
         if not self._render_requested:
@@ -176,15 +181,19 @@ class TUIApp:
         """Promote any scheduled wake-up that has come due into a render
         request, then drop it from the queue."""
 
-        if not self._wake_callbacks:
-            return
         import time as _time
 
         now = _time.monotonic()
-        due = [item for item in self._wake_callbacks if item[0] <= now]
+        with self._wake_lock:
+            if not self._wake_callbacks:
+                return
+            due = [item for item in self._wake_callbacks if item[0] <= now]
+            if due:
+                self._wake_callbacks = [
+                    item for item in self._wake_callbacks if item[0] > now
+                ]
         if not due:
             return
-        self._wake_callbacks = [item for item in self._wake_callbacks if item[0] > now]
         for _, callback in due:
             try:
                 callback()
@@ -311,7 +320,7 @@ class TUIApp:
         if result.row is not None:
             anchor = min(max(1, result.row), rows)
             available = rows - anchor + 1
-            reserved = min(self._anchor_reserved_height, rows)
+            reserved = self._reserved_anchor_height(rows)
             if available < reserved and result.fallback_allowed:
                 self._terminal.write("\n" * (reserved - available))
                 anchor = self._bottom_reserved_anchor(rows)
@@ -324,8 +333,14 @@ class TUIApp:
         self._anchor_dirty = False
 
     def _bottom_reserved_anchor(self, rows: int) -> int:
-        reserved = min(self._anchor_reserved_height, max(1, rows))
+        reserved = self._reserved_anchor_height(rows)
         return max(1, rows - reserved + 1)
+
+    def _reserved_anchor_height(self, rows: int) -> int:
+        rows = max(1, rows)
+        if self._anchor_reserved_height is None:
+            return rows
+        return min(self._anchor_reserved_height, rows)
 
     def _compose_frame(self) -> list[str]:
         lines: list[str] = []
@@ -379,8 +394,14 @@ class TUIApp:
         if self._root is not None:
             if self._focus is self._root:
                 return 0
-            root_height = len(self._root.render(self._cols))
-            offset += root_height
+            # Nested focus providers may depend on cached height-aware render
+            # state. Consult them before a plain root.render() call can
+            # overwrite that cache.
+            if self._focus is not None and self._focus_offset_provider is not None:
+                provided = self._focus_offset_provider(self._focus, self._cols)
+                if provided is not None:
+                    return provided
+            offset += len(self._root.render(self._cols))
         for overlay in self._overlays:
             if self._focus is overlay:
                 return offset

@@ -3,7 +3,13 @@ from __future__ import annotations
 import asyncio
 
 from ai_provider.api_registry import get_api, stream
-from ai_provider.model_registry import get_model, list_models, register_model, resolve_model
+from ai_provider.model_registry import (
+    get_model,
+    list_models,
+    register_model,
+    resolve_model,
+    validate_thinking_level_for_model,
+)
 from ai_provider.runtime_types import StreamOptions
 from ai_provider.types import Context, Model, ModelCost, UserMessage
 
@@ -27,6 +33,16 @@ def test_get_api_registers_builtin_api_families() -> None:
 
 def test_resolve_model_requires_explicit_provider_model() -> None:
     assert resolve_model("openai/gpt-4o-mini").id == "gpt-4o-mini"
+
+
+def test_validate_thinking_level_uses_model_capabilities() -> None:
+    assert validate_thinking_level_for_model(get_model("faux", "faux-1"), "low") == "low"
+    try:
+        validate_thinking_level_for_model(get_model("openai", "gpt-4o-mini"), "low")
+    except ValueError as exc:
+        assert "does not support thinking" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("non-reasoning model should reject thinking levels")
 
 
 def test_register_model_rejects_missing_windows() -> None:

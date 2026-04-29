@@ -131,34 +131,44 @@ class EventRouter:
     def route(self, event: Any) -> None:
         """Dispatch one event. Raises ``RuntimeError`` on unknown ``type``."""
 
-        # Bare AssistantMessageEvent path takes priority because the M0
-        # ``assistant_text_delta`` fixture emits these as the *only* events.
         if isinstance(event, _AssistantStreamFrames):
             self._handle_assistant_stream(event)
             return
+        if self._route_lifecycle_event(event):
+            return
+        if self._route_message_event(event):
+            return
+        if self._route_tool_event(event):
+            return
+        if self._route_status_event(event):
+            return
 
+        raise RuntimeError(f"contract violation: unknown event type {type(event).__name__!r}")
+
+    def _route_lifecycle_event(self, event: Any) -> bool:
         if isinstance(event, AgentStartEvent):
-            return
+            return True
         if isinstance(event, CoreAgentEndEvent | AgentEndEvent):
-            return
+            return True
         if isinstance(event, TurnStartEvent):
-            return
+            return True
         if isinstance(event, CoreTurnEndEvent | TurnEndEvent):
-            return
+            return True
+        return False
 
+    def _route_message_event(self, event: Any) -> bool:
         if isinstance(event, MessageStartEvent):
             self._handle_message_start(event.message)
-            return
+            return True
         if isinstance(event, MessageUpdateEvent):
             self._handle_assistant_stream(event.assistant_message_event)
-            return
+            return True
         if isinstance(event, MessageEndEvent):
-            if self._active_assistant is not None:
-                self._active_assistant.completed = True
-                self._active_assistant.request_render()
-            self._active_assistant = None
-            return
+            self._handle_message_end(event.message)
+            return True
+        return False
 
+    def _route_tool_event(self, event: Any) -> bool:
         if isinstance(event, ToolExecutionStartEvent):
             comp = ToolExecutionComponent(
                 tool_call_id=event.tool_call_id,
@@ -168,49 +178,49 @@ class EventRouter:
             )
             self._tool_components[event.tool_call_id] = comp
             self._messages.append(comp)
-            return
+            return True
         if isinstance(event, ToolExecutionUpdateEvent):
             comp = self._tool_components.get(event.tool_call_id)
             if comp is not None:
                 comp.update(event.partial_result)
-            return
+            return True
         if isinstance(event, ToolExecutionEndEvent):
             comp = self._tool_components.get(event.tool_call_id)
             if comp is not None:
                 comp.end(event.result, is_error=event.is_error)
-            return
+            return True
+        return False
 
+    def _route_status_event(self, event: Any) -> bool:
         if isinstance(event, QueueUpdateEvent):
             self._status.set_queue(event.steering, event.follow_up)
-            return
+            return True
         if isinstance(event, CompactionStartEvent):
             self._status.set_compacting(True)
             self._status.push_notification(f"compaction started ({event.reason})", level="info")
-            return
+            return True
         if isinstance(event, CompactionEndEvent):
             self._status.set_compacting(False)
             level = "warn" if event.aborted or event.error_message else "info"
-            self._status.push_notification(
-                f"compaction ended ({event.reason})"
-                + (f" — {event.error_message}" if event.error_message else ""),
-                level=level,
-            )
-            return
+            message = f"compaction ended ({event.reason})"
+            if event.error_message:
+                message += f" — {event.error_message}"
+            self._status.push_notification(message, level=level)
+            return True
         if isinstance(event, AutoRetryStartEvent):
             self._status.set_auto_retry(event.attempt, event.max_attempts)
             self._status.push_notification(
                 f"retry {event.attempt}/{event.max_attempts}: {event.error_message}",
                 level="warn",
             )
-            return
+            return True
         if isinstance(event, AutoRetryEndEvent):
             self._status.clear_auto_retry()
             tag = "ok" if event.success else f"failed: {event.final_error}"
             level = "info" if event.success else "error"
             self._status.push_notification(f"retry attempt {event.attempt}: {tag}", level=level)
-            return
-
-        raise RuntimeError(f"contract violation: unknown event type {type(event).__name__!r}")
+            return True
+        return False
 
     # ------------------------------------------------------------------ #
     # Helpers                                                             #
@@ -240,6 +250,15 @@ class EventRouter:
                 f"contract violation: unknown message role {getattr(message, 'role', '?')!r}"
             )
         self._messages.append(comp)
+
+    def _handle_message_end(self, message: Any) -> None:
+        if self._active_assistant is not None:
+            if isinstance(message, AssistantMessage):
+                self._active_assistant.complete(message)
+            else:
+                self._active_assistant.completed = True
+                self._active_assistant.request_render()
+        self._active_assistant = None
 
     def _handle_assistant_stream(self, frame: AssistantMessageEvent) -> None:
         if self._active_assistant is None:

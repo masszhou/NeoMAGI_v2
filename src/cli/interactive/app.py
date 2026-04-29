@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,17 @@ from tui.stdin_buffer import KeyEvent
 
 from .components import MessageListComponent, StatusComponent
 from .event_router import EventRouter
+from .runtime import InteractiveAgentRuntime
 from .tool_renderer_registry import ToolRendererRegistry
 
 # Lazy import: the slash registry lives in ``cli.slash_commands``; importing
 # it eagerly would create a cycle (slash modules import from this file).
+
+_ACTION_NOTICES = {
+    Action.AT_TRIGGER: "@-mention autocomplete not implemented in M1; tracked in M5",
+    Action.BANG_TRIGGER: "!shell mode not implemented in M1; tracked in M5",
+    Action.PASTE_IMAGE: "image paste deferred to M2/M5; placeholder only",
+}
 
 
 class InteractiveController:
@@ -38,10 +46,12 @@ class InteractiveController:
         *,
         tui_app: TUIApp,
         playback_dir: Path | None = None,
+        runtime: InteractiveAgentRuntime | None = None,
         keymap: Keymap | None = None,
     ) -> None:
         self._app: TUIApp = tui_app
         self._playback_dir: Path | None = playback_dir
+        self._runtime: InteractiveAgentRuntime | None = runtime
 
         keyboard_level = getattr(tui_app.terminal, "keyboard_protocol_level", 1)
         self._keymap: Keymap = keymap or Keymap(keyboard_protocol_level=keyboard_level)
@@ -69,6 +79,8 @@ class InteractiveController:
 
         # Composite root: status on top, then message list, then editor.
         self._root = _RootComponent(self._status, self._messages, self._editor)
+        if self._runtime is not None:
+            self.set_runtime(self._runtime)
 
     # ------------------------------------------------------------------ #
     # Bootstrap                                                           #
@@ -90,8 +102,10 @@ class InteractiveController:
         self._editor.set_state(EditorState.IDLE)
         if self._playback_dir is not None:
             self._editor.set_footer(f"playback: {self._playback_dir.name}")
+        elif self._runtime is not None:
+            self._editor.set_footer(self._runtime.footer_summary)
         else:
-            self._editor.set_footer("M1 mock — pass --playback or use /play")
+            self._editor.set_footer("no runtime — pass --playback or use /play")
 
     def run(self) -> None:
         if self._playback_dir is not None:
@@ -119,6 +133,8 @@ class InteractiveController:
             # Belt-and-suspenders: a manual /quit while playback is in
             # flight should still wind down the harness cleanly.
             self._playback_thread.join(timeout=2.0)
+        if self._runtime is not None:
+            self._runtime.shutdown()
 
     # ------------------------------------------------------------------ #
     # Event plane                                                         #
@@ -133,6 +149,13 @@ class InteractiveController:
     # ------------------------------------------------------------------ #
 
     def handle_abort(self) -> None:
+        if self._runtime is not None and self._runtime.state.is_running:
+            self._runtime.abort()
+            self._editor.set_state(EditorState.ABORTING)
+            self._status.push_notification("aborting…", level="info", ttl_seconds=3.0)
+            self._app.request_render()
+            return
+
         active = self._router.active_assistant
         if active is not None:
             active.mark_aborted()
@@ -160,6 +183,8 @@ class InteractiveController:
         self._app.simulate_resize(cols, rows)
 
     def exit(self) -> None:
+        if self._runtime is not None:
+            self._runtime.shutdown()
         if self._playback_task is not None and not self._playback_task.done():
             self._playback_task.cancel()
         self._app.exit()
@@ -225,6 +250,37 @@ class InteractiveController:
 
     def set_action_handler(self, handler: Callable[[Action], None]) -> None:
         self._action_handler = handler
+
+    def set_runtime(self, runtime: InteractiveAgentRuntime | None) -> None:
+        self._runtime = runtime
+        if runtime is None:
+            self._submit_handler = None
+            self._action_handler = None
+            return
+        runtime.set_event_wake(self._schedule_runtime_drain)
+        self.set_submit_handler(self._handle_runtime_submit)
+        self.set_action_handler(self._handle_runtime_action)
+
+    def reset_session(self) -> None:
+        aborted_previous = False
+        if self._runtime is not None:
+            aborted_previous = self._runtime.state.is_running
+            self._runtime.reset()
+        self._messages.clear()
+        self._router.clear_active()
+        self._status.set_queue([], [])
+        if aborted_previous:
+            self._status.push_notification(
+                "new session; previous run aborted",
+                level="info",
+                ttl_seconds=4.0,
+            )
+        self._editor.set_state(EditorState.IDLE)
+        if self._runtime is not None:
+            self._editor.set_footer(self._runtime.footer_summary)
+        else:
+            self._editor.set_footer("new session (session manager arrives in M6)")
+        self._app.request_render()
 
     # ------------------------------------------------------------------ #
     # Internal hooks                                                      #
@@ -305,37 +361,103 @@ class InteractiveController:
             # autocomplete strip so the user can keep typing.
             self._ensure_slash_overlay(self._editor.buffer.text)
             return
-        if action == Action.AT_TRIGGER:
-            self._status.push_notification(
-                "@-mention autocomplete not implemented in M1; tracked in M5",
-                level="info",
-            )
-            return
-        if action == Action.BANG_TRIGGER:
-            self._status.push_notification(
-                "!shell mode not implemented in M1; tracked in M5",
-                level="info",
-            )
-            return
         if action == Action.AUTOCOMPLETE:
-            # Tab — if a slash overlay is open, move focus into it so the
-            # user can pick with arrows + Enter; if not, open one for the
-            # current buffer (covers Tab on plain text starting with '/').
-            text = self._editor.buffer.text
-            if text.startswith("/"):
-                self._ensure_slash_overlay(text)
-                if self._slash_overlay is not None:
-                    self._app.set_focus(self._slash_overlay)
-                    self._app.request_render()
+            self._focus_slash_autocomplete()
             return
-        if action == Action.PASTE_IMAGE:
-            self._status.push_notification(
-                "image paste deferred to M2/M5; placeholder only",
-                level="info",
-            )
+        if self._handle_scroll_action(action):
+            return
+        if action in _ACTION_NOTICES:
+            self._status.push_notification(_ACTION_NOTICES[action], level="info")
             return
         if self._action_handler is not None:
             self._action_handler(action)
+
+    def _handle_scroll_action(self, action: Action) -> bool:
+        if action == Action.SCROLL_PAGE_UP:
+            self._messages.scroll_page_up()
+            return True
+        if action == Action.SCROLL_PAGE_DOWN:
+            self._messages.scroll_page_down()
+            return True
+        return False
+
+    def _focus_slash_autocomplete(self) -> None:
+        # Tab — if a slash overlay is open, move focus into it so the user
+        # can pick with arrows + Enter; if not, open one for the current
+        # buffer (covers Tab on plain text starting with '/').
+        text = self._editor.buffer.text
+        if not text.startswith("/"):
+            return
+        self._ensure_slash_overlay(text)
+        if self._slash_overlay is not None:
+            self._app.set_focus(self._slash_overlay)
+            self._app.request_render()
+
+    def _handle_runtime_submit(self, submission: EditorSubmission) -> None:
+        runtime = self._runtime
+        if runtime is None:
+            return
+        text = submission.text
+        if not text.strip():
+            return
+        if submission.state_at_submit == EditorState.ABORTING:
+            self._status.push_notification(
+                "waiting for abort to finish",
+                level="info",
+                ttl_seconds=3.0,
+            )
+            self._editor.set_state(EditorState.ABORTING)
+            self._app.request_render()
+            return
+        try:
+            if submission.state_at_submit == EditorState.STREAMING:
+                runtime.steer(text)
+            else:
+                runtime.submit(text)
+            self._messages.scroll_to_bottom()
+            self._editor.set_state(EditorState.STREAMING)
+            self._editor.set_footer(runtime.footer_summary)
+        except RuntimeError as exc:
+            self._editor.set_state(EditorState.IDLE)
+            self._status.push_notification(str(exc), level="error", ttl_seconds=8.0)
+        self._app.request_render()
+
+    def _handle_runtime_action(self, action: Action) -> None:
+        if action != Action.QUEUE_FOLLOWUP or self._runtime is None:
+            return
+        if self._editor.state == EditorState.ABORTING:
+            self._status.push_notification(
+                "waiting for abort to finish",
+                level="info",
+                ttl_seconds=3.0,
+            )
+            self._app.request_render()
+            return
+        text = self._editor.buffer.take()
+        if not text.strip():
+            return
+        if self._editor.state == EditorState.STREAMING:
+            self._runtime.follow_up(text)
+        else:
+            self._runtime.submit(text)
+        self._messages.scroll_to_bottom()
+        self._editor.set_state(EditorState.STREAMING)
+        self._editor.set_footer(self._runtime.footer_summary)
+        self._app.request_render()
+
+    def _schedule_runtime_drain(self) -> None:
+        self._app.schedule_callback(time.monotonic(), self._drain_runtime_events)
+
+    def _drain_runtime_events(self) -> None:
+        runtime = self._runtime
+        if runtime is None:
+            return
+        for event in runtime.drain_events():
+            self.dispatch_event(event)
+            if getattr(event, "type", None) == "agent_end":
+                self._editor.set_state(EditorState.IDLE)
+                self._status.set_queue([], [])
+                self._editor.set_footer(runtime.footer_summary)
 
     def _on_editor_buffer_change(self, text: str) -> None:
         """Live filter: open / refresh / close the autocomplete overlay as
@@ -512,22 +634,19 @@ class _RootComponent:
 
     def render_with_height(self, width: int, height: int) -> list[str]:
         """Height-aware composition: status pinned at top, editor pinned
-        at bottom, messages fill the middle with the **oldest** rows
-        clipped when the column overflows. The editor stays visible at
-        all times — manual §4.9 caught the previous "clip from bottom"
-        behaviour where a few ``/play`` runs pushed the editor and the
-        latest messages off-screen, making it look like history wasn't
-        accumulating."""
+        at bottom, messages fill the middle with a tail view. When the
+        latest assistant output overflows, the message list keeps a small
+        amount of current-turn context (usually the user prompt) plus the
+        newest assistant rows. The editor stays visible at all times —
+        manual §4.9 caught the previous "clip from bottom" behaviour
+        where a few ``/play`` runs pushed the editor and latest messages
+        off-screen."""
 
         status_rows = self._status.render(width)
         editor_rows = self._editor.render(width)
-        msg_rows = self._messages.render(width)
         # status + editor are pinned; messages get whatever's left.
         budget = max(0, height - len(status_rows) - len(editor_rows))
-        if len(msg_rows) > budget:
-            # Clip from the top: keep the most recent ``budget`` rows so
-            # the latest assistant turn / tool result is always visible.
-            msg_rows = msg_rows[-budget:] if budget > 0 else []
+        msg_rows = self._messages.render_tail(width, budget)
         self._last_visible_msg_rows = len(msg_rows)
         return status_rows + msg_rows + editor_rows
 

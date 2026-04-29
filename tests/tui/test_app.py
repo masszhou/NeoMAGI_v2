@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import threading
+import time
 
 from tui.app import TUIApp
 from tui.renderer import Renderer
@@ -34,7 +36,11 @@ class _FakeTerminal:
         return False
 
 
-def _make_app(result: CursorQueryResult) -> tuple[TUIApp, Renderer, _FakeTerminal]:
+def _make_app(
+    result: CursorQueryResult,
+    *,
+    anchor_reserved_height: int | None = 8,
+) -> tuple[TUIApp, Renderer, _FakeTerminal]:
     out = io.StringIO()
     renderer = Renderer(out_stream=out)
     terminal = _FakeTerminal(result)
@@ -42,7 +48,7 @@ def _make_app(result: CursorQueryResult) -> tuple[TUIApp, Renderer, _FakeTermina
         terminal=terminal,  # type: ignore[arg-type]
         renderer=renderer,
         out_stream=out,
-        anchor_reserved_height=8,
+        anchor_reserved_height=anchor_reserved_height,
     )
     app._cols = 20  # noqa: SLF001
     app._rows = 10  # noqa: SLF001
@@ -68,6 +74,16 @@ def test_prepare_anchor_scrolls_when_dsr_row_is_too_low() -> None:
     app._prepare_anchor(TerminalSize(cols=20, rows=10))  # noqa: SLF001
     assert renderer.anchor_row == 3
     assert terminal.writes == ["\n" * 6]
+
+
+def test_prepare_anchor_default_reserves_full_terminal_height() -> None:
+    app, renderer, terminal = _make_app(
+        CursorQueryResult(row=9, leftover=b"", attempted=True, fallback_allowed=True),
+        anchor_reserved_height=None,
+    )
+    app._prepare_anchor(TerminalSize(cols=20, rows=10))  # noqa: SLF001
+    assert renderer.anchor_row == 1
+    assert terminal.writes == ["\n" * 8]
 
 
 def test_prepare_anchor_timeout_uses_bottom_reserved_fallback() -> None:
@@ -140,3 +156,41 @@ def test_schedule_wake_keeps_existing_redraw_semantics(monkeypatch) -> None:
     now[0] = 2.0
     app._check_wakeups()  # noqa: SLF001
     assert app._render_requested is True  # noqa: SLF001
+
+
+def test_schedule_callback_is_thread_safe_under_concurrent_wakes() -> None:
+    app, _, _ = _make_app(
+        CursorQueryResult(
+            row=None, leftover=b"", attempted=False, fallback_allowed=False
+        )
+    )
+    calls: list[int] = []
+    total = 200
+
+    def schedule_range(start: int, stop: int) -> None:
+        for item in range(start, stop):
+            app.schedule_callback(
+                time.monotonic() - 1.0,
+                lambda item=item: calls.append(item),
+            )
+
+    threads = [
+        threading.Thread(target=schedule_range, args=(0, total // 2)),
+        threading.Thread(target=schedule_range, args=(total // 2, total)),
+    ]
+    for thread in threads:
+        thread.start()
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        app._check_wakeups()  # noqa: SLF001
+        if all(not thread.is_alive() for thread in threads):
+            with app._wake_lock:  # noqa: SLF001
+                if not app._wake_callbacks:  # noqa: SLF001
+                    break
+        time.sleep(0)
+
+    for thread in threads:
+        thread.join(timeout=1.0)
+    app._check_wakeups()  # noqa: SLF001
+    assert sorted(calls) == list(range(total))

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from .types import Model, ModelCost
+from .models import supports_xhigh
+from .types import Model, ModelCost, ThinkingLevel
 
 _models: dict[str, dict[str, Model]] = defaultdict(dict)
 
@@ -150,6 +151,16 @@ def resolve_model(model_ref: str) -> Model:
     return get_model(provider, model_id)
 
 
+def validate_thinking_level_for_model(model: Model, level: ThinkingLevel) -> ThinkingLevel:
+    if level == "off":
+        return level
+    if not model.reasoning:
+        raise ValueError(f"model {model.provider}/{model.id} does not support thinking")
+    if level == "xhigh" and not supports_xhigh(model):
+        raise ValueError(f"model {model.provider}/{model.id} does not support thinking level xhigh")
+    return level
+
+
 def clear_models_for_tests() -> None:
     _models.clear()
 
@@ -165,4 +176,5 @@ __all__ = [
     "list_models",
     "register_model",
     "resolve_model",
+    "validate_thinking_level_for_model",
 ]

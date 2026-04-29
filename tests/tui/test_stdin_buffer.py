@@ -92,6 +92,13 @@ def test_csi_u_modify_other_keys_enter_with_shift() -> None:
     assert "Shift" in events[0].modifiers
 
 
+def test_csi_u_modify_other_keys_enter_with_ctrl() -> None:
+    # Kitty / xterm `modifyOtherKeys=2` Ctrl+Enter encoding: CSI 13;5u
+    events = _drain("\x1b[13;5u")
+    assert events and events[0].key == "Ctrl+Enter"
+    assert "Ctrl" in events[0].modifiers
+
+
 def test_csi_u_ctrl_letter_is_normalised_to_uppercase() -> None:
     """Regression: terminals that honour our Kitty/modifyOtherKeys
     negotiation may encode Ctrl+C as ``CSI 99 ; 5 u`` (lowercase 'c'

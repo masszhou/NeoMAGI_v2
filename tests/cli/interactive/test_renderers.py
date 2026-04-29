@@ -76,6 +76,22 @@ def test_assistant_message_streaming_text_accumulates() -> None:
     assert "Hi world" in out
 
 
+def test_assistant_message_initial_error_renders_error_text() -> None:
+    msg = AssistantMessage(
+        role="assistant",
+        content=[TextContent(type="text", text="")],
+        api="openai-responses",
+        provider="openai",
+        model="gpt-4o-mini",
+        usage=_zero_usage(),
+        stopReason="error",
+        errorMessage="missing API key for provider 'openai'",
+        timestamp=1,
+    )
+    out = "\n".join(AssistantMessageComponent(msg).render(80))
+    assert "missing API key" in out
+
+
 def test_tool_result_renders_error_glyph_when_is_error() -> None:
     msg = ToolResultMessage(
         role="toolResult",

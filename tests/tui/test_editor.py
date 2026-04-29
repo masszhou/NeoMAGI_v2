@@ -37,7 +37,13 @@ def test_shift_enter_inserts_newline_without_submitting() -> None:
     assert not subs
 
 
-def test_alt_enter_propagates_as_action() -> None:
+def test_ctrl_enter_propagates_followup_action() -> None:
+    e, _, actions = _editor()
+    e.handle_input(KeyEvent("Ctrl+Enter", raw=""))
+    assert Action.QUEUE_FOLLOWUP in actions
+
+
+def test_alt_enter_remains_followup_alias() -> None:
     e, _, actions = _editor()
     e.handle_input(KeyEvent("Alt+Enter", raw=""))
     assert Action.QUEUE_FOLLOWUP in actions

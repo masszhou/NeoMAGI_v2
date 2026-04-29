@@ -94,6 +94,7 @@ def test_synchronized_output_wraps_each_present() -> None:
 def test_cursor_visibility_toggled_through_present_only() -> None:
     r, out = _make()
     r.present(["alpha"], cursor=CursorPosition(row=1, col=1, visible=True))
+    assert "\x1b[?25h" in out.getvalue()
     out.truncate(0)
     out.seek(0)
     r.present(["alpha"], cursor=None)  # hide

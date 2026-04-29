@@ -32,6 +32,8 @@ class Action(str, Enum):
     CURSOR_RIGHT = "cursor_right"
     CURSOR_HOME = "cursor_home"
     CURSOR_END = "cursor_end"
+    SCROLL_PAGE_UP = "scroll_page_up"
+    SCROLL_PAGE_DOWN = "scroll_page_down"
     BACKSPACE = "backspace"
     DELETE = "delete"
     CLEAR_SCREEN = "clear_screen"
@@ -52,10 +54,13 @@ CORE_KEYS: frozenset[str] = frozenset(
         "Esc Esc",
         "Enter",
         "Shift+Enter",
+        "Ctrl+Enter",
         "Alt+Enter",
         "Ctrl+C",
         "Ctrl+L",
         "Ctrl+P",
+        "PageUp",
+        "PageDown",
         "Tab",
         "/",
         "@",
@@ -68,6 +73,7 @@ def default_bindings() -> list[KeyBinding]:
     return [
         KeyBinding("Enter", Action.SUBMIT, core=True),
         KeyBinding("Shift+Enter", Action.QUEUE_NEWLINE, core=True),
+        KeyBinding("Ctrl+Enter", Action.QUEUE_FOLLOWUP, core=True),
         KeyBinding("Alt+Enter", Action.QUEUE_FOLLOWUP, core=True),
         KeyBinding("Esc", Action.ABORT, core=True),
         KeyBinding("Esc Esc", Action.DOUBLE_ESCAPE, core=True),
@@ -81,6 +87,8 @@ def default_bindings() -> list[KeyBinding]:
         KeyBinding("Right", Action.CURSOR_RIGHT),
         KeyBinding("Home", Action.CURSOR_HOME),
         KeyBinding("End", Action.CURSOR_END),
+        KeyBinding("PageUp", Action.SCROLL_PAGE_UP, core=True),
+        KeyBinding("PageDown", Action.SCROLL_PAGE_DOWN, core=True),
         KeyBinding("Ctrl+A", Action.CURSOR_HOME),
         KeyBinding("Ctrl+E", Action.CURSOR_END),
         KeyBinding("Backspace", Action.BACKSPACE),
@@ -97,8 +105,8 @@ class Keymap:
 
     ``keyboard_protocol_level`` (passed in from
     ``TerminalSession.keyboard_protocol_level``) lets us pick the right
-    fallback when ``Shift+Enter`` / ``Alt+Enter`` can't be distinguished
-    from plain ``Enter`` / ``Esc Enter``.
+    fallback when modified Enter keys can't be distinguished from plain
+    ``Enter``.
     """
 
     def __init__(self, *, keyboard_protocol_level: int = 1) -> None:

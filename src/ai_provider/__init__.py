@@ -11,7 +11,13 @@ Pi-mono source map (commit 97a38bf6, see ADR-0011):
 """
 
 from .api_registry import get_api, register_api, stream, stream_simple, unregister_api
-from .model_registry import get_model, list_models, register_model, resolve_model
+from .model_registry import (
+    get_model,
+    list_models,
+    register_model,
+    resolve_model,
+    validate_thinking_level_for_model,
+)
 from .oauth import (
     OAuthCredentials,
     OAuthLoginCallbacks,
@@ -44,4 +50,5 @@ __all__ = [
     "stream",
     "stream_simple",
     "unregister_api",
+    "validate_thinking_level_for_model",
 ]

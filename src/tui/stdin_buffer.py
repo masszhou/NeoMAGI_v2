@@ -33,7 +33,7 @@ PASTE_END = "\x1b[201~"
 class KeyEvent:
     key: str
     """Logical key name. Examples: ``"a"``, ``"Enter"``, ``"Shift+Enter"``,
-    ``"Alt+Enter"``, ``"Esc"``, ``"Ctrl+C"``, ``"Up"``, ``"PageDown"``,
+    ``"Ctrl+Enter"``, ``"Esc"``, ``"Ctrl+C"``, ``"Up"``, ``"PageDown"``,
     ``"F1"``."""
 
     raw: str = ""

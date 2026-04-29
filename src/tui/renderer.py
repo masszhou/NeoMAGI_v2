@@ -47,7 +47,7 @@ class Renderer:
         self._last_changed_rows: int = 0
         self._last_presented_frame_height: int | None = None
         self._anchor_row: int = 1
-        self._cursor_visible: bool = True
+        self._cursor_visible: bool = False
 
     def reset(self) -> None:
         """Drop the previous-frame snapshot.

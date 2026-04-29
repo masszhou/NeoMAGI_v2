@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 from ai_provider.types import (
     AssistantMessage,
+    TextContent,
+    ThinkingContent,
     AssistantMessageEvent,
     StreamDone,
     StreamError,
@@ -51,61 +53,23 @@ class AssistantMessageComponent(Component):
         self.aborted: bool = False
         self.error_text: str | None = None
         self.stop_reason: str | None = None
+        if message is not None:
+            self._load_message(message)
 
     def apply(self, event: AssistantMessageEvent) -> None:
         """Fold one stream frame into the local content slots."""
 
-        if isinstance(event, StreamTextStart):
-            self._ensure_slot(event.content_index, "text")
+        if isinstance(event, StreamTextStart | StreamTextDelta | StreamTextEnd):
+            self._apply_text_event(event)
             return
-        if isinstance(event, StreamTextDelta):
-            self._ensure_slot(event.content_index, "text")
-            self._slots[event.content_index].text += event.delta
+        if isinstance(event, StreamThinkingStart | StreamThinkingDelta | StreamThinkingEnd):
+            self._apply_thinking_event(event)
             return
-        if isinstance(event, StreamTextEnd):
-            self._ensure_slot(event.content_index, "text")
-            self._slots[event.content_index].text = event.content
+        if isinstance(event, StreamToolCallStart | StreamToolCallDelta | StreamToolCallEnd):
+            self._apply_tool_event(event)
             return
-        if isinstance(event, StreamThinkingStart):
-            self._ensure_slot(event.content_index, "thinking")
-            return
-        if isinstance(event, StreamThinkingDelta):
-            self._ensure_slot(event.content_index, "thinking")
-            self._slots[event.content_index].text += event.delta
-            return
-        if isinstance(event, StreamThinkingEnd):
-            self._ensure_slot(event.content_index, "thinking")
-            self._slots[event.content_index].text = event.content
-            return
-        if isinstance(event, StreamToolCallStart):
-            self._ensure_slot(event.content_index, "toolcall")
-            return
-        if isinstance(event, StreamToolCallDelta):
-            self._ensure_slot(event.content_index, "toolcall")
-            self._slots[event.content_index].text += event.delta
-            return
-        if isinstance(event, StreamToolCallEnd):
-            self._ensure_slot(event.content_index, "toolcall")
-            self._slots[event.content_index].tool_name = event.tool_call.name
-            self._slots[event.content_index].tool_call_id = event.tool_call.id
-            self._slots[event.content_index].text = (
-                event.tool_call.arguments
-                if isinstance(event.tool_call.arguments, str)
-                else str(event.tool_call.arguments)
-            )
-            return
-        if isinstance(event, StreamDone):
-            self.message = event.message
-            self.completed = True
-            self.stop_reason = event.reason
-            return
-        if isinstance(event, StreamError):
-            self.message = event.error
-            self.error_text = event.error.error_message
-            if event.reason == "aborted":
-                self.aborted = True
-            else:
-                self.stop_reason = "error"
+        if isinstance(event, StreamDone | StreamError):
+            self._apply_terminal_event(event)
             return
 
     def mark_aborted(self) -> None:
@@ -116,9 +80,82 @@ class AssistantMessageComponent(Component):
         self.completed = True
         self.request_render()
 
+    def complete(self, message: AssistantMessage) -> None:
+        self.message = message
+        self._load_message(message)
+        self.request_render()
+
     def _ensure_slot(self, index: int, kind: str) -> None:
         while len(self._slots) <= index:
             self._slots.append(_ContentSlot(kind=kind))
+
+    def _apply_text_event(self, event: StreamTextStart | StreamTextDelta | StreamTextEnd) -> None:
+        self._ensure_slot(event.content_index, "text")
+        if isinstance(event, StreamTextDelta):
+            self._slots[event.content_index].text += event.delta
+        elif isinstance(event, StreamTextEnd):
+            self._slots[event.content_index].text = event.content
+
+    def _apply_thinking_event(
+        self,
+        event: StreamThinkingStart | StreamThinkingDelta | StreamThinkingEnd,
+    ) -> None:
+        self._ensure_slot(event.content_index, "thinking")
+        if isinstance(event, StreamThinkingDelta):
+            self._slots[event.content_index].text += event.delta
+        elif isinstance(event, StreamThinkingEnd):
+            self._slots[event.content_index].text = event.content
+
+    def _apply_tool_event(
+        self,
+        event: StreamToolCallStart | StreamToolCallDelta | StreamToolCallEnd,
+    ) -> None:
+        self._ensure_slot(event.content_index, "toolcall")
+        if isinstance(event, StreamToolCallDelta):
+            self._slots[event.content_index].text += event.delta
+        elif isinstance(event, StreamToolCallEnd):
+            self._slots[event.content_index].tool_name = event.tool_call.name
+            self._slots[event.content_index].tool_call_id = event.tool_call.id
+            self._slots[event.content_index].text = (
+                event.tool_call.arguments
+                if isinstance(event.tool_call.arguments, str)
+                else str(event.tool_call.arguments)
+            )
+
+    def _apply_terminal_event(self, event: StreamDone | StreamError) -> None:
+        if isinstance(event, StreamDone):
+            self.message = event.message
+            self.completed = True
+            self.stop_reason = event.reason
+            return
+
+        self.message = event.error
+        self.error_text = event.error.error_message
+        if event.reason == "aborted":
+            self.aborted = True
+        else:
+            self.stop_reason = "error"
+
+    def _load_message(self, message: AssistantMessage) -> None:
+        self._slots = []
+        self.completed = True
+        self.aborted = message.stop_reason == "aborted"
+        self.error_text = message.error_message
+        self.stop_reason = message.stop_reason
+        for block in message.content:
+            if isinstance(block, TextContent):
+                self._slots.append(_ContentSlot(kind="text", text=block.text))
+            elif isinstance(block, ThinkingContent):
+                self._slots.append(_ContentSlot(kind="thinking", text=block.thinking))
+            else:
+                self._slots.append(
+                    _ContentSlot(
+                        kind="toolcall",
+                        text=str(block.arguments),
+                        tool_name=block.name,
+                        tool_call_id=block.id,
+                    )
+                )
 
     # ------------------------------------------------------------------ #
     # Component contract                                                  #
