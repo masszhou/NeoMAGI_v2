@@ -49,6 +49,15 @@ class AgentToolResult(_PiModel):
     """Tool output content list (text/image blocks); validated again by
     ToolResultMessage adapter when persisted."""
     details: Any = None
+    is_error: bool | None = Field(default=None, alias="isError")
+    """Optional runtime-only error marker.
+
+    Pi's TS AgentTool result shape carries content/details while the executor
+    tracks ``isError`` out-of-band. M5 governed tools need to return structured
+    policy/timeout/exception details without throwing them away, so the Python
+    runtime accepts this optional marker and still serializes only the final
+    ``ToolResultMessage.isError`` at the wire boundary.
+    """
 
 
 class AgentTool(_PiModel):
@@ -104,7 +113,7 @@ class AgentContext(_PiModel):
     """Snapshot fed into the low-level agent loop."""
 
     system_prompt: str = Field(alias="systemPrompt")
-    messages: list[MessageItem]
+    messages: list[Any]
     tools: list[AgentTool] | None = None
 
 

@@ -33,7 +33,6 @@ from .tool_renderer_registry import ToolRendererRegistry
 
 _ACTION_NOTICES = {
     Action.AT_TRIGGER: "@-mention autocomplete not implemented in M1; tracked in M5",
-    Action.BANG_TRIGGER: "!shell mode not implemented in M1; tracked in M5",
     Action.PASTE_IMAGE: "image paste deferred to M2/M5; placeholder only",
 }
 
@@ -428,7 +427,13 @@ class InteractiveController:
             self._app.request_render()
             return
         try:
-            if submission.state_at_submit == EditorState.STREAMING:
+            user_bash = _parse_user_bash(text)
+            if user_bash is not None:
+                if submission.state_at_submit == EditorState.STREAMING:
+                    raise RuntimeError("user bash is only available while idle")
+                command, exclude_from_context = user_bash
+                runtime.run_user_bash(command, exclude_from_context=exclude_from_context)
+            elif submission.state_at_submit == EditorState.STREAMING:
                 runtime.steer(text)
             else:
                 runtime.submit(text)
@@ -472,7 +477,10 @@ class InteractiveController:
             return
         for event in runtime.drain_events():
             self.dispatch_event(event)
-            if getattr(event, "type", None) == "agent_end":
+            if getattr(event, "type", None) == "agent_end" or (
+                getattr(event, "type", None) == "message_end"
+                and not runtime.state.is_running
+            ):
                 self._editor.set_state(EditorState.IDLE)
                 self._status.set_queue([], [])
                 self._editor.set_footer(runtime.footer_summary)
@@ -725,6 +733,16 @@ def _discover_play_targets() -> list[str]:
         for sub in root.iterdir()
         if sub.is_dir() and (sub / "events.jsonl").is_file()
     )
+
+
+def _parse_user_bash(text: str) -> tuple[str, bool] | None:
+    if text.startswith("!!"):
+        command = text[2:].strip()
+        return (command, True) if command else None
+    if text.startswith("!"):
+        command = text[1:].strip()
+        return (command, False) if command else None
+    return None
 
 
 __all__ = ["InteractiveController"]

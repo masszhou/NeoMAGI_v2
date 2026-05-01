@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import queue
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from agent_core import Agent, AgentOptions
@@ -28,10 +30,21 @@ from ai_provider.types import (
 from cli.core.session_types import (
     AgentEndEvent,
     AgentSessionEvent,
+    BashExecutionMessage,
     MessageEndEvent,
     MessageStartEvent,
     QueueUpdateEvent,
 )
+from cli.extensions.event_types import BashResult, UserBashEvent, UserBashEventResult
+from cli.tools import (
+    RuntimeArtifactStore,
+    convert_coding_messages_to_llm,
+    create_coding_tools,
+    create_read_only_tools,
+)
+from cli.tools.bash import create_bash_tool_definition
+from cli.tools.wrapper import ToolRuntime, wrap_tool_definition
+from policy.audit import AuditSink, InMemoryAuditSink
 
 from .runtime_events import agent_event_to_session_event
 
@@ -78,6 +91,13 @@ class InteractiveAgentRuntime:
         thinking_level: ThinkingLevel = "off",
         cache_retention: CacheRetention | None = None,
         agent_factory: Callable[[AgentOptions], Agent] = Agent,
+        cwd: str | Path | None = None,
+        tool_profile: str = "coding",
+        audit_sink: AuditSink | None = None,
+        user_bash_hook: Callable[
+            [UserBashEvent], UserBashEventResult | Awaitable[UserBashEventResult] | Any
+        ]
+        | None = None,
     ) -> None:
         self._model_ref = model_ref
         self._model = resolve_model(model_ref)
@@ -87,6 +107,10 @@ class InteractiveAgentRuntime:
         )
         self._cache_retention = cache_retention
         self._agent_factory = agent_factory
+        self._cwd = Path(cwd or Path.cwd()).resolve()
+        self._tool_profile = tool_profile
+        self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._user_bash_hook = user_bash_hook
 
         self._events: queue.Queue[AgentSessionEvent] = queue.Queue()
         self._lock = threading.RLock()
@@ -98,6 +122,7 @@ class InteractiveAgentRuntime:
         self._generation = 0
 
         self._runtime_session_id = self._mint_runtime_session_id()
+        self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
         self._provider_cache_affinity_id = derive_provider_cache_affinity_id(
             self._runtime_session_id
         )
@@ -197,7 +222,9 @@ class InteractiveAgentRuntime:
 
         with self._lock:
             self._generation += 1
+            self._artifact_store.cleanup()
             self._runtime_session_id = self._mint_runtime_session_id()
+            self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
             self._provider_cache_affinity_id = derive_provider_cache_affinity_id(
                 self._runtime_session_id
             )
@@ -245,6 +272,22 @@ class InteractiveAgentRuntime:
         self._thread.join(timeout=timeout)
         if not self._thread.is_alive():
             self._loop.close()
+        self._artifact_store.cleanup()
+
+    def run_user_bash(self, command: str, *, exclude_from_context: bool) -> None:
+        if not command.strip():
+            return
+        with self._lock:
+            self._ensure_open()
+            if self._is_running_locked():
+                raise RuntimeError("runtime is already processing; user bash is only available while idle")
+            self._queued_steering.clear()
+            self._queued_follow_up.clear()
+            self._enqueue_queue_update_locked()
+            self._active_future = asyncio.run_coroutine_threadsafe(
+                self._run_user_bash(command.strip(), exclude_from_context, self._generation),
+                self._loop,
+            )
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -284,7 +327,8 @@ class InteractiveAgentRuntime:
                 cache_retention=self._cache_retention,
                 session_id=self._provider_cache_affinity_id,
                 get_api_key=self._get_api_key,
-                tools=[],
+                tools=self._build_tools(),
+                convert_to_llm=convert_coding_messages_to_llm,
             )
         )
 
@@ -296,6 +340,95 @@ class InteractiveAgentRuntime:
 
         agent.subscribe(listener)
         return agent
+
+    def _build_tools(self):
+        if self._tool_profile == "none":
+            return []
+        if self._tool_profile == "coding":
+            return create_coding_tools(
+                self._cwd,
+                runtime_session_id=self._runtime_session_id,
+                audit_sink=self._audit_sink,
+                artifact_store=self._artifact_store,
+            )
+        if self._tool_profile == "read_only":
+            return create_read_only_tools(
+                self._cwd,
+                runtime_session_id=self._runtime_session_id,
+                audit_sink=self._audit_sink,
+            )
+        raise ValueError(f"unsupported tool profile: {self._tool_profile}")
+
+    async def _run_user_bash(
+        self,
+        command: str,
+        exclude_from_context: bool,
+        generation: int,
+    ) -> None:
+        try:
+            result = await self._resolve_user_bash_result(command, exclude_from_context)
+            message = BashExecutionMessage(
+                command=command,
+                output=result.output,
+                exitCode=result.exit_code,
+                cancelled=result.cancelled,
+                truncated=result.truncated,
+                fullOutputPath=result.full_output_path,
+                timestamp=_now_ms(),
+                excludeFromContext=exclude_from_context,
+            )
+            self._agent.state.messages.append(message)
+            self._events.put(MessageStartEvent(message=message))
+            self._events.put(MessageEndEvent(message=message))
+        except Exception as exc:
+            self._enqueue_error(str(exc), generation)
+        finally:
+            with self._lock:
+                if generation == self._generation:
+                    self._active_future = None
+                    self._enqueue_queue_update_locked()
+            self._notify_wake()
+
+    async def _resolve_user_bash_result(self, command: str, exclude_from_context: bool) -> BashResult:
+        event = UserBashEvent(
+            command=command,
+            excludeFromContext=exclude_from_context,
+            cwd=str(self._cwd),
+        )
+        if self._user_bash_hook is not None:
+            hook_result = self._user_bash_hook(event)
+            if inspect.isawaitable(hook_result):
+                hook_result = await hook_result
+            parsed = UserBashEventResult.model_validate(hook_result)
+            if parsed.result is not None:
+                return parsed.result
+
+        tool = wrap_tool_definition(
+            create_bash_tool_definition(artifact_store=self._artifact_store),
+            ToolRuntime(
+                cwd=str(self._cwd),
+                runtime_session_id=self._runtime_session_id,
+                actor="user",
+                audit_sink=self._audit_sink,
+            ),
+        )
+        call_id = f"userbash-{uuid.uuid4()}"
+        result = await tool.execute(
+            call_id,
+            {"command": command},
+            None,
+            None,
+        )
+        details = result.details if isinstance(result.details, dict) else {}
+        output = _tool_text(result)
+        truncation = details.get("truncation") if isinstance(details.get("truncation"), dict) else {}
+        return BashResult(
+            output=output,
+            exitCode=details.get("exitCode"),
+            cancelled=bool(details.get("cancelled")),
+            truncated=bool(truncation.get("truncated")),
+            fullOutputPath=details.get("fullOutputPath"),
+        )
 
     def _get_api_key(self, provider: str) -> str | None:
         if provider == "faux":
@@ -363,6 +496,16 @@ class InteractiveAgentRuntime:
             content=[TextContent(text=text)],
             timestamp=_now_ms(),
         )
+
+
+def _tool_text(result: Any) -> str:
+    parts = []
+    for block in result.content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text", "")))
+        elif getattr(block, "type", None) == "text":
+            parts.append(str(block.text))
+    return "\n".join(parts)
 
 
 __all__ = ["InteractiveAgentRuntime", "RuntimeState"]

@@ -1,8 +1,37 @@
-"""cli.tools — built-in coding tools and tool render metadata.
+"""cli.tools — built-in coding tools and tool render metadata."""
 
-Architecture: design_docs/architecture/p1_pi_cli_technical_architecture.md
-              §Built-In Tools (line 656–686).
-Pi-mono source map (commit 97a38bf6, see ADR-0011):
-  - packages/coding-agent/src/core/tools/*.ts (read, grep, find, ls, write, edit, bash,
-    file-mutation-queue)
-"""
+from .context import bash_execution_to_text, convert_coding_messages_to_llm
+from .definitions import ToolDefinition, ToolExecutionContext, ToolName
+from .profiles import (
+    ALL_TOOLS,
+    CODING_PROFILE,
+    READ_ONLY_PROFILE,
+    create_all_tool_definitions,
+    create_all_tools,
+    create_coding_tool_definitions,
+    create_coding_tools,
+    create_read_only_tool_definitions,
+    create_read_only_tools,
+)
+from .shell import RuntimeArtifactStore
+from .wrapper import ToolRuntime, wrap_tool_definition
+
+__all__ = [
+    "ALL_TOOLS",
+    "CODING_PROFILE",
+    "READ_ONLY_PROFILE",
+    "RuntimeArtifactStore",
+    "ToolDefinition",
+    "ToolExecutionContext",
+    "ToolName",
+    "ToolRuntime",
+    "bash_execution_to_text",
+    "convert_coding_messages_to_llm",
+    "create_all_tool_definitions",
+    "create_all_tools",
+    "create_coding_tool_definitions",
+    "create_coding_tools",
+    "create_read_only_tool_definitions",
+    "create_read_only_tools",
+    "wrap_tool_definition",
+]

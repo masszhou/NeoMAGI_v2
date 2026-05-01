@@ -305,7 +305,11 @@ async def execute_prepared_tool_call(
                 is_error=True,
                 updates=updates,
             )
-        return _ExecutedToolCallOutcome(result=result, is_error=False, updates=updates)
+        return _ExecutedToolCallOutcome(
+            result=result,
+            is_error=bool(result.is_error),
+            updates=updates,
+        )
     except Exception as exc:
         return _ExecutedToolCallOutcome(
             result=create_error_tool_result(str(exc)),

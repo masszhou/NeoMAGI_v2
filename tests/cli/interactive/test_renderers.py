@@ -179,10 +179,7 @@ def test_generic_tool_renderer_includes_duration_after_end() -> None:
     assert "[ok]" in out
 
 
-def test_registry_falls_back_to_generic_when_no_specific_registered() -> None:
-    """Plan §W4 — fallback path is generic until M5 registers tool-specific
-    renderers from ``src/cli/tools/``."""
-
+def test_registered_read_renderer_keeps_partial_preview() -> None:
     reg = ToolRendererRegistry()
     ts = [0]
 
@@ -200,6 +197,19 @@ def test_registry_falls_back_to_generic_when_no_specific_registered() -> None:
     comp.update({"content": [{"type": "text", "text": "partial"}]})
     out = "\n".join(comp.render(60))
     assert "partial" in out
+
+
+def test_registry_falls_back_to_generic_for_unknown_tools() -> None:
+    reg = ToolRendererRegistry()
+    comp = ToolExecutionComponent(
+        tool_call_id="c1",
+        tool_name="custom_tool",
+        args={"x": 1},
+        registry=reg,
+    )
+    out = "\n".join(comp.render(60))
+    assert "custom_tool" in out
+    assert "partial: (no output yet)" in out
 
 
 def test_registry_uses_specific_renderer_when_registered() -> None:
