@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_core import Agent
+from agent_core import Agent, AgentToolResult
 from ai_provider.model_registry import get_model
 from ai_provider.providers.faux import faux_tool_call, stream_faux
 from ai_provider.runtime_types import SimpleStreamOptions
@@ -20,8 +20,9 @@ from cli.tools import (
     create_read_only_tools,
 )
 from cli.tools.context import convert_coding_messages_to_llm
+from cli.tools.definitions import ToolDefinition, object_schema
 from cli.tools.edit import prepare_edit_arguments
-from cli.tools.wrapper import default_policy_decider
+from cli.tools.wrapper import ToolRuntime, default_policy_decider, wrap_tool_definition
 from policy.audit import InMemoryAuditSink
 from policy.shell_policy import decide_shell_access
 from policy.types import PolicyDecision, PolicyRequest
@@ -131,6 +132,56 @@ def test_wrapped_tool_policy_details_and_audit_use_dynamic_run_id(tmp_path: Path
             "run-00000000-0000-7000-8000-000000000001",
             "run-00000000-0000-7000-8000-000000000002",
         ]
+
+    asyncio.run(run())
+
+
+def test_wrapped_tool_audit_keeps_captured_run_id_after_provider_changes(tmp_path: Path) -> None:
+    async def run() -> None:
+        audit = InMemoryAuditSink()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        current_run_id = "run-00000000-0000-7000-8000-000000000001"
+
+        async def execute(
+            _args: dict[str, Any],
+            context: Any,
+            _signal: Any,
+            _on_update: Any,
+        ) -> AgentToolResult:
+            started.set()
+            await release.wait()
+            return AgentToolResult(
+                content=[{"type": "text", "text": "late"}],
+                details={"contextRunId": context.run_id},
+            )
+
+        tool = wrap_tool_definition(
+            ToolDefinition(
+                name="bash",
+                label="late",
+                description="delayed test tool",
+                parameters=object_schema({}),
+                execute=execute,
+            ),
+            ToolRuntime(
+                cwd=str(tmp_path),
+                runtime_session_id="rt-1",
+                run_id_provider=lambda: current_run_id,
+                audit_sink=audit,
+                policy_decider=lambda _request: PolicyDecision.allow(),
+            ),
+        )
+
+        task = asyncio.create_task(tool.execute("late-call", {}, None, None))
+        await started.wait()
+        current_run_id = "run-00000000-0000-7000-8000-000000000002"
+        release.set()
+        result = await task
+
+        assert result.details["contextRunId"].endswith("0001")
+        assert result.details["policyDecision"]["runId"].endswith("0001")
+        assert audit.records[0].run_id == "run-00000000-0000-7000-8000-000000000001"
 
     asyncio.run(run())
 
