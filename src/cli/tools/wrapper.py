@@ -74,45 +74,17 @@ async def _execute_governed(
     result: AgentToolResult | None = None
     exception: Exception | None = None
     try:
-        request = PolicyRequest(
-            runtimeSessionId=runtime.runtime_session_id,
-            runId=runtime.run_id,
-            toolName=definition.name,
-            args=args,
-            cwd=runtime.cwd,
-            actor=runtime.actor,
-            source={
-                "tool_call_id": tool_call_id,
-                "input_origin": "model" if runtime.actor == "model" else "user_bash",
-                "actor_role": runtime.actor,
-            },
+        request = _policy_request(definition, runtime, tool_call_id, args)
+        decision = await _resolve_policy_decision(runtime, request)
+        result = await _run_or_block_tool(
+            definition,
+            runtime,
+            tool_call_id,
+            args,
+            decision,
+            signal,
+            on_update,
         )
-        decision = await maybe_await(runtime.policy_decider(request))
-        if not isinstance(decision, PolicyDecision):
-            decision = PolicyDecision.model_validate(decision)
-        if decision.effect == "confirm":
-            decision = decision.model_copy(
-                update={
-                    "effect": "block",
-                    "reason": decision.reason or "confirmation denied in M5",
-                    "audit_tags": [*decision.audit_tags, "confirm:denied"],
-                }
-            )
-        if decision.effect == "block":
-            result = _error_result(decision.reason or "tool execution blocked by policy", is_error=True)
-            result = _with_common_details(result, decision, started, start_monotonic)
-            return result
-
-        context = ToolExecutionContext(
-            tool_call_id=tool_call_id,
-            cwd=runtime.cwd,
-            policy_decision=decision,
-            runtime_session_id=runtime.runtime_session_id,
-            run_id=runtime.run_id,
-        )
-        result = await maybe_await(definition.execute(decision.normalized_args or args, context, signal, on_update))
-        if not isinstance(result, AgentToolResult):
-            result = AgentToolResult.model_validate(result)
         result = _with_common_details(result, decision, started, start_monotonic)
         return result
     except Exception as exc:  # convert all tool exceptions into structured results
@@ -123,6 +95,66 @@ async def _execute_governed(
     finally:
         if result is not None:
             await _audit(runtime, definition, tool_call_id, args, decision, result, started, start_monotonic, exception)
+
+
+def _policy_request(
+    definition: ToolDefinition,
+    runtime: ToolRuntime,
+    tool_call_id: str,
+    args: dict[str, Any],
+) -> PolicyRequest:
+    return PolicyRequest(
+        runtimeSessionId=runtime.runtime_session_id,
+        runId=runtime.run_id,
+        toolName=definition.name,
+        args=args,
+        cwd=runtime.cwd,
+        actor=runtime.actor,
+        source={
+            "tool_call_id": tool_call_id,
+            "input_origin": "model" if runtime.actor == "model" else "user_bash",
+            "actor_role": runtime.actor,
+        },
+    )
+
+
+async def _resolve_policy_decision(runtime: ToolRuntime, request: PolicyRequest) -> PolicyDecision:
+    decision = await maybe_await(runtime.policy_decider(request))
+    if not isinstance(decision, PolicyDecision):
+        decision = PolicyDecision.model_validate(decision)
+    if decision.effect == "confirm":
+        return decision.model_copy(
+            update={
+                "effect": "block",
+                "reason": decision.reason or "confirmation denied in M5",
+                "audit_tags": [*decision.audit_tags, "confirm:denied"],
+            }
+        )
+    return decision
+
+
+async def _run_or_block_tool(
+    definition: ToolDefinition,
+    runtime: ToolRuntime,
+    tool_call_id: str,
+    args: dict[str, Any],
+    decision: PolicyDecision,
+    signal: AbortSignal | None,
+    on_update: ToolUpdateCallback | None,
+) -> AgentToolResult:
+    if decision.effect == "block":
+        return _error_result(decision.reason or "tool execution blocked by policy", is_error=True)
+    context = ToolExecutionContext(
+        tool_call_id=tool_call_id,
+        cwd=runtime.cwd,
+        policy_decision=decision,
+        runtime_session_id=runtime.runtime_session_id,
+        run_id=runtime.run_id,
+    )
+    result = await maybe_await(definition.execute(decision.normalized_args or args, context, signal, on_update))
+    if not isinstance(result, AgentToolResult):
+        return AgentToolResult.model_validate(result)
+    return result
 
 
 def default_policy_decider(request: PolicyRequest) -> PolicyDecision:

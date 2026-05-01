@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,16 @@ from .definitions import ToolDefinition, ToolExecutionContext, object_schema
 from .truncate import DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH, format_size, truncate_head, truncate_line
 
 DEFAULT_MATCH_LIMIT = 100
+
+
+@dataclass(frozen=True, slots=True)
+class _GrepPlan:
+    root: Path
+    logical_path: str
+    matcher: Callable[[str], bool]
+    limit: int
+    context_lines: int
+    glob: str | None
 
 
 def create_grep_tool_definition() -> ToolDefinition:
@@ -47,46 +59,90 @@ async def execute_grep(
     signal: AbortSignal | None,
     _on_update: ToolUpdateCallback | None,
 ) -> AgentToolResult:
+    plan = _build_grep_plan(args, context)
+    if isinstance(plan, AgentToolResult):
+        return plan
+
+    output, line_truncated, match_limit, aborted = _collect_grep_output(plan, signal)
+    if aborted:
+        return text_result(
+            "Operation aborted",
+            details=resolved_path_details(plan.logical_path, plan.root),
+            is_error=True,
+        )
+    if not output:
+        return text_result(
+            "No matches found",
+            details=_grep_details(args, plan.root, plan.logical_path, plan.limit, line_truncated),
+        )
+    return _grep_result(output, args, plan.root, plan.logical_path, plan.limit, line_truncated, match_limit=match_limit)
+
+
+def _build_grep_plan(args: dict[str, Any], context: ToolExecutionContext) -> _GrepPlan | AgentToolResult:
     root = Path(context.policy_decision.resolved_paths.get("path", ""))
     logical_path = str(args.get("path") or ".")
     if not root.exists():
         return text_result(f"Path not found: {logical_path}", details=resolved_path_details(logical_path, root), is_error=True)
-
     try:
         matcher = _matcher(str(args["pattern"]), bool(args.get("literal")), bool(args.get("ignoreCase")))
     except re.error as exc:
         return text_result(f"Invalid regex: {exc}", details=resolved_path_details(logical_path, root), is_error=True)
+    glob = args.get("glob") if isinstance(args.get("glob"), str) else None
+    return _GrepPlan(
+        root=root,
+        logical_path=logical_path,
+        matcher=matcher,
+        limit=int(args.get("limit") or DEFAULT_MATCH_LIMIT),
+        context_lines=max(0, int(args.get("context") or 0)),
+        glob=glob,
+    )
 
-    limit = int(args.get("limit") or DEFAULT_MATCH_LIMIT)
-    context_lines = max(0, int(args.get("context") or 0))
-    glob = args.get("glob")
+
+def _collect_grep_output(
+    plan: _GrepPlan,
+    signal: AbortSignal | None,
+) -> tuple[list[str], bool, int | None, bool]:
     output: list[str] = []
     match_count = 0
     line_truncated = False
-    for file_path in _iter_files(root):
+    for file_path in _iter_files(plan.root):
         if signal is not None and signal.is_set():
-            return text_result("Operation aborted", details=resolved_path_details(logical_path, root), is_error=True)
-        rel = _display_path(file_path, root)
-        if isinstance(glob, str) and glob and not _matches_glob(rel, glob):
-            continue
-        try:
-            lines = file_path.read_text(encoding="utf-8").split("\n")
-        except UnicodeDecodeError:
-            continue
-        except OSError:
-            continue
-        for index, line in enumerate(lines, start=1):
-            if not matcher(line):
-                continue
-            match_count += 1
-            output.extend(_format_match_block(rel, lines, index, context_lines))
-            line_truncated = line_truncated or any("[truncated]" in item for item in output[-(context_lines * 2 + 1) :])
-            if match_count >= limit:
-                return _grep_result(output, args, root, logical_path, limit, line_truncated, match_limit=limit)
+            return output, line_truncated, None, True
+        match_count, line_truncated = _collect_file_matches(file_path, plan, output, match_count, line_truncated)
+        if match_count >= plan.limit:
+            return output, line_truncated, plan.limit, False
+    return output, line_truncated, None, False
 
-    if not output:
-        return text_result("No matches found", details=_grep_details(args, root, logical_path, limit, line_truncated))
-    return _grep_result(output, args, root, logical_path, limit, line_truncated)
+
+def _collect_file_matches(
+    file_path: Path,
+    plan: _GrepPlan,
+    output: list[str],
+    match_count: int,
+    line_truncated: bool,
+) -> tuple[int, bool]:
+    rel = _display_path(file_path, plan.root)
+    if plan.glob and not _matches_glob(rel, plan.glob):
+        return match_count, line_truncated
+    lines = _read_text_lines(file_path)
+    if lines is None:
+        return match_count, line_truncated
+    for index, line in enumerate(lines, start=1):
+        if plan.matcher(line):
+            match_count += 1
+            block = _format_match_block(rel, lines, index, plan.context_lines)
+            output.extend(block)
+            line_truncated = line_truncated or any("[truncated]" in item for item in block)
+            if match_count >= plan.limit:
+                break
+    return match_count, line_truncated
+
+
+def _read_text_lines(file_path: Path) -> list[str] | None:
+    try:
+        return file_path.read_text(encoding="utf-8").split("\n")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _matcher(pattern: str, literal: bool, ignore_case: bool):

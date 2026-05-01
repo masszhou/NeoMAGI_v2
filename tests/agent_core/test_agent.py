@@ -237,6 +237,50 @@ def test_abort_during_stream_preserves_partial_and_returns_to_idle() -> None:
     asyncio.run(run())
 
 
+def test_abort_during_tool_preserves_structured_tool_error_result() -> None:
+    async def run() -> None:
+        def stream_fn(model: Model, context: Context, options: SimpleStreamOptions | None = None):
+            return stream_faux(
+                model,
+                context,
+                SimpleStreamOptions(metadata={"response": [faux_tool_call("cancelled_tool", {})]}),
+            )
+
+        async def execute(
+            _tool_call_id: str,
+            _params: dict[str, Any],
+            signal: asyncio.Event | None,
+            _on_update: Any,
+        ) -> AgentToolResult:
+            if signal is not None:
+                signal.set()
+            return AgentToolResult(
+                content=[{"type": "text", "text": "cancelled with partial output"}],
+                details={"cancelled": True, "truncation": {"truncated": False}},
+                isError=True,
+            )
+
+        events: list[Any] = []
+        agent = Agent(
+            model=_model(),
+            stream_fn=stream_fn,
+            tools=[_runtime_tool("cancelled_tool", execute)],
+        )
+        agent.subscribe(lambda event, _signal: events.append(event))
+
+        await agent.prompt("hello")
+
+        tool_results = [message for message in agent.state.messages if isinstance(message, ToolResultMessage)]
+        assert len(tool_results) == 1
+        assert tool_results[0].is_error is True
+        assert tool_results[0].content[0].text == "cancelled with partial output"
+        assert tool_results[0].details["cancelled"] is True
+        end_events = [event for event in events if event.type == "tool_execution_end"]
+        assert end_events[0].result.details["cancelled"] is True
+
+    asyncio.run(run())
+
+
 def test_tool_call_result_is_fed_back_until_model_stops() -> None:
     async def run() -> None:
         contexts: list[Context] = []

@@ -300,6 +300,12 @@ async def execute_prepared_tool_call(
         if not isinstance(result, AgentToolResult):
             result = AgentToolResult.model_validate(result)
         if signal and signal.is_set():
+            if result.is_error:
+                return _ExecutedToolCallOutcome(
+                    result=result,
+                    is_error=True,
+                    updates=updates,
+                )
             return _ExecutedToolCallOutcome(
                 result=create_error_tool_result("Tool execution was aborted"),
                 is_error=True,
@@ -330,6 +336,12 @@ async def finalize_executed_tool_call(
     is_error = executed.is_error
 
     if signal and signal.is_set():
+        if executed.is_error:
+            return _FinalizedToolCallOutcome(
+                tool_call=preparation.tool_call,
+                result=executed.result,
+                is_error=True,
+            )
         return _FinalizedToolCallOutcome(
             tool_call=preparation.tool_call,
             result=create_error_tool_result("Tool execution was aborted"),

@@ -136,6 +136,26 @@ def test_bash_success_block_and_audit(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_shell_policy_blocks_compact_output_escape_syntax(tmp_path: Path) -> None:
+    async def run() -> None:
+        bash = _tool_map(create_coding_tools(tmp_path))["bash"]
+
+        redirect = await bash.execute("redirect", {"command": "printf x >../outside.txt"}, None, None)
+        curl_output = await bash.execute(
+            "curl",
+            {"command": "curl -o../outside.txt https://example.com/file.txt"},
+            None,
+            None,
+        )
+
+        assert redirect.is_error is True
+        assert "redirect path escapes cwd" in redirect.content[0]["text"]
+        assert curl_output.is_error is True
+        assert "output path escapes cwd" in curl_output.content[0]["text"]
+
+    asyncio.run(run())
+
+
 def test_confirm_decision_becomes_denied_result(tmp_path: Path) -> None:
     async def run() -> None:
         audit = InMemoryAuditSink()

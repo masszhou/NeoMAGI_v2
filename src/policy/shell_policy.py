@@ -99,17 +99,43 @@ def _blocked_command_reason(command: str) -> str | None:
 def _blocked_output_path_reason(command: str, cwd: Path) -> str | None:
     tokens = _split_command(command)
     for index, token in enumerate(tokens):
-        if token in {"-o", "--output", "-O"} and index + 1 < len(tokens):
-            if _path_escapes(tokens[index + 1], cwd):
-                return f"shell output path escapes cwd: {tokens[index + 1]}"
-        if token.startswith("--output="):
-            output = token.split("=", 1)[1]
-            if _path_escapes(output, cwd):
-                return f"shell output path escapes cwd: {output}"
-        if token in {">", ">>"} and index + 1 < len(tokens):
-            if _path_escapes(tokens[index + 1], cwd):
-                return f"shell redirect path escapes cwd: {tokens[index + 1]}"
+        reason = _blocked_output_option_reason(tokens, index, cwd)
+        if reason:
+            return reason
+        reason = _blocked_redirect_reason(tokens, index, cwd)
+        if reason:
+            return reason
     return None
+
+
+def _blocked_output_option_reason(tokens: list[str], index: int, cwd: Path) -> str | None:
+    output = _output_option_target(tokens, index)
+    if output and _path_escapes(output, cwd):
+        return f"shell output path escapes cwd: {output}"
+    return None
+
+
+def _output_option_target(tokens: list[str], index: int) -> str | None:
+    token = tokens[index]
+    if token in {"-o", "--output", "-O"} and index + 1 < len(tokens):
+        return tokens[index + 1]
+    if token.startswith("--output="):
+        return token.split("=", 1)[1]
+    return _compact_output_option_target(token)
+
+
+def _blocked_redirect_reason(tokens: list[str], index: int, cwd: Path) -> str | None:
+    target = _redirect_target(tokens, index)
+    if target and _path_escapes(target, cwd):
+        return f"shell redirect path escapes cwd: {target}"
+    return None
+
+
+def _redirect_target(tokens: list[str], index: int) -> str | None:
+    token = tokens[index]
+    if token in {">", ">>"} and index + 1 < len(tokens):
+        return tokens[index + 1]
+    return _compact_redirect_target(token)
 
 
 def _path_escapes(raw: str, cwd: Path) -> bool:
@@ -127,6 +153,20 @@ def _is_privileged_path(token: str) -> bool:
         return False
     path = token.rstrip("/").split("=", 1)[-1]
     return any(path == base or path.startswith(f"{base}/") for base in _PRIVILEGED_PATHS)
+
+
+def _compact_output_option_target(token: str) -> str | None:
+    if token.startswith("-o") and len(token) > 2 and token != "--output":
+        return token[2:]
+    return None
+
+
+def _compact_redirect_target(token: str) -> str | None:
+    match = re.match(r"^(?:\d*|&)?>>?(.+)$", token)
+    if not match:
+        return None
+    target = match.group(1)
+    return target or None
 
 
 def _split_command(command: str) -> list[str]:
