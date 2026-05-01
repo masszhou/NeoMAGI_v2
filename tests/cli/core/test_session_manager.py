@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_provider.types import AssistantMessage, TextContent, Usage, UsageCost, UserMessage
+from ai_provider.types import (
+    AssistantMessage,
+    ImageContent,
+    TextContent,
+    Usage,
+    UsageCost,
+    UserMessage,
+)
 from cli.core.session_manager import SessionManager
-from storage.session_repository import InMemorySessionRepository
+from storage.in_memory_session_repository import InMemorySessionRepository
 
 
 def _usage() -> Usage:
@@ -78,8 +85,66 @@ def test_session_manager_fork_and_clone_preserve_source(tmp_path: Path) -> None:
     assert forked.editor_prefill == "rewrite me"
     assert manager.build_session_context(forked.session.id).messages == []
     assert cloned.session.parent_session_id == source.id
+    assert cloned.editor_prefill == ""
+    assert forked.session.provider_cache_affinity_id != source.provider_cache_affinity_id
+    assert cloned.session.provider_cache_affinity_id != source.provider_cache_affinity_id
     assert [message.role for message in manager.build_session_context(cloned.session.id).messages] == [
         "user",
         "assistant",
     ]
     assert manager.session_stats(source.id).message_count == 2
+
+
+def test_session_manager_fork_copies_ancestor_chain_before_selected_user(
+    tmp_path: Path,
+) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    source = manager.new_session(tmp_path)
+    manager.append_message(
+        source.id,
+        UserMessage(content=[TextContent(text="first prompt")], timestamp=1),
+    )
+    manager.append_message(
+        source.id,
+        AssistantMessage(
+            content=[TextContent(text="first answer")],
+            api="faux",
+            provider="faux",
+            model="faux-1",
+            usage=_usage(),
+            stopReason="stop",
+            timestamp=2,
+        ),
+    )
+    second_user = manager.append_message(
+        source.id,
+        UserMessage(content=[TextContent(text="rewrite second")], timestamp=3),
+    )
+
+    forked = manager.fork_session(source.id, second_user.pi_export_id)
+    fork_context = manager.build_session_context(forked.session.id)
+
+    assert forked.editor_prefill == "rewrite second"
+    assert [message.role for message in fork_context.messages] == ["user", "assistant"]
+    assert fork_context.messages[0].content[0].text == "first prompt"
+    assert fork_context.messages[1].content[0].text == "first answer"
+
+
+def test_session_manager_fork_prefill_uses_only_text_blocks(tmp_path: Path) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    source = manager.new_session(tmp_path)
+    user = manager.append_message(
+        source.id,
+        UserMessage(
+            content=[
+                TextContent(text="line one"),
+                ImageContent(data="base64", mimeType="image/png"),
+                TextContent(text="line two"),
+            ],
+            timestamp=1,
+        ),
+    )
+
+    forked = manager.fork_session(source.id, user.pi_export_id)
+
+    assert forked.editor_prefill == "line oneline two"

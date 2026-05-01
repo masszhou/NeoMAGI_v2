@@ -50,6 +50,16 @@ class SessionStats:
     parent_session_id: str | None = None
 
 
+@dataclass(slots=True)
+class _ContextBuildState:
+    path: list[EntryRecord]
+    messages: list[tuple[str, Any]]
+    path_index: dict[str, int]
+    provider: str | None = None
+    model_id: str | None = None
+    thinking_level: str | None = None
+
+
 class SessionManagerError(RuntimeError):
     """Raised when a product-level session operation is invalid."""
 
@@ -244,77 +254,100 @@ class SessionManager:
     ) -> SessionContext:
         session = self.resume_session(session_id)
         path = self._entry_path(session.id, leaf_entry_id or session.current_leaf_entry_id)
-        messages: list[tuple[str, Any]] = []
-        provider: str | None = None
-        model_id: str | None = None
-        thinking_level: str | None = None
-        path_index = {entry.pi_export_id: index for index, entry in enumerate(path)}
+        state = _ContextBuildState(
+            path=path,
+            messages=[],
+            path_index={entry.pi_export_id: index for index, entry in enumerate(path)},
+        )
         for entry in path:
-            payload = entry.payload
-            if payload.type == "message":
-                if getattr(payload.message, "exclude_from_context", False):
-                    continue
-                messages.append((payload.id, payload.message))
-            elif payload.type == "model_change":
-                provider = payload.provider
-                model_id = payload.model_id
-            elif payload.type == "thinking_level_change":
-                thinking_level = payload.thinking_level
-            elif payload.type == "compaction":
-                cutoff = path_index.get(payload.first_kept_entry_id)
-                if cutoff is not None:
-                    keep_ids = {
-                        candidate.pi_export_id
-                        for candidate in path[cutoff:]
-                    }
-                    messages = [
-                        (entry_id, message)
-                        for entry_id, message in messages
-                        if entry_id in keep_ids
-                    ]
-                messages.append(
-                    (
-                        payload.id,
-                        CompactionSummaryMessage(
-                            summary=payload.summary,
-                            fromId=payload.first_kept_entry_id,
-                            tokensBefore=payload.tokens_before,
-                            timestamp=_entry_ms(payload.timestamp),
-                        ),
-                    )
-                )
-            elif payload.type == "branch_summary":
-                messages.append(
-                    (
-                        payload.id,
-                        BranchSummaryMessage(
-                            summary=payload.summary,
-                            fromId=payload.from_id,
-                            timestamp=_entry_ms(payload.timestamp),
-                        ),
-                    )
-                )
-            elif payload.type == "custom_message":
-                messages.append(
-                    (
-                        payload.id,
-                        CustomMessage(
-                            customType=payload.custom_type,
-                            content=payload.content,
-                            display=payload.display,
-                            details=payload.details,
-                            timestamp=_entry_ms(payload.timestamp),
-                        ),
-                    )
-                )
+            self._apply_context_entry(state, entry.payload)
         leaf = path[-1].pi_export_id if path else None
         return SessionContext(
             header=session.header(),
-            messages=[message for _entry_id, message in messages],
-            provider=provider,
-            modelId=model_id,
-            thinkingLevel=thinking_level,
+            messages=[message for _entry_id, message in state.messages],
+            provider=state.provider,
+            modelId=state.model_id,
+            thinkingLevel=state.thinking_level,
             leafEntryId=leaf,
+        )
+
+    def _apply_context_entry(
+        self,
+        state: _ContextBuildState,
+        payload: SessionEntry,
+    ) -> None:
+        if payload.type == "message":
+            self._append_context_message(state, payload)
+        elif payload.type == "model_change":
+            state.provider = payload.provider
+            state.model_id = payload.model_id
+        elif payload.type == "thinking_level_change":
+            state.thinking_level = payload.thinking_level
+        elif payload.type == "compaction":
+            self._append_compaction_context(state, payload)
+        elif payload.type == "branch_summary":
+            self._append_branch_summary_context(state, payload)
+        elif payload.type == "custom_message":
+            self._append_custom_message_context(state, payload)
+
+    def _append_context_message(
+        self,
+        state: _ContextBuildState,
+        payload: MessageEntry,
+    ) -> None:
+        if getattr(payload.message, "exclude_from_context", False):
+            return
+        state.messages.append((payload.id, payload.message))
+
+    def _append_compaction_context(
+        self,
+        state: _ContextBuildState,
+        payload,
+    ) -> None:
+        cutoff = state.path_index.get(payload.first_kept_entry_id)
+        if cutoff is not None:
+            keep_ids = {candidate.pi_export_id for candidate in state.path[cutoff:]}
+            state.messages = [
+                (entry_id, message)
+                for entry_id, message in state.messages
+                if entry_id in keep_ids
+            ]
+        state.messages.append(
+            (
+                payload.id,
+                CompactionSummaryMessage(
+                    summary=payload.summary,
+                    fromId=payload.first_kept_entry_id,
+                    tokensBefore=payload.tokens_before,
+                    timestamp=_entry_ms(payload.timestamp),
+                ),
+            )
+        )
+
+    def _append_branch_summary_context(self, state: _ContextBuildState, payload) -> None:
+        state.messages.append(
+            (
+                payload.id,
+                BranchSummaryMessage(
+                    summary=payload.summary,
+                    fromId=payload.from_id,
+                    timestamp=_entry_ms(payload.timestamp),
+                ),
+            )
+        )
+
+    def _append_custom_message_context(self, state: _ContextBuildState, payload) -> None:
+        state.messages.append(
+            (
+                payload.id,
+                CustomMessage(
+                    customType=payload.custom_type,
+                    content=payload.content,
+                    display=payload.display,
+                    details=payload.details,
+                    timestamp=_entry_ms(payload.timestamp),
+                ),
+            )
         )
 
     def session_stats(self, session_id: str) -> SessionStats:
@@ -423,7 +456,7 @@ def _extract_user_text(entry: MessageEntry) -> str:
         text = getattr(block, "text", None)
         if block_type == "text" and isinstance(text, str):
             parts.append(text)
-    return "\n".join(parts)
+    return "".join(parts)
 
 
 def _entry_ms(value: str) -> int:

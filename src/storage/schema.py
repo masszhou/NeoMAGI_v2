@@ -8,6 +8,108 @@ from .config import DatabaseConfig
 
 NEOMAGI_SESSION_SCHEMA_VERSION = "1"
 
+_SCHEMA_SQL_TEMPLATES = (
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_schema_meta(
+        key text primary key,
+        value text not null,
+        updated_at timestamptz not null default now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_sessions(
+        id uuid primary key,
+        parent_session_id uuid null references {schema}.agent_sessions(id),
+        cwd text not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        current_leaf_entry_id uuid null,
+        provider_cache_affinity_id text not null,
+        display_name text null,
+        source jsonb not null default '{{}}'::jsonb,
+        deleted_at timestamptz null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_session_entries(
+        id uuid primary key,
+        session_id uuid not null references {schema}.agent_sessions(id),
+        parent_entry_id uuid null references {schema}.agent_session_entries(id),
+        pi_export_id text not null,
+        entry_type text not null,
+        occurred_at timestamptz not null,
+        payload jsonb not null,
+        context_participates boolean not null,
+        created_at timestamptz not null,
+        unique(session_id, pi_export_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_messages(
+        id uuid primary key,
+        session_entry_id uuid not null references {schema}.agent_session_entries(id),
+        session_id uuid not null references {schema}.agent_sessions(id),
+        role text not null,
+        content jsonb not null,
+        provider text null,
+        api text null,
+        model text null,
+        response_id text null,
+        stop_reason text null,
+        usage jsonb null,
+        is_error boolean not null default false,
+        error_message text null,
+        occurred_at timestamptz not null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_tool_executions(
+        id uuid primary key,
+        session_id uuid not null references {schema}.agent_sessions(id),
+        assistant_message_id uuid null references {schema}.agent_messages(id),
+        tool_call_id text not null,
+        tool_name text not null,
+        args jsonb not null,
+        result_content jsonb null,
+        result_details jsonb null,
+        is_error boolean null,
+        started_at timestamptz not null,
+        ended_at timestamptz null,
+        duration_ms integer null,
+        truncation jsonb null,
+        policy_decision jsonb null,
+        sandbox jsonb null,
+        runtime_session_id text null,
+        run_id text null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_audit_events(
+        id uuid primary key,
+        session_id uuid not null references {schema}.agent_sessions(id),
+        entry_id uuid null references {schema}.agent_session_entries(id),
+        tool_execution_id uuid null references {schema}.agent_tool_executions(id),
+        event_type text not null,
+        actor_type text not null,
+        action text not null,
+        target jsonb not null default '{{}}'::jsonb,
+        decision jsonb not null default '{{}}'::jsonb,
+        metadata jsonb not null default '{{}}'::jsonb,
+        occurred_at timestamptz not null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.agent_session_labels(
+        session_id uuid not null references {schema}.agent_sessions(id),
+        target_entry_id uuid null references {schema}.agent_session_entries(id),
+        target_pi_export_id text not null,
+        label text null,
+        updated_at timestamptz not null,
+        primary key(session_id, target_pi_export_id)
+    )
+    """,
+)
+
 
 class SchemaBootstrapError(RuntimeError):
     """Raised when schema bootstrap or version validation fails."""
@@ -19,141 +121,14 @@ def ensure_schema(conn, config: DatabaseConfig) -> None:
     schema = _quote_identifier(config.schema)
     try:
         with conn.cursor() as cur:
-            cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_schema_meta(
-                    key text primary key,
-                    value text not null,
-                    updated_at timestamptz not null default now()
-                )
-                """
+            _create_schema_objects(cur, schema)
+            _create_current_leaf_constraint(cur, schema)
+            _upsert_meta(
+                cur,
+                schema,
+                "neomagi_session_schema_version",
+                NEOMAGI_SESSION_SCHEMA_VERSION,
             )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_sessions(
-                    id uuid primary key,
-                    parent_session_id uuid null references {schema}.agent_sessions(id),
-                    cwd text not null,
-                    created_at timestamptz not null,
-                    updated_at timestamptz not null,
-                    current_leaf_entry_id uuid null,
-                    provider_cache_affinity_id text not null,
-                    display_name text null,
-                    source jsonb not null default '{{}}'::jsonb,
-                    deleted_at timestamptz null
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_session_entries(
-                    id uuid primary key,
-                    session_id uuid not null references {schema}.agent_sessions(id),
-                    parent_entry_id uuid null references {schema}.agent_session_entries(id),
-                    pi_export_id text not null,
-                    entry_type text not null,
-                    occurred_at timestamptz not null,
-                    payload jsonb not null,
-                    context_participates boolean not null,
-                    created_at timestamptz not null,
-                    unique(session_id, pi_export_id)
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_messages(
-                    id uuid primary key,
-                    session_entry_id uuid not null references {schema}.agent_session_entries(id),
-                    session_id uuid not null references {schema}.agent_sessions(id),
-                    role text not null,
-                    content jsonb not null,
-                    provider text null,
-                    api text null,
-                    model text null,
-                    response_id text null,
-                    stop_reason text null,
-                    usage jsonb null,
-                    is_error boolean not null default false,
-                    error_message text null,
-                    occurred_at timestamptz not null
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_tool_executions(
-                    id uuid primary key,
-                    session_id uuid not null references {schema}.agent_sessions(id),
-                    assistant_message_id uuid null references {schema}.agent_messages(id),
-                    tool_call_id text not null,
-                    tool_name text not null,
-                    args jsonb not null,
-                    result_content jsonb null,
-                    result_details jsonb null,
-                    is_error boolean null,
-                    started_at timestamptz not null,
-                    ended_at timestamptz null,
-                    duration_ms integer null,
-                    truncation jsonb null,
-                    policy_decision jsonb null,
-                    sandbox jsonb null,
-                    runtime_session_id text null,
-                    run_id text null
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_audit_events(
-                    id uuid primary key,
-                    session_id uuid not null references {schema}.agent_sessions(id),
-                    entry_id uuid null references {schema}.agent_session_entries(id),
-                    tool_execution_id uuid null references {schema}.agent_tool_executions(id),
-                    event_type text not null,
-                    actor_type text not null,
-                    action text not null,
-                    target jsonb not null default '{{}}'::jsonb,
-                    decision jsonb not null default '{{}}'::jsonb,
-                    metadata jsonb not null default '{{}}'::jsonb,
-                    occurred_at timestamptz not null
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {schema}.agent_session_labels(
-                    session_id uuid not null references {schema}.agent_sessions(id),
-                    target_entry_id uuid null references {schema}.agent_session_entries(id),
-                    target_pi_export_id text not null,
-                    label text null,
-                    updated_at timestamptz not null,
-                    primary key(session_id, target_pi_export_id)
-                )
-                """
-            )
-            cur.execute(
-                f"""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'agent_sessions_current_leaf_fk'
-                          AND conrelid = '{schema}.agent_sessions'::regclass
-                    ) THEN
-                        ALTER TABLE {schema}.agent_sessions
-                        ADD CONSTRAINT agent_sessions_current_leaf_fk
-                        FOREIGN KEY (current_leaf_entry_id)
-                        REFERENCES {schema}.agent_session_entries(id)
-                        DEFERRABLE INITIALLY DEFERRED;
-                    END IF;
-                END
-                $$;
-                """
-            )
-            _upsert_meta(cur, schema, "neomagi_session_schema_version", NEOMAGI_SESSION_SCHEMA_VERSION)
             _upsert_meta(cur, schema, "pi_session_version", str(CURRENT_SESSION_VERSION))
         conn.commit()
     except Exception as exc:  # pragma: no cover - integration path
@@ -162,6 +137,35 @@ def ensure_schema(conn, config: DatabaseConfig) -> None:
         except Exception:
             pass
         raise SchemaBootstrapError(f"failed to bootstrap Postgres schema: {exc}") from exc
+
+
+def _create_schema_objects(cur, schema: str) -> None:
+    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+    for template in _SCHEMA_SQL_TEMPLATES:
+        cur.execute(template.format(schema=schema))
+
+
+def _create_current_leaf_constraint(cur, schema: str) -> None:
+    cur.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'agent_sessions_current_leaf_fk'
+                  AND conrelid = '{schema}.agent_sessions'::regclass
+            ) THEN
+                ALTER TABLE {schema}.agent_sessions
+                ADD CONSTRAINT agent_sessions_current_leaf_fk
+                FOREIGN KEY (current_leaf_entry_id)
+                REFERENCES {schema}.agent_session_entries(id)
+                DEFERRABLE INITIALLY DEFERRED;
+            END IF;
+        END
+        $$;
+        """
+    )
 
 
 def _upsert_meta(cur, schema: str, key: str, expected: str) -> None:

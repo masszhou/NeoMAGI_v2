@@ -51,6 +51,32 @@ def import_session_jsonl(
     source = Path(path)
     if source.suffix != ".jsonl":
         raise SessionJsonlError("M6 import only supports .jsonl; structured imports are M10")
+    header, entries = _load_migrated_jsonl(source)
+    parent_session_id = _resolvable_parent_session_id(repository, header.get("parentSession"))
+    session = repository.create_session(
+        cwd=cwd_override or header["cwd"],
+        parent_session_id=parent_session_id,
+        source=_source_metadata(source, header, parent_session_id),
+    )
+    for entry in entries:
+        repository.append_entry(session.id, entry)
+    return repository.get_session(session.id) or session
+
+
+def _load_migrated_jsonl(source: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    objects = _read_jsonl_objects(source)
+    try:
+        header = migrate_header(objects[0])
+        entries = [
+            migrate_entry(raw, line_number=index)
+            for index, raw in enumerate(objects[1:], start=2)
+        ]
+    except SessionMigrationError as exc:
+        raise SessionJsonlError(str(exc)) from exc
+    return header, entries
+
+
+def _read_jsonl_objects(source: Path) -> list[dict[str, Any]]:
     try:
         raw_lines = source.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -71,34 +97,31 @@ def import_session_jsonl(
         objects.append(parsed)
     if not objects:
         raise SessionJsonlError("session JSONL has no JSON objects")
+    return objects
 
-    try:
-        header = migrate_header(objects[0])
-        entries = [
-            migrate_entry(raw, line_number=index)
-            for index, raw in enumerate(objects[1:], start=2)
-        ]
-    except SessionMigrationError as exc:
-        raise SessionJsonlError(str(exc)) from exc
 
-    parent_session_id = _parse_neomagi_parent(header.get("parentSession"))
+def _resolvable_parent_session_id(
+    repository: SessionRepository,
+    parent_session: object,
+) -> str | None:
+    parent_session_id = _parse_neomagi_parent(parent_session)
     if parent_session_id is not None and repository.get_session(parent_session_id) is None:
-        parent_session_id = None
+        return None
+    return parent_session_id
+
+
+def _source_metadata(
+    source: Path,
+    header: dict[str, Any],
+    parent_session_id: str | None,
+) -> dict[str, Any]:
     source_meta: dict[str, Any] = {
         "importedFrom": str(source),
         "sourceHeaderId": header.get("id"),
     }
     if header.get("parentSession") and parent_session_id is None:
         source_meta["parentSessionPath"] = header["parentSession"]
-
-    session = repository.create_session(
-        cwd=cwd_override or header["cwd"],
-        parent_session_id=parent_session_id,
-        source=source_meta,
-    )
-    for entry in entries:
-        repository.append_entry(session.id, entry)
-    return repository.get_session(session.id) or session
+    return source_meta
 
 
 def _parse_neomagi_parent(value: object) -> str | None:

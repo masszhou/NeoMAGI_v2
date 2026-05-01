@@ -14,7 +14,8 @@ from .config import DatabaseConfig, DatabaseConfigError, load_database_config
 from .connection import DatabaseConnectionError, connect_database
 from .schema import SchemaBootstrapError, ensure_schema
 from .session_jsonl import SessionJsonlError, export_session_jsonl, import_session_jsonl
-from .session_repository import InMemorySessionRepository, PostgresSessionRepository
+from .in_memory_session_repository import InMemorySessionRepository
+from .session_repository import PostgresSessionRepository
 
 __all__ = [
     "DatabaseConfig",
