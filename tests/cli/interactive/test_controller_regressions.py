@@ -6,8 +6,8 @@ import io
 import json
 from pathlib import Path
 
-from ai_provider.types import AssistantMessage, TextContent, Usage, UsageCost, UserMessage
-from cli.core.session_types import MessageStartEvent
+from ai_provider.types import AssistantMessage, StreamDone, TextContent, Usage, UsageCost, UserMessage
+from cli.core.session_types import MessageStartEvent, MessageUpdateEvent
 from cli.interactive.app import InteractiveController
 from cli.interactive.components import AssistantMessageComponent, UserMessageComponent
 from cli.interactive.playback import PlaybackHarness
@@ -525,6 +525,63 @@ def test_command_mode_commits_completed_messages_to_scrollback() -> None:
     assert "prompt one" in written
     live = "\n".join(app._compose_command_frame())  # noqa: SLF001
     assert "prompt one" not in live
+
+
+def test_command_mode_does_not_commit_empty_assistant_start_before_done() -> None:
+    _, c, out = _make_command_controller()
+    initial = AssistantMessage(
+        role="assistant",
+        content=[],
+        api="openai-responses",
+        provider="openai",
+        model="gpt-4o-mini",
+        usage=_zero_usage(),
+        stopReason="stop",
+        timestamp=1,
+    )
+    final = initial.model_copy(
+        update={"content": [TextContent(text="final streamed text")], "timestamp": 2}
+    )
+
+    c.dispatch_event(MessageStartEvent(message=initial))
+    written_after_start = out.getvalue()
+    assert "assistant" not in written_after_start
+
+    c.dispatch_event(
+        MessageUpdateEvent(
+            message=final,
+            assistantMessageEvent=StreamDone(reason="stop", message=final)
+        )
+    )
+
+    written_after_done = out.getvalue()
+    assert "assistant" in written_after_done
+    assert "final streamed text" in written_after_done
+
+
+def test_command_mode_commits_done_only_assistant_text_to_scrollback() -> None:
+    _, c, out = _make_command_controller()
+    final = AssistantMessage(
+        role="assistant",
+        content=[TextContent(text="final-only provider text")],
+        api="openai-responses",
+        provider="openai",
+        model="gpt-4o-mini",
+        usage=_zero_usage(),
+        stopReason="stop",
+        timestamp=2,
+    )
+
+    c.dispatch_event(
+        MessageUpdateEvent(
+            message=final,
+            assistantMessageEvent=StreamDone(reason="stop", message=final)
+        )
+    )
+
+    written = out.getvalue()
+    assert "assistant" in written
+    assert "final-only provider text" in written
 
 
 def test_command_page_up_is_noop_for_editor_and_transcript_viewport() -> None:

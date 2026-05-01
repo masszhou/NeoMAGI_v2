@@ -124,9 +124,7 @@ class AssistantMessageComponent(Component):
 
     def _apply_terminal_event(self, event: StreamDone | StreamError) -> None:
         if isinstance(event, StreamDone):
-            self.message = event.message
-            self.completed = True
-            self.stop_reason = event.reason
+            self._load_message(event.message)
             return
 
         self.message = event.error

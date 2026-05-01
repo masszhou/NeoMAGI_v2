@@ -234,6 +234,7 @@ class EventRouter:
             comp = UserMessageComponent(message)
         elif isinstance(message, AssistantMessage):
             comp = AssistantMessageComponent(message)
+            comp.completed = False
             self._active_assistant = comp
         elif isinstance(message, ToolResultMessage):
             comp = ToolResultComponent(message)

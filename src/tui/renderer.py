@@ -99,14 +99,14 @@ class Renderer:
         Command render mode keeps committed transcript outside the live
         diff region. Before appending new transcript rows, clear the current
         editor/status/streaming tail and then write each row as normal
-        newline-terminated terminal output.
+        CRLF-terminated terminal output.
         """
 
         chunks: list[str] = []
         self._append_clear_command_live(chunks)
         for line in lines:
             self._append_command_line(chunks, line)
-            chunks.append("\n")
+            chunks.append("\r\n")
         if not chunks:
             return
         if self._write("".join(chunks)):
@@ -129,7 +129,7 @@ class Renderer:
         self._append_clear_command_live(body)
         for index, line in enumerate(frame):
             if index:
-                body.append("\n")
+                body.append("\r\n")
             self._append_command_line(body, line)
 
         if cursor is not None and cursor.visible and frame:

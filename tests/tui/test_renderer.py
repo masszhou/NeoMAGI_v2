@@ -125,7 +125,7 @@ def test_command_commit_appends_transcript_without_rewriting_history() -> None:
     r.commit_lines(["\x1b[1muser\x1b[0m", "  hello", ""])
     committed = out.getvalue()
     assert "user" in committed
-    assert "hello\x1b[0m\n" in committed
+    assert "hello\x1b[0m\r\n" in committed
     assert "\x1b[1;1H" not in committed
 
     out.truncate(0)
@@ -139,7 +139,7 @@ def test_command_commit_appends_transcript_without_rewriting_history() -> None:
 def test_command_paths_reset_sgr_after_each_row() -> None:
     r, out = _make()
     r.commit_lines(["\x1b[1mbold"])
-    assert "\x1b[1mbold\x1b[0m\n" in out.getvalue()
+    assert "\x1b[1mbold\x1b[0m\r\n" in out.getvalue()
 
     out.truncate(0)
     out.seek(0)
@@ -148,4 +148,15 @@ def test_command_paths_reset_sgr_after_each_row() -> None:
         cursor=CursorPosition(row=2, col=1, visible=True),
     )
     text = out.getvalue()
-    assert "\x1b[1mlive\x1b[0m\nplain\x1b[0m" in text
+    assert "\x1b[1mlive\x1b[0m\r\nplain\x1b[0m" in text
+
+
+def test_command_live_rows_use_crlf_for_raw_terminal_output() -> None:
+    r, out = _make()
+    r.present_live(
+        ["first row", "second row", "third row"],
+        cursor=CursorPosition(row=3, col=1, visible=True),
+    )
+    text = out.getvalue()
+    assert "first row\x1b[0m\r\nsecond row\x1b[0m\r\nthird row\x1b[0m" in text
+    assert "first row\x1b[0m\nsecond row" not in text
