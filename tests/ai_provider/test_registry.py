@@ -31,6 +31,33 @@ def test_get_api_registers_builtin_api_families() -> None:
     assert get_api("openai-completions").api_name == "openai-completions"
 
 
+def test_builtin_models_include_daily_smoke_targets() -> None:
+    gpt = resolve_model("openai/gpt-5.4")
+    assert gpt.api == "openai-responses"
+    assert gpt.reasoning is True
+    assert gpt.context_window == 1_000_000
+    assert gpt.max_tokens == 128_000
+    assert gpt.cost.input == 2.5
+    assert gpt.cost.cache_read == 0.25
+    assert validate_thinking_level_for_model(gpt, "xhigh") == "xhigh"
+
+    codex = resolve_model("openai-codex/gpt-5.3-codex")
+    assert codex.api == "openai-codex-responses"
+
+    sonnet = resolve_model("anthropic/claude-sonnet-4-6")
+    assert sonnet.api == "anthropic-messages"
+    assert sonnet.context_window == 1_000_000
+    assert sonnet.max_tokens == 64_000
+    assert sonnet.cost.input == 3
+
+    opus = resolve_model("anthropic/claude-opus-4-7")
+    assert opus.api == "anthropic-messages"
+    assert opus.context_window == 1_000_000
+    assert opus.max_tokens == 128_000
+    assert opus.cost.output == 25
+    assert validate_thinking_level_for_model(opus, "xhigh") == "xhigh"
+
+
 def test_resolve_model_requires_explicit_provider_model() -> None:
     assert resolve_model("openai/gpt-4o-mini").id == "gpt-4o-mini"
 
