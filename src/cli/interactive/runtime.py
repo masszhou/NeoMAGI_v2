@@ -319,6 +319,11 @@ class InteractiveAgentRuntime:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _build_agent(self, generation: int) -> Agent:
+        agent_ref: list[Agent] = []
+
+        def active_run_id() -> str | None:
+            return agent_ref[0].active_run_id if agent_ref else None
+
         agent = self._agent_factory(
             AgentOptions(
                 model=self._model,
@@ -327,10 +332,11 @@ class InteractiveAgentRuntime:
                 cache_retention=self._cache_retention,
                 session_id=self._provider_cache_affinity_id,
                 get_api_key=self._get_api_key,
-                tools=self._build_tools(),
+                tools=self._build_tools(run_id_provider=active_run_id),
                 convert_to_llm=convert_coding_messages_to_llm,
             )
         )
+        agent_ref.append(agent)
 
         def listener(event: Any, _signal: asyncio.Event) -> None:
             if generation != self._generation:
@@ -341,13 +347,18 @@ class InteractiveAgentRuntime:
         agent.subscribe(listener)
         return agent
 
-    def _build_tools(self):
+    def _build_tools(
+        self,
+        *,
+        run_id_provider: Callable[[], str | None] | None = None,
+    ):
         if self._tool_profile == "none":
             return []
         if self._tool_profile == "coding":
             return create_coding_tools(
                 self._cwd,
                 runtime_session_id=self._runtime_session_id,
+                run_id_provider=run_id_provider,
                 audit_sink=self._audit_sink,
                 artifact_store=self._artifact_store,
             )
@@ -355,6 +366,7 @@ class InteractiveAgentRuntime:
             return create_read_only_tools(
                 self._cwd,
                 runtime_session_id=self._runtime_session_id,
+                run_id_provider=run_id_provider,
                 audit_sink=self._audit_sink,
             )
         raise ValueError(f"unsupported tool profile: {self._tool_profile}")
@@ -408,6 +420,7 @@ class InteractiveAgentRuntime:
             ToolRuntime(
                 cwd=str(self._cwd),
                 runtime_session_id=self._runtime_session_id,
+                run_id=self._mint_run_id(),
                 actor="user",
                 audit_sink=self._audit_sink,
             ),
@@ -488,6 +501,10 @@ class InteractiveAgentRuntime:
     @staticmethod
     def _mint_runtime_session_id() -> str:
         return f"runtime-{uuid.uuid4()}"
+
+    @staticmethod
+    def _mint_run_id() -> str:
+        return f"run-{uuid.uuid7()}"
 
     @staticmethod
     def _user_message(text: str) -> UserMessage:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,7 @@ def create_coding_tools(
     *,
     runtime_session_id: str | None = None,
     run_id: str | None = None,
+    run_id_provider: Callable[[], str | None] | None = None,
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
     artifact_store: RuntimeArtifactStore | None = None,
@@ -70,6 +72,7 @@ def create_coding_tools(
         cwd=cwd,
         runtime_session_id=runtime_session_id,
         run_id=run_id,
+        run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
     )
@@ -80,6 +83,7 @@ def create_read_only_tools(
     *,
     runtime_session_id: str | None = None,
     run_id: str | None = None,
+    run_id_provider: Callable[[], str | None] | None = None,
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
 ) -> list[RuntimeAgentTool]:
@@ -88,6 +92,7 @@ def create_read_only_tools(
         cwd=cwd,
         runtime_session_id=runtime_session_id,
         run_id=run_id,
+        run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
     )
@@ -98,6 +103,7 @@ def create_all_tools(
     *,
     runtime_session_id: str | None = None,
     run_id: str | None = None,
+    run_id_provider: Callable[[], str | None] | None = None,
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
     artifact_store: RuntimeArtifactStore | None = None,
@@ -107,6 +113,7 @@ def create_all_tools(
         cwd=str(cwd),
         runtime_session_id=runtime_session_id,
         run_id=run_id,
+        run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
     )
@@ -119,6 +126,7 @@ def _wrap_definitions(
     cwd: str | Path,
     runtime_session_id: str | None,
     run_id: str | None,
+    run_id_provider: Callable[[], str | None] | None,
     audit_sink: AuditSink | None,
     policy_decider: PolicyDecider | None,
 ) -> list[RuntimeAgentTool]:
@@ -126,6 +134,7 @@ def _wrap_definitions(
         cwd=str(cwd),
         runtime_session_id=runtime_session_id,
         run_id=run_id,
+        run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
     )

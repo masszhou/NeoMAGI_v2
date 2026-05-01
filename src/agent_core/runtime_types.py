@@ -141,6 +141,7 @@ class AgentOptions:
 
 @dataclass(slots=True)
 class ActiveRun:
+    id: str
     signal: AbortSignal
     settlement: asyncio.Future[None]
     stream: "AssistantMessageEventStream | None" = None

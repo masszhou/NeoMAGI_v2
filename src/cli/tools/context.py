@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from agent_core.loop import default_convert_to_llm
-from ai_provider.types import Message, TextContent, UserMessage
+from ai_provider.types import Message, TextContent, ToolResultMessage, UserMessage
 from cli.core.session_types import BashExecutionMessage
 
 
@@ -17,6 +17,9 @@ def convert_coding_messages_to_llm(messages: list[Any]) -> list[Message]:
             if message.exclude_from_context:
                 continue
             converted.append(_bash_execution_to_user_message(message))
+            continue
+        if isinstance(message, ToolResultMessage):
+            converted.append(_strip_run_metadata(message))
             continue
         converted.append(message)
     return default_convert_to_llm(converted)
@@ -45,6 +48,24 @@ def _bash_execution_to_user_message(message: BashExecutionMessage) -> UserMessag
         content=[TextContent(text=bash_execution_to_text(message))],
         timestamp=int(time.time() * 1000),
     )
+
+
+def _strip_run_metadata(message: ToolResultMessage) -> ToolResultMessage:
+    if not isinstance(message.details, dict):
+        return message
+    return message.model_copy(update={"details": _without_run_metadata(message.details)})
+
+
+def _without_run_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_run_metadata(item)
+            for key, item in value.items()
+            if key not in {"runId", "run_id"}
+        }
+    if isinstance(value, list):
+        return [_without_run_metadata(item) for item in value]
+    return value
 
 
 __all__ = ["bash_execution_to_text", "convert_coding_messages_to_llm"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -144,6 +145,10 @@ class Agent:
     def signal(self) -> asyncio.Event | None:
         return self._active_run.signal if self._active_run else None
 
+    @property
+    def active_run_id(self) -> str | None:
+        return self._active_run.id if self._active_run else None
+
     def subscribe(self, listener: Listener) -> Callable[[], None]:
         self._listeners.append(listener)
 
@@ -260,7 +265,11 @@ class Agent:
 
         signal = asyncio.Event()
         settlement = asyncio.get_running_loop().create_future()
-        active_run = ActiveRun(signal=signal, settlement=settlement)
+        active_run = ActiveRun(
+            id=self._mint_run_id(),
+            signal=signal,
+            settlement=settlement,
+        )
         self._active_run = active_run
         self._state.is_streaming = True
         self._state.streaming_message = None
@@ -420,6 +429,10 @@ class Agent:
 
     def _tool_specs(self) -> list[AgentTool]:
         return [tool.to_agent_tool_spec() for tool in self._runtime_tools]
+
+    @staticmethod
+    def _mint_run_id() -> str:
+        return f"run-{uuid.uuid7()}"
 
 
 __all__ = [

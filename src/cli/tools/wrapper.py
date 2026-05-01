@@ -28,6 +28,7 @@ class ToolRuntime:
         cwd: str,
         runtime_session_id: str | None = None,
         run_id: str | None = None,
+        run_id_provider: Callable[[], str | None] | None = None,
         actor: PolicyActor = "model",
         audit_sink: AuditSink | None = None,
         policy_decider: PolicyDecider | None = None,
@@ -35,9 +36,16 @@ class ToolRuntime:
         self.cwd = cwd
         self.runtime_session_id = runtime_session_id
         self.run_id = run_id
+        self.run_id_provider = run_id_provider
         self.actor = actor
         self.audit_sink = audit_sink or InMemoryAuditSink()
         self.policy_decider = policy_decider or default_policy_decider
+
+    @property
+    def current_run_id(self) -> str | None:
+        if self.run_id_provider is not None:
+            return self.run_id_provider() or self.run_id
+        return self.run_id
 
 
 def wrap_tool_definition(definition: ToolDefinition, runtime: ToolRuntime) -> RuntimeAgentTool:
@@ -74,6 +82,7 @@ async def _execute_governed(
 ) -> AgentToolResult:
     started = _now_iso()
     start_monotonic = time.monotonic()
+    run_id = runtime.current_run_id
     decision = PolicyDecision.block("policy did not run")
     result: AgentToolResult | None = None
     exception: Exception | None = None
@@ -82,29 +91,30 @@ async def _execute_governed(
         if validation_error is not None:
             decision = PolicyDecision.block("schema validation failed", audit_tags=["schema:block"])
             result = _error_result(validation_error, is_error=True)
-            result = _with_common_details(result, decision, started, start_monotonic)
+            result = _with_common_details(result, decision, run_id, started, start_monotonic)
             return result
-        request = _policy_request(definition, runtime, tool_call_id, args)
+        request = _policy_request(definition, runtime, tool_call_id, args, run_id)
         decision = await _resolve_policy_decision(runtime, request)
         result = await _run_or_block_tool(
             definition,
             runtime,
             tool_call_id,
             args,
+            run_id,
             decision,
             signal,
             on_update,
         )
-        result = _with_common_details(result, decision, started, start_monotonic)
+        result = _with_common_details(result, decision, run_id, started, start_monotonic)
         return result
     except Exception as exc:  # convert all tool exceptions into structured results
         exception = exc
         result = _error_result(str(exc), is_error=True)
-        result = _with_common_details(result, decision, started, start_monotonic, exception=exc)
+        result = _with_common_details(result, decision, run_id, started, start_monotonic, exception=exc)
         return result
     finally:
         if result is not None:
-            await _audit(runtime, definition, tool_call_id, args, decision, result, started, start_monotonic, exception)
+            await _audit(runtime, definition, tool_call_id, args, decision, result, run_id, started, start_monotonic, exception)
 
 
 def _policy_request(
@@ -112,10 +122,11 @@ def _policy_request(
     runtime: ToolRuntime,
     tool_call_id: str,
     args: dict[str, Any],
+    run_id: str | None,
 ) -> PolicyRequest:
     return PolicyRequest(
         runtimeSessionId=runtime.runtime_session_id,
-        runId=runtime.run_id,
+        runId=run_id,
         toolName=definition.name,
         args=args,
         cwd=runtime.cwd,
@@ -148,6 +159,7 @@ async def _run_or_block_tool(
     runtime: ToolRuntime,
     tool_call_id: str,
     args: dict[str, Any],
+    run_id: str | None,
     decision: PolicyDecision,
     signal: AbortSignal | None,
     on_update: ToolUpdateCallback | None,
@@ -159,7 +171,7 @@ async def _run_or_block_tool(
         cwd=runtime.cwd,
         policy_decision=decision,
         runtime_session_id=runtime.runtime_session_id,
-        run_id=runtime.run_id,
+        run_id=run_id,
     )
     result = await maybe_await(definition.execute(decision.normalized_args or args, context, signal, on_update))
     if not isinstance(result, AgentToolResult):
@@ -196,6 +208,7 @@ def default_policy_decider(request: PolicyRequest) -> PolicyDecision:
 def _with_common_details(
     result: AgentToolResult,
     decision: PolicyDecision,
+    run_id: str | None,
     started: str,
     start_monotonic: float,
     *,
@@ -206,7 +219,7 @@ def _with_common_details(
     details = result.details if isinstance(result.details, dict) else {}
     details = {
         **details,
-        "policyDecision": decision.model_dump(by_alias=True, exclude_none=True),
+        "policyDecision": _decision_details(decision, run_id),
         "auditTags": list(decision.audit_tags),
         "durationMs": duration,
         "startedAt": started,
@@ -225,6 +238,7 @@ async def _audit(
     args: dict[str, Any],
     decision: PolicyDecision,
     result: AgentToolResult,
+    run_id: str | None,
     started: str,
     start_monotonic: float,
     exception: Exception | None,
@@ -234,7 +248,7 @@ async def _audit(
     duration = details.get("durationMs")
     record = AuditRecord(
         runtimeSessionId=runtime.runtime_session_id,
-        runId=runtime.run_id,
+        runId=run_id,
         actor=runtime.actor,
         toolName=definition.name,
         toolCallId=tool_call_id,
@@ -256,6 +270,13 @@ async def _audit(
 
 def _error_result(message: str, *, is_error: bool) -> AgentToolResult:
     return AgentToolResult(content=[{"type": "text", "text": message}], details={}, isError=is_error)
+
+
+def _decision_details(decision: PolicyDecision, run_id: str | None) -> dict[str, Any]:
+    details = decision.model_dump(by_alias=True, exclude_none=True)
+    if run_id is not None:
+        details["runId"] = run_id
+    return details
 
 
 def _affected_paths(details: dict[str, Any], decision: PolicyDecision) -> list[str]:

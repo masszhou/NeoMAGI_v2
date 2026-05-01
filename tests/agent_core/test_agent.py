@@ -191,6 +191,31 @@ def test_agent_end_messages_are_run_local_after_existing_transcript() -> None:
     asyncio.run(run())
 
 
+def test_active_run_id_is_visible_only_during_one_run() -> None:
+    async def run() -> None:
+        seen: list[str | None] = []
+        agent = Agent(model=_model(), metadata={"response": "ok"})
+        agent.subscribe(lambda _event, _signal: seen.append(agent.active_run_id))
+
+        await agent.prompt("first")
+        first_ids = {item for item in seen if item is not None}
+        assert len(first_ids) == 1
+        first_id = first_ids.pop()
+        assert first_id.startswith("run-")
+        assert agent.active_run_id is None
+
+        seen.clear()
+        await agent.prompt("second")
+        second_ids = {item for item in seen if item is not None}
+        assert len(second_ids) == 1
+        second_id = second_ids.pop()
+        assert second_id.startswith("run-")
+        assert second_id != first_id
+        assert agent.active_run_id is None
+
+    asyncio.run(run())
+
+
 def test_wait_for_idle_waits_for_agent_end_listener_and_listener_errors_settle() -> None:
     async def run() -> None:
         saw_streaming_at_agent_end: list[bool] = []

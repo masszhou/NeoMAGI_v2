@@ -6,8 +6,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from agent_core import Agent
+from ai_provider.model_registry import get_model
+from ai_provider.providers.faux import faux_tool_call, stream_faux
+from ai_provider.runtime_types import SimpleStreamOptions
 from ai_provider.tools import ToolArgumentValidationError, validate_tool_arguments
-from ai_provider.types import TextContent
+from ai_provider.types import Context, Model, TextContent, ToolResultMessage
 from cli.core.session_types import BashExecutionMessage
 from cli.interactive.runtime import InteractiveAgentRuntime
 from cli.tools import (
@@ -17,8 +21,10 @@ from cli.tools import (
 )
 from cli.tools.context import convert_coding_messages_to_llm
 from cli.tools.edit import prepare_edit_arguments
+from cli.tools.wrapper import default_policy_decider
 from policy.audit import InMemoryAuditSink
-from policy.types import PolicyDecision
+from policy.shell_policy import decide_shell_access
+from policy.types import PolicyDecision, PolicyRequest
 
 
 def _tool_map(tools):
@@ -86,6 +92,79 @@ def test_read_policy_audit_and_details(tmp_path: Path) -> None:
         assert blocked.details["policyDecision"]["effect"] == "block"
         assert [record.tool_name for record in audit.records] == ["read", "read"]
         assert [record.is_error for record in audit.records] == [False, True]
+
+    asyncio.run(run())
+
+
+def test_wrapped_tool_policy_details_and_audit_use_dynamic_run_id(tmp_path: Path) -> None:
+    async def run() -> None:
+        (tmp_path / "a.txt").write_text("one", encoding="utf-8")
+        audit = InMemoryAuditSink()
+        requests: list[PolicyRequest] = []
+        current_run_id = "run-00000000-0000-7000-8000-000000000001"
+
+        def policy(request: PolicyRequest) -> PolicyDecision:
+            requests.append(request)
+            return default_policy_decider(request)
+
+        read = _tool_map(
+            create_coding_tools(
+                tmp_path,
+                runtime_session_id="rt-1",
+                run_id_provider=lambda: current_run_id,
+                audit_sink=audit,
+                policy_decider=policy,
+            )
+        )["read"]
+
+        first = await read.execute("call-read-1", {"path": "a.txt"}, None, None)
+        current_run_id = "run-00000000-0000-7000-8000-000000000002"
+        second = await read.execute("call-read-2", {"path": "a.txt"}, None, None)
+
+        assert first.details["policyDecision"]["runId"].endswith("0001")
+        assert second.details["policyDecision"]["runId"].endswith("0002")
+        assert [record.run_id for record in audit.records] == [
+            "run-00000000-0000-7000-8000-000000000001",
+            "run-00000000-0000-7000-8000-000000000002",
+        ]
+        assert [request.run_id for request in requests] == [
+            "run-00000000-0000-7000-8000-000000000001",
+            "run-00000000-0000-7000-8000-000000000002",
+        ]
+
+    asyncio.run(run())
+
+
+def test_agent_model_tool_audit_run_ids_are_prompt_scoped(tmp_path: Path) -> None:
+    async def run() -> None:
+        (tmp_path / "a.txt").write_text("one", encoding="utf-8")
+        (tmp_path / "b.txt").write_text("two", encoding="utf-8")
+        audit = InMemoryAuditSink()
+        agent, provider_contexts = _agent_with_two_read_calls(tmp_path, audit)
+
+        await agent.prompt("first")
+        await agent.prompt("second")
+
+        run_ids = [record.run_id for record in audit.records]
+        assert len(run_ids) == 4
+        assert all(run_id and run_id.startswith("run-") for run_id in run_ids)
+        assert run_ids[0] == run_ids[1]
+        assert run_ids[2] == run_ids[3]
+        assert run_ids[0] != run_ids[2]
+
+        tool_results = [
+            message
+            for message in agent.state.messages
+            if isinstance(message, ToolResultMessage)
+        ]
+        detail_run_ids = [
+            message.details["policyDecision"]["runId"]
+            for message in tool_results
+        ]
+        assert detail_run_ids == run_ids
+        provider_payload_text = "\n".join(provider_contexts)
+        assert "runId" not in provider_payload_text
+        assert "run-" not in provider_payload_text
 
     asyncio.run(run())
 
@@ -220,6 +299,75 @@ def test_shell_policy_blocks_compact_output_escape_syntax(tmp_path: Path) -> Non
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    ("command", "blocked_path"),
+    [
+        ('bash -c "cat /etc/passwd"', "/etc/passwd"),
+        ('sh -lc "ls /usr/bin"', "/usr/bin"),
+        ("python -c \"open('/etc/passwd').read()\"", "/etc/passwd"),
+        (
+            "python3 -c \"from pathlib import Path; "
+            "Path('/private/etc/hosts').read_text()\"",
+            "/private/etc/hosts",
+        ),
+    ],
+)
+def test_shell_policy_blocks_nested_privileged_paths(
+    tmp_path: Path,
+    command: str,
+    blocked_path: str,
+) -> None:
+    decision = _shell_decision(tmp_path, command)
+
+    assert decision.effect == "block"
+    assert blocked_path in (decision.reason or "")
+    assert decision.resolved_paths["blockedPathLiteral"] == blocked_path
+
+
+def test_shell_policy_keeps_top_level_privileged_path_precedence(tmp_path: Path) -> None:
+    decision = _shell_decision(tmp_path, '/usr/bin/bash -c "cat /etc/passwd"')
+
+    assert decision.effect == "block"
+    assert "/usr/bin/bash" in (decision.reason or "")
+    assert decision.resolved_paths["blockedPathLiteral"] == "/usr/bin/bash"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -c "echo P1M5_OK"',
+        "python -c \"print('P1M5_OK')\"",
+        "python -c \"print('https://example.com/etc/readme')\"",
+        "python -c \"print('see /etc/issue.net for hostname conventions')\"",
+    ],
+)
+def test_shell_policy_allows_harmless_nested_commands(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    assert _shell_decision(tmp_path, command).effect == "allow"
+
+
+def test_deep_shell_policy_block_exposes_literal_in_details_and_audit(tmp_path: Path) -> None:
+    async def run() -> None:
+        audit = InMemoryAuditSink()
+        bash = _tool_map(create_coding_tools(tmp_path, audit_sink=audit))["bash"]
+
+        result = await bash.execute(
+            "bash-deep-block",
+            {"command": "python -c \"open('/etc/passwd').read()\""},
+            None,
+            None,
+        )
+
+        decision = result.details["policyDecision"]
+        assert result.is_error is True
+        assert decision["resolvedPaths"]["blockedPathLiteral"] == "/etc/passwd"
+        assert audit.records[0].policy_decision.resolved_paths["blockedPathLiteral"] == "/etc/passwd"
+
+    asyncio.run(run())
+
+
 def test_confirm_decision_becomes_denied_result(tmp_path: Path) -> None:
     async def run() -> None:
         audit = InMemoryAuditSink()
@@ -268,6 +416,29 @@ def test_bash_execution_context_conversion_filters_double_bang() -> None:
     assert "secret" not in converted[0].content[0].text
 
 
+def test_coding_llm_conversion_strips_run_id_from_tool_result_details() -> None:
+    run_id = "run-00000000-0000-7000-8000-000000000099"
+    message = ToolResultMessage(
+        toolCallId="call_1",
+        toolName="read",
+        content=[TextContent(text="tool output")],
+        details={
+            "runId": run_id,
+            "policyDecision": {"effect": "allow", "runId": run_id},
+        },
+        isError=False,
+        timestamp=1,
+    )
+
+    converted = convert_coding_messages_to_llm([message])
+
+    assert len(converted) == 1
+    assert isinstance(converted[0], ToolResultMessage)
+    assert converted[0].details == {"policyDecision": {"effect": "allow"}}
+    assert "runId" not in str(converted)
+    assert "run-" not in str(converted)
+
+
 def test_runtime_defaults_to_coding_tools_and_user_bash(tmp_path: Path) -> None:
     runtime = InteractiveAgentRuntime(cwd=tmp_path)
     try:
@@ -288,6 +459,24 @@ def test_runtime_defaults_to_coding_tools_and_user_bash(tmp_path: Path) -> None:
         runtime.shutdown()
 
 
+def test_runtime_user_bash_audit_run_ids_are_independent(tmp_path: Path) -> None:
+    audit = InMemoryAuditSink()
+    runtime = InteractiveAgentRuntime(cwd=tmp_path, audit_sink=audit)
+    try:
+        runtime.run_user_bash("pwd", exclude_from_context=True)
+        _drain_until_message_end(runtime)
+        runtime.run_user_bash("pwd", exclude_from_context=True)
+        _drain_until_message_end(runtime)
+    finally:
+        runtime.shutdown()
+
+    user_records = [record for record in audit.records if record.actor == "user"]
+    assert len(user_records) == 2
+    run_ids = [record.run_id for record in user_records]
+    assert all(run_id and run_id.startswith("run-") for run_id in run_ids)
+    assert run_ids[0] != run_ids[1]
+
+
 def test_runtime_read_only_profile_omits_mutation_tools(tmp_path: Path) -> None:
     runtime = InteractiveAgentRuntime(cwd=tmp_path, tool_profile="read_only")
     try:
@@ -306,3 +495,51 @@ def _drain_until_message_end(runtime: InteractiveAgentRuntime):
             return events
         time.sleep(0.01)
     raise AssertionError("runtime did not emit user bash message")
+
+
+def _agent_with_two_read_calls(
+    tmp_path: Path,
+    audit: InMemoryAuditSink,
+) -> tuple[Agent, list[str]]:
+    provider_contexts: list[str] = []
+    call_batch = 0
+
+    def stream_fn(
+        model: Model,
+        context: Context,
+        options: SimpleStreamOptions | None = None,
+    ):
+        nonlocal call_batch
+        provider_contexts.append(context.model_dump_json(by_alias=True, exclude_none=True))
+        if context.messages and context.messages[-1].role == "toolResult":
+            return stream_faux(model, context, SimpleStreamOptions(metadata={"response": "done"}))
+        call_batch += 1
+        response = [
+            faux_tool_call("read", {"path": "a.txt"}, id=f"call_{call_batch}_a"),
+            faux_tool_call("read", {"path": "b.txt"}, id=f"call_{call_batch}_b"),
+        ]
+        return stream_faux(model, context, SimpleStreamOptions(metadata={"response": response}))
+
+    agent = Agent(
+        model=get_model("faux", "faux-1"),
+        stream_fn=stream_fn,
+        convert_to_llm=convert_coding_messages_to_llm,
+    )
+    agent.tools = create_coding_tools(
+        tmp_path,
+        runtime_session_id="rt-1",
+        run_id_provider=lambda: agent.active_run_id,
+        audit_sink=audit,
+    )
+    return agent, provider_contexts
+
+
+def _shell_decision(tmp_path: Path, command: str) -> PolicyDecision:
+    return decide_shell_access(
+        PolicyRequest(
+            toolName="bash",
+            args={"command": command},
+            cwd=str(tmp_path),
+            actor="model",
+        )
+    )
