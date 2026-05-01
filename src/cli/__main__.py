@@ -42,16 +42,41 @@ def _run_interactive(opts: CliOptions) -> int:
     # and keeps a clean separation between argv routing and runtime.
     from cli.interactive.app import InteractiveController
     from cli.interactive.runtime import InteractiveAgentRuntime
+    from cli.core.session_manager import SessionManager
+    from storage import (
+        PostgresAuditRepository,
+        PostgresAuditSink,
+        PostgresSessionRepository,
+        connect_database,
+        ensure_schema,
+        load_database_config,
+    )
     from tui.app import TUIApp
     from tui.lifecycle import lifecycle
 
     tui_app = TUIApp(render_mode=_resolve_render_mode(opts))
     runtime = None
     if opts.playback is None:
+        try:
+            db_config = load_database_config()
+            conn = connect_database(db_config)
+            ensure_schema(conn, db_config)
+            session_manager = SessionManager(PostgresSessionRepository(conn, db_config))
+            audit_sink = PostgresAuditSink(
+                repository=PostgresAuditRepository(conn, db_config),
+                session_id_provider=lambda: runtime.state.durable_session_id
+                if runtime is not None and runtime.state.durable_session_id is not None
+                else "",
+            )
+        except Exception as exc:
+            sys.stderr.write(f"neomagi: durable session storage unavailable: {exc}\n")
+            return 2
         runtime = InteractiveAgentRuntime(
             model_ref=opts.model_ref,
             thinking_level=opts.thinking_level,
             cache_retention=opts.cache_retention,
+            session_manager=session_manager,
+            audit_sink=audit_sink,
         )
     controller = InteractiveController(
         tui_app=tui_app,

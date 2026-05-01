@@ -43,22 +43,22 @@ PI_BUILTIN_COMMANDS: tuple[tuple[str, str, str | None], ...] = (
     ("settings", "Open settings UI", "M9"),
     ("model", "Switch model", "M9"),
     ("scoped-models", "Configure Ctrl+P model rotation", "M9"),
-    ("export", "Export session as HTML / JSONL", "M10"),
-    ("import", "Import JSONL into current session", "M10"),
+    ("export", "Export session as HTML / JSONL", None),
+    ("import", "Import JSONL into current session", None),
     ("share", "Share session as a GitHub gist", "M10"),
     ("copy", "Copy last assistant message", "M10"),
-    ("name", "Rename current session", "M6"),
-    ("session", "Show session statistics", "M6"),
+    ("name", "Rename current session", None),
+    ("session", "Show session statistics", None),
     ("changelog", "Show NeoMAGI changelog", "M10"),
     ("hotkeys", "Show keybinding table", None),
-    ("fork", "Fork session from a historic user message", "M6"),
-    ("clone", "Clone current branch as a new session", "M6"),
-    ("tree", "Open session tree navigation", "M6"),
+    ("fork", "Fork session from a historic user message", None),
+    ("clone", "Clone current branch as a new session", None),
+    ("tree", "Open session tree navigation", None),
     ("login", "OAuth login", "M9"),
     ("logout", "OAuth logout", "M9"),
     ("new", "Start a new session", None),
     ("compact", "Manual compaction", "M7"),
-    ("resume", "Resume a previous session", "M6"),
+    ("resume", "Resume a previous session", None),
     ("reload", "Reload extensions / skills / prompts / themes", "M8"),
     ("quit", "Quit NeoMAGI", None),
 )
@@ -67,8 +67,25 @@ non-null for those whose runtime arrives in a later milestone; M1 still
 registers them so autocomplete is complete (and the user gets a clear
 "tracked in M{X}" message when they try to invoke)."""
 
-M1_LIVE_COMMANDS: frozenset[str] = frozenset({"new", "hotkeys", "quit"})
+LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
+    {
+        "clone",
+        "export",
+        "fork",
+        "hotkeys",
+        "import",
+        "name",
+        "new",
+        "quit",
+        "resume",
+        "session",
+        "tree",
+    }
+)
 """``/play`` is added separately — it's M1-only, not a Pi builtin."""
+
+M1_LIVE_COMMANDS = LIVE_BUILTIN_COMMANDS
+"""Backward-compatible alias for older tests/imports."""
 
 
 class SlashCommandRegistry:
@@ -125,7 +142,7 @@ class SlashCommandRegistry:
 def _make_stub(milestone: str, description: str) -> CommandHandler:
     def handler(ctx: SlashCommandContext) -> None:
         ctx.controller.status.push_notification(
-            f"/{ctx.name} not implemented in M1; tracked in {milestone} ({description})",
+            f"/{ctx.name} not implemented yet; tracked in {milestone} ({description})",
             level="info",
             ttl_seconds=6.0,
         )
@@ -140,15 +157,29 @@ def register_builtin_commands(
 ) -> None:
     """Register all 21 Pi builtin commands + ``/play`` (M1-only)."""
 
+    from .clone import handle_clone
+    from .export_import import handle_export, handle_import
+    from .fork import handle_fork
+    from .hotkeys import handle_hotkeys
     from .new import handle_new
     from .play import make_play_handler
     from .quit import handle_quit
-    from .hotkeys import handle_hotkeys
+    from .resume import handle_resume
+    from .session import handle_name, handle_session
+    from .tree import handle_tree
 
     live_handlers: dict[str, CommandHandler] = {
+        "clone": handle_clone,
+        "export": handle_export,
+        "fork": handle_fork,
+        "import": handle_import,
+        "name": handle_name,
         "new": handle_new,
-        "quit": handle_quit,
         "hotkeys": handle_hotkeys,
+        "quit": handle_quit,
+        "resume": handle_resume,
+        "session": handle_session,
+        "tree": handle_tree,
     }
 
     for name, description, stub_milestone in PI_BUILTIN_COMMANDS:
@@ -181,6 +212,7 @@ def register_builtin_commands(
 
 __all__ = [
     "CommandHandler",
+    "LIVE_BUILTIN_COMMANDS",
     "M1_LIVE_COMMANDS",
     "PI_BUILTIN_COMMANDS",
     "RegisteredCommand",

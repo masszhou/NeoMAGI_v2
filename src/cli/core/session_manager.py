@@ -1,0 +1,460 @@
+"""Product-layer durable session lifecycle.
+
+This module owns session semantics above storage: new/resume/fork/clone/tree,
+context hydration, labels, names, and JSONL projection. It deliberately does
+not contain SQL; repository implementations live in `src/storage`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
+
+from ai_provider.types import TextContent
+from cli.core.session_types import (
+    BranchSummaryMessage,
+    CompactionSummaryMessage,
+    CustomMessage,
+    LabelEntry,
+    MessageEntry,
+    SessionContext,
+    SessionEntry,
+    SessionInfoEntry,
+    SessionTreeNode,
+)
+from storage.session_jsonl import export_session_jsonl, import_session_jsonl
+from storage.session_repository import (
+    EntryRecord,
+    SessionRecord,
+    SessionRepository,
+    allocate_entry_payload,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BranchSessionResult:
+    session: SessionRecord
+    editor_prefill: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SessionStats:
+    session_id: str
+    cwd: str
+    name: str | None
+    entry_count: int
+    message_count: int
+    current_leaf: str | None
+    provider_cache_affinity_id: str
+    parent_session_id: str | None = None
+
+
+class SessionManagerError(RuntimeError):
+    """Raised when a product-level session operation is invalid."""
+
+
+class SessionManager:
+    def __init__(self, repository: SessionRepository) -> None:
+        self.repository = repository
+
+    def start_or_create(
+        self,
+        cwd: str | Path,
+        requested_session_id: str | None = None,
+    ) -> SessionRecord:
+        if requested_session_id is not None:
+            return self.resume_session(requested_session_id)
+        recent = self.list_recent_sessions(cwd=str(Path(cwd).resolve()), limit=1)
+        if recent:
+            return recent[0]
+        return self.new_session(cwd)
+
+    def new_session(
+        self,
+        cwd: str | Path,
+        *,
+        parent_session_id: str | None = None,
+        source: dict[str, Any] | None = None,
+    ) -> SessionRecord:
+        return self.repository.create_session(
+            cwd=str(Path(cwd).resolve()),
+            parent_session_id=parent_session_id,
+            source=source,
+        )
+
+    def resume_session(self, session_id: str) -> SessionRecord:
+        session = self.repository.get_session(session_id)
+        if session is None:
+            raise SessionManagerError(f"unknown session: {session_id}")
+        return session
+
+    def fork_session(self, session_id: str, from_entry_id: str) -> BranchSessionResult:
+        return self._branch_into_new_session(
+            session_id=session_id,
+            entry_id=from_entry_id,
+            position="before",
+        )
+
+    def clone_session(
+        self,
+        session_id: str,
+        leaf_entry_id: str | None = None,
+    ) -> BranchSessionResult:
+        session = self.resume_session(session_id)
+        leaf_entry_id = leaf_entry_id or session.current_leaf_entry_id
+        return self._branch_into_new_session(
+            session_id=session_id,
+            entry_id=leaf_entry_id,
+            position="at",
+        )
+
+    def _branch_into_new_session(
+        self,
+        *,
+        session_id: str,
+        entry_id: str | None,
+        position: Literal["before", "at"],
+    ) -> BranchSessionResult:
+        source = self.resume_session(session_id)
+        path = self._entry_path(session_id, entry_id)
+        editor_prefill = ""
+        copy_path = path
+        if position == "before":
+            if not path:
+                raise SessionManagerError("/fork requires a historical user message")
+            selected = path[-1].payload
+            if not isinstance(selected, MessageEntry) or selected.message.role != "user":
+                raise SessionManagerError("/fork entry must be a user message")
+            editor_prefill = _extract_user_text(selected)
+            copy_path = path[:-1]
+        child = self.new_session(
+            source.cwd,
+            parent_session_id=source.id,
+            source={"branchedFrom": source.id, "branchPosition": position},
+        )
+        for entry in copy_path:
+            payload = entry.payload.model_dump(by_alias=True, exclude_none=True)
+            self.repository.append_entry(child.id, payload)
+        return BranchSessionResult(
+            session=self.repository.get_session(child.id) or child,
+            editor_prefill=editor_prefill,
+        )
+
+    def rename_session(self, session_id: str, name: str | None) -> SessionRecord:
+        session = self.resume_session(session_id)
+        payload = self._entry_payload(
+            session.id,
+            "session_info",
+            {"name": name},
+        )
+        SessionInfoEntry.model_validate(payload)
+        self.repository.append_entry(session.id, payload)
+        return self.repository.update_session_name(session.id, name)
+
+    def label_entry(
+        self,
+        session_id: str,
+        target_entry_id: str,
+        label: str | None,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        target = self.repository.get_entry(session.id, target_entry_id)
+        if target is None:
+            raise SessionManagerError(f"unknown entry: {target_entry_id}")
+        payload = self._entry_payload(
+            session.id,
+            "label",
+            {"targetId": target.pi_export_id, "label": label},
+        )
+        LabelEntry.model_validate(payload)
+        return self.repository.append_entry(session.id, payload)
+
+    def delete_session(self, session_id: str) -> SessionRecord:
+        return self.repository.soft_delete_session(session_id)
+
+    def list_recent_sessions(
+        self,
+        *,
+        cwd: str | None = None,
+        limit: int = 20,
+    ) -> list[SessionRecord]:
+        return self.repository.list_recent_sessions(cwd=cwd, limit=limit)
+
+    def append_message(self, session_id: str, message: Any) -> EntryRecord:
+        raw_message = _dump(message)
+        session = self.resume_session(session_id)
+        payload = self._entry_payload(
+            session.id,
+            "message",
+            {"message": raw_message},
+        )
+        return self.repository.append_entry(session.id, payload)
+
+    def append_entry(
+        self,
+        session_id: str,
+        payload: dict[str, Any] | SessionEntry,
+    ) -> EntryRecord:
+        self.resume_session(session_id)
+        return self.repository.append_entry(session_id, payload)
+
+    def record_tool_execution_start(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        args: Any,
+        runtime_session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        self.repository.record_tool_execution_start(
+            session_id=session_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            args=args,
+            runtime_session_id=runtime_session_id,
+            run_id=run_id,
+        )
+
+    def record_tool_execution_end(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        result_content: Any,
+        result_details: Any,
+        is_error: bool,
+    ) -> None:
+        self.repository.record_tool_execution_end(
+            session_id=session_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            result_content=result_content,
+            result_details=result_details,
+            is_error=is_error,
+        )
+
+    def build_session_context(
+        self,
+        session_id: str,
+        leaf_entry_id: str | None = None,
+    ) -> SessionContext:
+        session = self.resume_session(session_id)
+        path = self._entry_path(session.id, leaf_entry_id or session.current_leaf_entry_id)
+        messages: list[tuple[str, Any]] = []
+        provider: str | None = None
+        model_id: str | None = None
+        thinking_level: str | None = None
+        path_index = {entry.pi_export_id: index for index, entry in enumerate(path)}
+        for entry in path:
+            payload = entry.payload
+            if payload.type == "message":
+                if getattr(payload.message, "exclude_from_context", False):
+                    continue
+                messages.append((payload.id, payload.message))
+            elif payload.type == "model_change":
+                provider = payload.provider
+                model_id = payload.model_id
+            elif payload.type == "thinking_level_change":
+                thinking_level = payload.thinking_level
+            elif payload.type == "compaction":
+                cutoff = path_index.get(payload.first_kept_entry_id)
+                if cutoff is not None:
+                    keep_ids = {
+                        candidate.pi_export_id
+                        for candidate in path[cutoff:]
+                    }
+                    messages = [
+                        (entry_id, message)
+                        for entry_id, message in messages
+                        if entry_id in keep_ids
+                    ]
+                messages.append(
+                    (
+                        payload.id,
+                        CompactionSummaryMessage(
+                            summary=payload.summary,
+                            fromId=payload.first_kept_entry_id,
+                            tokensBefore=payload.tokens_before,
+                            timestamp=_entry_ms(payload.timestamp),
+                        ),
+                    )
+                )
+            elif payload.type == "branch_summary":
+                messages.append(
+                    (
+                        payload.id,
+                        BranchSummaryMessage(
+                            summary=payload.summary,
+                            fromId=payload.from_id,
+                            timestamp=_entry_ms(payload.timestamp),
+                        ),
+                    )
+                )
+            elif payload.type == "custom_message":
+                messages.append(
+                    (
+                        payload.id,
+                        CustomMessage(
+                            customType=payload.custom_type,
+                            content=payload.content,
+                            display=payload.display,
+                            details=payload.details,
+                            timestamp=_entry_ms(payload.timestamp),
+                        ),
+                    )
+                )
+        leaf = path[-1].pi_export_id if path else None
+        return SessionContext(
+            header=session.header(),
+            messages=[message for _entry_id, message in messages],
+            provider=provider,
+            modelId=model_id,
+            thinkingLevel=thinking_level,
+            leafEntryId=leaf,
+        )
+
+    def session_stats(self, session_id: str) -> SessionStats:
+        session = self.resume_session(session_id)
+        entries = self.repository.list_entries(session.id)
+        current_leaf = None
+        if session.current_leaf_entry_id:
+            leaf = self.repository.get_entry(session.id, session.current_leaf_entry_id)
+            current_leaf = leaf.pi_export_id if leaf is not None else None
+        return SessionStats(
+            session_id=session.id,
+            cwd=session.cwd,
+            name=session.display_name,
+            entry_count=len(entries),
+            message_count=sum(1 for entry in entries if entry.entry_type == "message"),
+            current_leaf=current_leaf,
+            provider_cache_affinity_id=session.provider_cache_affinity_id,
+            parent_session_id=session.parent_session_id,
+        )
+
+    def session_tree(self, session_id: str) -> list[SessionTreeNode]:
+        self.resume_session(session_id)
+        entries = self.repository.list_entries(session_id)
+        children: dict[str | None, list[EntryRecord]] = {}
+        for entry in entries:
+            children.setdefault(entry.payload.parent_id, []).append(entry)
+
+        def build(entry: EntryRecord) -> SessionTreeNode:
+            return SessionTreeNode(
+                entry=entry.payload,
+                children=[build(child) for child in children.get(entry.pi_export_id, [])],
+            )
+
+        return [build(entry) for entry in children.get(None, [])]
+
+    def select_leaf(self, session_id: str, leaf_entry_id: str) -> SessionRecord:
+        session = self.resume_session(session_id)
+        entry = self.repository.get_entry(session.id, leaf_entry_id)
+        if entry is None:
+            raise SessionManagerError(f"unknown entry: {leaf_entry_id}")
+        return self.repository.update_session_leaf(session.id, entry.id)
+
+    def export_jsonl(self, session_id: str, path: str | Path) -> Path:
+        self.resume_session(session_id)
+        return export_session_jsonl(self.repository, session_id, path)
+
+    def import_jsonl(self, path: str | Path) -> SessionRecord:
+        return import_session_jsonl(self.repository, path)
+
+    def _entry_payload(
+        self,
+        session_id: str,
+        entry_type: str,
+        payload: dict[str, Any],
+        *,
+        force_parent: bool = True,
+    ) -> dict[str, Any]:
+        entries = self.repository.list_entries(session_id)
+        parent_id = None
+        if force_parent:
+            session = self.resume_session(session_id)
+            if session.current_leaf_entry_id is not None:
+                parent = self.repository.get_entry(session_id, session.current_leaf_entry_id)
+                parent_id = parent.pi_export_id if parent is not None else None
+        return allocate_entry_payload(
+            entry_type=entry_type,
+            parent_id=parent_id,
+            payload=payload,
+            existing_ids=(entry.pi_export_id for entry in entries),
+        )
+
+    def _entry_path(
+        self,
+        session_id: str,
+        leaf_entry_id: str | None,
+    ) -> list[EntryRecord]:
+        entries = self.repository.list_entries(session_id)
+        if leaf_entry_id is None:
+            return []
+        by_pi = {entry.pi_export_id: entry for entry in entries}
+        by_db = {entry.id: entry for entry in entries}
+        leaf = by_pi.get(leaf_entry_id) or by_db.get(leaf_entry_id)
+        if leaf is None:
+            raise SessionManagerError(f"unknown entry: {leaf_entry_id}")
+        path: list[EntryRecord] = []
+        cursor: EntryRecord | None = leaf
+        seen: set[str] = set()
+        while cursor is not None:
+            if cursor.pi_export_id in seen:
+                raise SessionManagerError("session entry tree contains a cycle")
+            seen.add(cursor.pi_export_id)
+            path.append(cursor)
+            parent_id = cursor.payload.parent_id
+            cursor = by_pi.get(parent_id) if parent_id is not None else None
+        path.reverse()
+        return path
+
+
+def _extract_user_text(entry: MessageEntry) -> str:
+    content = entry.message.content
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content:
+        block_type = getattr(block, "type", None)
+        text = getattr(block, "text", None)
+        if block_type == "text" and isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _entry_ms(value: str) -> int:
+    try:
+        parsed = value.replace("Z", "+00:00")
+        return int(datetime_from_iso(parsed).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def datetime_from_iso(value: str):
+    from datetime import datetime
+
+    return datetime.fromisoformat(value)
+
+
+def _dump(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(value, list):
+        return [_dump(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _dump(item) for key, item in value.items()}
+    if isinstance(value, TextContent):
+        return value.model_dump(by_alias=True, exclude_none=True)
+    return value
+
+
+__all__ = [
+    "BranchSessionResult",
+    "SessionManager",
+    "SessionManagerError",
+    "SessionStats",
+]

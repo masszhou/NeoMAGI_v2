@@ -246,6 +246,10 @@ class InteractiveController:
     def tool_registry(self) -> ToolRendererRegistry:
         return self._tool_registry
 
+    @property
+    def runtime(self) -> InteractiveAgentRuntime | None:
+        return self._runtime
+
     def set_submit_handler(self, handler: Callable[[EditorSubmission], None]) -> None:
         self._submit_handler = handler
 
@@ -288,6 +292,35 @@ class InteractiveController:
             self._editor.set_footer("new session (session manager arrives in M6)")
         self._app.request_render()
 
+    def refresh_after_session_switch(
+        self,
+        boundary: str,
+        *,
+        editor_prefill: str = "",
+    ) -> None:
+        self._flush_command_transcript()
+        self._messages.clear()
+        self._router.clear_active()
+        self._status.set_queue([], [])
+        if self._app.render_mode == "command":
+            self._app.commit_lines(["", f"--- [{boundary}] ---", ""])
+        else:
+            self._status.push_notification(boundary, level="info", ttl_seconds=4.0)
+        self._editor.buffer.text = editor_prefill
+        self._editor.buffer.cursor = len(editor_prefill)
+        self._editor._last_seen_text = ""  # noqa: SLF001 - controller owns editor callbacks
+        self._editor._notify_buffer_change()  # noqa: SLF001
+        self._editor.set_state(EditorState.IDLE)
+        if self._runtime is not None:
+            self._editor.set_footer(self._runtime.footer_summary)
+        self._app.request_render()
+
+    def push_session_message(self, message: str, *, level: str = "info") -> None:
+        if self._app.render_mode == "command":
+            self._app.commit_lines([message])
+        self._status.push_notification(message, level=level, ttl_seconds=8.0)
+        self._app.request_render()
+
     # ------------------------------------------------------------------ #
     # Internal hooks                                                      #
     # ------------------------------------------------------------------ #
@@ -312,12 +345,25 @@ class InteractiveController:
                 return True
             if event.key == "Esc Esc":
                 # Default doubleEscapeAction = "tree" (behavior matrix § F.1).
-                self._status.push_notification(
-                    "tree navigation not implemented in M1; tracked in M6",
-                    level="warn",
-                )
+                self._dispatch_tree_shortcut()
                 return True
         return False
+
+    def _dispatch_tree_shortcut(self) -> None:
+        from cli.slash_commands.tree import _tree_lines
+
+        runtime = self._runtime
+        if runtime is None:
+            self._status.push_notification(
+                "tree navigation requires an interactive runtime",
+                level="warn",
+            )
+            return
+        tree = runtime.session_tree()
+        if not tree:
+            self._status.push_notification("current session has no entries", level="info")
+            return
+        self.push_session_message("\n".join(_tree_lines(tree)[:12]))
 
     def _has_active_work(self) -> bool:
         return (

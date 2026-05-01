@@ -35,6 +35,7 @@ from cli.core.session_types import (
     MessageStartEvent,
     QueueUpdateEvent,
 )
+from cli.core.session_manager import BranchSessionResult, SessionManager
 from cli.extensions.event_types import BashResult, UserBashEvent, UserBashEventResult
 from cli.tools import (
     RuntimeArtifactStore,
@@ -45,8 +46,11 @@ from cli.tools import (
 from cli.tools.bash import create_bash_tool_definition
 from cli.tools.wrapper import ToolRuntime, wrap_tool_definition
 from policy.audit import AuditSink, InMemoryAuditSink
+from storage.ids import short_session_id
+from storage.session_repository import SessionRecord
 
 from .runtime_events import agent_event_to_session_event
+from .session_writer import DurableSessionEventWriter
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,8 @@ class RuntimeState:
     model_ref: str
     runtime_session_id: str
     provider_cache_affinity_id: str | None
+    durable_session_id: str | None = None
+    current_leaf_entry_id: str | None = None
 
 
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful coding assistant."
@@ -94,6 +100,7 @@ class InteractiveAgentRuntime:
         cwd: str | Path | None = None,
         tool_profile: str = "coding",
         audit_sink: AuditSink | None = None,
+        session_manager: SessionManager | None = None,
         user_bash_hook: Callable[
             [UserBashEvent], UserBashEventResult | Awaitable[UserBashEventResult] | Any
         ]
@@ -110,6 +117,9 @@ class InteractiveAgentRuntime:
         self._cwd = Path(cwd or Path.cwd()).resolve()
         self._tool_profile = tool_profile
         self._audit_sink = audit_sink or InMemoryAuditSink()
+        self._session_manager = session_manager
+        self._durable_session = self._start_durable_session()
+        self._session_context_messages = self._load_session_context_messages()
         self._user_bash_hook = user_bash_hook
 
         self._events: queue.Queue[AgentSessionEvent] = queue.Queue()
@@ -123,9 +133,8 @@ class InteractiveAgentRuntime:
 
         self._runtime_session_id = self._mint_runtime_session_id()
         self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
-        self._provider_cache_affinity_id = derive_provider_cache_affinity_id(
-            self._runtime_session_id
-        )
+        self._provider_cache_affinity_id = self._resolve_provider_cache_affinity_id()
+        self._session_writer = self._build_session_writer()
         self._agent = self._build_agent(self._generation)
 
         self._loop = asyncio.new_event_loop()
@@ -146,12 +155,28 @@ class InteractiveAgentRuntime:
                 model_ref=self._model_ref,
                 runtime_session_id=self._runtime_session_id,
                 provider_cache_affinity_id=self._provider_cache_affinity_id,
+                durable_session_id=(
+                    self._durable_session.id if self._durable_session is not None else None
+                ),
+                current_leaf_entry_id=(
+                    self._durable_session.current_leaf_entry_id
+                    if self._durable_session is not None
+                    else None
+                ),
             )
 
     @property
     def footer_summary(self) -> str:
         cache = self._cache_retention or "default"
-        return f"runtime: {self._model_ref}  thinking={self._thinking_level}  cache={cache}"
+        durable = (
+            f"  session={short_session_id(self._durable_session.id)}"
+            if self._durable_session is not None
+            else ""
+        )
+        return (
+            f"runtime: {self._model_ref}  thinking={self._thinking_level}  "
+            f"cache={cache}{durable}"
+        )
 
     def set_event_wake(self, wake: Callable[[], None] | None) -> None:
         self._wake = wake
@@ -225,15 +250,86 @@ class InteractiveAgentRuntime:
             self._artifact_store.cleanup()
             self._runtime_session_id = self._mint_runtime_session_id()
             self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
-            self._provider_cache_affinity_id = derive_provider_cache_affinity_id(
-                self._runtime_session_id
-            )
+            if self._session_manager is not None:
+                self._durable_session = self._session_manager.new_session(self._cwd)
+                self._session_context_messages = []
+            self._provider_cache_affinity_id = self._resolve_provider_cache_affinity_id()
             self._queued_steering.clear()
             self._queued_follow_up.clear()
             self._clear_event_queue_locked()
             self._agent = self._build_agent(self._generation)
             self._active_future = None
             self._enqueue_queue_update_locked()
+
+    def session_stats(self):
+        if self._session_manager is None or self._durable_session is None:
+            return None
+        return self._session_manager.session_stats(self._durable_session.id)
+
+    def list_recent_sessions(self, *, limit: int = 10) -> list[SessionRecord]:
+        if self._session_manager is None:
+            return []
+        return self._session_manager.list_recent_sessions(cwd=str(self._cwd), limit=limit)
+
+    def rename_session(self, name: str | None) -> SessionRecord:
+        self._ensure_idle_for_session_switch()
+        if self._session_manager is None or self._durable_session is None:
+            raise RuntimeError("durable session manager is not available")
+        self._durable_session = self._session_manager.rename_session(
+            self._durable_session.id,
+            name,
+        )
+        return self._durable_session
+
+    def resume_session(self, session_id: str) -> SessionRecord:
+        self._ensure_idle_for_session_switch()
+        if self._session_manager is None:
+            raise RuntimeError("durable session manager is not available")
+        session = self._session_manager.resume_session(session_id)
+        self._activate_durable_session(session)
+        return session
+
+    def fork_session(self, entry_id: str) -> BranchSessionResult:
+        self._ensure_idle_for_session_switch()
+        if self._session_manager is None or self._durable_session is None:
+            raise RuntimeError("durable session manager is not available")
+        result = self._session_manager.fork_session(self._durable_session.id, entry_id)
+        self._activate_durable_session(result.session)
+        return result
+
+    def clone_session(self) -> BranchSessionResult:
+        self._ensure_idle_for_session_switch()
+        if self._session_manager is None or self._durable_session is None:
+            raise RuntimeError("durable session manager is not available")
+        result = self._session_manager.clone_session(self._durable_session.id)
+        self._activate_durable_session(result.session)
+        return result
+
+    def select_session_leaf(self, entry_id: str) -> SessionRecord:
+        self._ensure_idle_for_session_switch()
+        if self._session_manager is None or self._durable_session is None:
+            raise RuntimeError("durable session manager is not available")
+        session = self._session_manager.select_leaf(self._durable_session.id, entry_id)
+        self._activate_durable_session(session)
+        return session
+
+    def session_tree(self):
+        if self._session_manager is None or self._durable_session is None:
+            return []
+        return self._session_manager.session_tree(self._durable_session.id)
+
+    def export_jsonl(self, path: str | Path) -> Path:
+        if self._session_manager is None or self._durable_session is None:
+            raise RuntimeError("durable session manager is not available")
+        return self._session_manager.export_jsonl(self._durable_session.id, path)
+
+    def import_jsonl(self, path: str | Path) -> SessionRecord:
+        self._ensure_idle_for_session_switch()
+        if self._session_manager is None:
+            raise RuntimeError("durable session manager is not available")
+        session = self._session_manager.import_jsonl(path)
+        self._activate_durable_session(session)
+        return session
 
     def drain_events(self) -> list[AgentSessionEvent]:
         events: list[AgentSessionEvent] = []
@@ -331,6 +427,7 @@ class InteractiveAgentRuntime:
                 thinking_level=self._thinking_level,
                 cache_retention=self._cache_retention,
                 session_id=self._provider_cache_affinity_id,
+                messages=list(self._session_context_messages),
                 get_api_key=self._get_api_key,
                 tools=self._build_tools(run_id_provider=active_run_id),
                 convert_to_llm=convert_coding_messages_to_llm,
@@ -341,8 +438,7 @@ class InteractiveAgentRuntime:
         def listener(event: Any, _signal: asyncio.Event) -> None:
             if generation != self._generation:
                 return
-            self._events.put(agent_event_to_session_event(event))
-            self._notify_wake()
+            self._emit_session_event(agent_event_to_session_event(event))
 
         agent.subscribe(listener)
         return agent
@@ -390,8 +486,8 @@ class InteractiveAgentRuntime:
                 excludeFromContext=exclude_from_context,
             )
             self._agent.state.messages.append(message)
-            self._events.put(MessageStartEvent(message=message))
-            self._events.put(MessageEndEvent(message=message))
+            self._emit_session_event(MessageStartEvent(message=message))
+            self._emit_session_event(MessageEndEvent(message=message))
         except Exception as exc:
             self._enqueue_error(str(exc), generation)
         finally:
@@ -467,17 +563,15 @@ class InteractiveAgentRuntime:
             MessageEndEvent(message=failure),
             AgentEndEvent(messages=[failure]),
         ):
-            self._events.put(event)
-        self._notify_wake()
+            self._emit_session_event(event)
 
     def _enqueue_queue_update_locked(self) -> None:
-        self._events.put(
+        self._emit_session_event(
             QueueUpdateEvent(
                 steering=list(self._queued_steering),
                 followUp=list(self._queued_follow_up),
             )
         )
-        self._notify_wake()
 
     def _clear_event_queue_locked(self) -> None:
         while True:
@@ -497,6 +591,74 @@ class InteractiveAgentRuntime:
         wake = self._wake
         if wake is not None:
             wake()
+
+    def _emit_session_event(self, event: AgentSessionEvent) -> None:
+        if self._session_writer is not None:
+            self._session_writer.record(event)
+            if self._durable_session is not None and self._session_manager is not None:
+                refreshed = self._session_manager.repository.get_session(
+                    self._durable_session.id
+                )
+                if refreshed is not None:
+                    self._durable_session = refreshed
+        self._events.put(event)
+        self._notify_wake()
+
+    def _start_durable_session(self) -> SessionRecord | None:
+        if self._session_manager is None:
+            return None
+        return self._session_manager.start_or_create(self._cwd)
+
+    def _build_session_writer(self) -> DurableSessionEventWriter | None:
+        if self._session_manager is None:
+            return None
+        return DurableSessionEventWriter(
+            manager=self._session_manager,
+            session_id_provider=self._require_durable_session_id,
+            runtime_session_id_provider=lambda: self._runtime_session_id,
+            run_id_provider=self._active_run_id,
+        )
+
+    def _load_session_context_messages(self) -> list[Any]:
+        if self._session_manager is None or self._durable_session is None:
+            return []
+        context = self._session_manager.build_session_context(self._durable_session.id)
+        return list(context.messages)
+
+    def _resolve_provider_cache_affinity_id(self) -> str | None:
+        if self._durable_session is not None:
+            return self._durable_session.provider_cache_affinity_id
+        return derive_provider_cache_affinity_id(self._runtime_session_id)
+
+    def _require_durable_session_id(self) -> str:
+        if self._durable_session is None:
+            raise RuntimeError("durable session manager is not available")
+        return self._durable_session.id
+
+    def _active_run_id(self) -> str | None:
+        agent = getattr(self, "_agent", None)
+        return agent.active_run_id if agent is not None else None
+
+    def _ensure_idle_for_session_switch(self) -> None:
+        with self._lock:
+            if self._is_running_locked():
+                raise RuntimeError("session switch is not available while streaming")
+
+    def _activate_durable_session(self, session: SessionRecord) -> None:
+        with self._lock:
+            self._generation += 1
+            self._artifact_store.cleanup()
+            self._runtime_session_id = self._mint_runtime_session_id()
+            self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
+            self._durable_session = session
+            self._session_context_messages = self._load_session_context_messages()
+            self._provider_cache_affinity_id = self._resolve_provider_cache_affinity_id()
+            self._queued_steering.clear()
+            self._queued_follow_up.clear()
+            self._clear_event_queue_locked()
+            self._agent = self._build_agent(self._generation)
+            self._active_future = None
+            self._enqueue_queue_update_locked()
 
     @staticmethod
     def _mint_runtime_session_id() -> str:
