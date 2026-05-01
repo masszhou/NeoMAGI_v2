@@ -112,7 +112,7 @@ def test_unknown_event_type_raises_runtime_error() -> None:
 # -------------------------------------------------------------------- #
 
 REPO = Path(__file__).resolve().parents[3]
-FORBIDDEN_PROTOCOL_MODULES = ("agent_core", "cli.core", "ai_provider")
+FORBIDDEN_PROTOCOL_MODULES = ("agent_core", "cli.core", "cli.tools", "policy", "ai_provider")
 
 
 def _walk_py(root: Path):

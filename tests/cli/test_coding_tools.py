@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
 from ai_provider.tools import ToolArgumentValidationError, validate_tool_arguments
 from ai_provider.types import TextContent
 from cli.core.session_types import BashExecutionMessage
@@ -15,6 +16,7 @@ from cli.tools import (
     create_read_only_tools,
 )
 from cli.tools.context import convert_coding_messages_to_llm
+from cli.tools.edit import prepare_edit_arguments
 from policy.audit import InMemoryAuditSink
 from policy.types import PolicyDecision
 
@@ -50,6 +52,19 @@ def test_tool_schemas_validate_canonical_inputs(tmp_path: Path) -> None:
         pass
     else:  # pragma: no cover - assertion path
         raise AssertionError("read schema must reject wrong argument shape")
+
+
+def test_prepare_edit_arguments_is_idempotent() -> None:
+    raw = {
+        "path": "a.txt",
+        "oldText": "alpha",
+        "newText": "beta",
+        "edits": '[{"oldText": "gamma", "newText": "delta"}]',
+    }
+
+    prepared = prepare_edit_arguments(raw)
+
+    assert prepare_edit_arguments(prepared) == prepared
 
 
 def test_read_policy_audit_and_details(tmp_path: Path) -> None:
@@ -88,6 +103,31 @@ def test_read_only_tools_search_hidden_files(tmp_path: Path) -> None:
         assert ".hidden.txt:1: needle" in grep.content[0]["text"]
         assert ".hidden.txt" in find.content[0]["text"]
         assert ".hidden.txt" in ls.content[0]["text"]
+
+    asyncio.run(run())
+
+
+def test_read_only_tools_skip_symlink_files_resolving_outside_cwd(tmp_path: Path) -> None:
+    async def run() -> None:
+        cwd = tmp_path / "repo"
+        outside = tmp_path / "outside"
+        cwd.mkdir()
+        outside.mkdir()
+        (cwd / "inside.txt").write_text("needle\n", encoding="utf-8")
+        (outside / "secret.txt").write_text("leak\n", encoding="utf-8")
+        try:
+            (cwd / "secret_link.txt").symlink_to(outside / "secret.txt")
+        except OSError as exc:
+            pytest.skip(f"symlinks are not available: {exc}")
+
+        tools = _tool_map(create_read_only_tools(cwd))
+
+        grep = await tools["grep"].execute("grep", {"pattern": "leak", "literal": True}, None, None)
+        find = await tools["find"].execute("find", {"pattern": "*.txt"}, None, None)
+
+        assert grep.content[0]["text"] == "No matches found"
+        assert "inside.txt" in find.content[0]["text"]
+        assert "secret_link.txt" not in find.content[0]["text"]
 
     asyncio.run(run())
 
@@ -132,6 +172,30 @@ def test_bash_success_block_and_audit(tmp_path: Path) -> None:
         assert blocked.is_error is True
         assert "sudo is blocked" in blocked.content[0]["text"]
         assert [record.policy_decision.effect for record in audit.records] == ["allow", "block"]
+
+    asyncio.run(run())
+
+
+def test_wrapped_tools_validate_schema_before_policy(tmp_path: Path) -> None:
+    async def run() -> None:
+        policy_called = False
+        audit = InMemoryAuditSink()
+
+        def policy(_request: Any) -> PolicyDecision:
+            nonlocal policy_called
+            policy_called = True
+            return PolicyDecision.allow()
+
+        bash = _tool_map(create_coding_tools(tmp_path, audit_sink=audit, policy_decider=policy))["bash"]
+        result = await bash.execute("bad-schema", {"command": 123}, None, None)
+
+        assert result.is_error is True
+        assert "bash arguments invalid" in result.content[0]["text"]
+        assert result.details["policyDecision"]["effect"] == "block"
+        assert result.details["auditTags"] == ["schema:block"]
+        assert policy_called is False
+        assert len(audit.records) == 1
+        assert audit.records[0].policy_decision.effect == "block"
 
     asyncio.run(run())
 

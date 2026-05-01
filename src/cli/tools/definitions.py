@@ -35,6 +35,7 @@ class ToolDefinition:
     description: str
     parameters: dict[str, Any]
     execute: ToolExecute
+    # May be called by both agent_core and the governed wrapper, so repairs must be idempotent.
     prepare_arguments: Callable[[Any], Any] | None = None
     execution_mode: ToolExecutionMode | None = None
 

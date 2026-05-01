@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from ai_provider.tools import validate_tool_arguments
+from ai_provider.types import Tool
 from agent_core.runtime_types import AbortSignal, RuntimeAgentTool, ToolUpdateCallback, maybe_await
 from agent_core.types import AgentToolResult
 from policy.audit import AuditRecord, AuditSink, InMemoryAuditSink
@@ -45,6 +47,8 @@ def wrap_tool_definition(definition: ToolDefinition, runtime: ToolRuntime) -> Ru
         signal: AbortSignal | None,
         on_update: ToolUpdateCallback | None,
     ) -> AgentToolResult:
+        if definition.prepare_arguments is not None:
+            args = definition.prepare_arguments(args)
         if not isinstance(args, dict):
             return _error_result("tool arguments must be an object", is_error=True)
         return await _execute_governed(definition, runtime, tool_call_id, args, signal, on_update)
@@ -74,6 +78,12 @@ async def _execute_governed(
     result: AgentToolResult | None = None
     exception: Exception | None = None
     try:
+        validation_error = _validate_args(definition, args)
+        if validation_error is not None:
+            decision = PolicyDecision.block("schema validation failed", audit_tags=["schema:block"])
+            result = _error_result(validation_error, is_error=True)
+            result = _with_common_details(result, decision, started, start_monotonic)
+            return result
         request = _policy_request(definition, runtime, tool_call_id, args)
         decision = await _resolve_policy_decision(runtime, request)
         result = await _run_or_block_tool(
@@ -155,6 +165,22 @@ async def _run_or_block_tool(
     if not isinstance(result, AgentToolResult):
         return AgentToolResult.model_validate(result)
     return result
+
+
+def _validate_args(definition: ToolDefinition, args: dict[str, Any]) -> str | None:
+    try:
+        validate_tool_arguments(_provider_tool(definition), args)
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def _provider_tool(definition: ToolDefinition) -> Tool:
+    return Tool(
+        name=definition.name,
+        description=definition.description,
+        parameters=definition.parameters,
+    )
 
 
 def default_policy_decider(request: PolicyRequest) -> PolicyDecision:

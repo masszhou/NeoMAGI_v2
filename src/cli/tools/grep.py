@@ -14,6 +14,7 @@ from agent_core.types import AgentToolResult
 
 from ._result import resolved_path_details, text_result
 from .definitions import ToolDefinition, ToolExecutionContext, object_schema
+from .path_safety import resolves_within
 from .truncate import DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH, format_size, truncate_head, truncate_line
 
 DEFAULT_MATCH_LIMIT = 100
@@ -164,7 +165,7 @@ def _iter_files(root: Path):
         yield root
         return
     for path in sorted(root.rglob("*")):
-        if path.is_file():
+        if path.is_file() and resolves_within(path, root):
             yield path
 
 

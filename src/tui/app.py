@@ -472,7 +472,7 @@ __all__ = ["TUIApp", "InputHook", "RenderMode"]
 
 # ---------------------------------------------------------------------- #
 # Static guard: this module must NOT import agent_core / cli.core /      #
-# ai_provider types. Enforced at test-time too (see                      #
+# cli.tools / policy / ai_provider types. Enforced at test-time too (see #
 # tests/cli/interactive/test_event_router.py).                            #
 # ---------------------------------------------------------------------- #
-_FORBIDDEN_IMPORTS = {"agent_core", "cli.core", "ai_provider"}
+_FORBIDDEN_IMPORTS = {"agent_core", "cli.core", "cli.tools", "policy", "ai_provider"}

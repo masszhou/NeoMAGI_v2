@@ -11,6 +11,7 @@ from agent_core.types import AgentToolResult
 
 from ._result import resolved_path_details, text_result
 from .definitions import ToolDefinition, ToolExecutionContext, object_schema
+from .path_safety import resolves_within
 from .truncate import DEFAULT_MAX_BYTES, format_size, truncate_head
 
 DEFAULT_RESULT_LIMIT = 1000
@@ -75,7 +76,7 @@ def _iter_paths(root: Path):
         yield root
         return
     for path in sorted(root.rglob("*")):
-        if path.is_file():
+        if path.is_file() and resolves_within(path, root):
             yield path
 
 
