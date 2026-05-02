@@ -57,7 +57,7 @@ PI_BUILTIN_COMMANDS: tuple[tuple[str, str, str | None], ...] = (
     ("login", "OAuth login", "M9"),
     ("logout", "OAuth logout", "M9"),
     ("new", "Start a new session", None),
-    ("compact", "Manual compaction", "M7"),
+    ("compact", "Manual compaction", None),
     ("resume", "Resume a previous session", None),
     ("reload", "Reload extensions / skills / prompts / themes", "M8"),
     ("quit", "Quit NeoMAGI", None),
@@ -70,6 +70,7 @@ registers them so autocomplete is complete (and the user gets a clear
 LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
     {
         "clone",
+        "compact",
         "export",
         "fork",
         "hotkeys",
@@ -158,6 +159,7 @@ def register_builtin_commands(
     """Register all 21 Pi builtin commands + ``/play`` (M1-only)."""
 
     from .clone import handle_clone
+    from .compact import handle_compact
     from .export_import import handle_export, handle_import
     from .fork import handle_fork
     from .hotkeys import handle_hotkeys
@@ -170,6 +172,7 @@ def register_builtin_commands(
 
     live_handlers: dict[str, CommandHandler] = {
         "clone": handle_clone,
+        "compact": handle_compact,
         "export": handle_export,
         "fork": handle_fork,
         "import": handle_import,

@@ -8,6 +8,8 @@ from typing import Any
 from cli.core.session_manager import SessionManager
 from cli.core.session_types import (
     AgentSessionEvent,
+    BranchSummaryMessage,
+    CompactionSummaryMessage,
     MessageEndEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -33,6 +35,8 @@ class DurableSessionEventWriter:
     def record(self, event: AgentSessionEvent) -> None:
         session_id = self._session_id_provider()
         if isinstance(event, MessageEndEvent):
+            if isinstance(event.message, BranchSummaryMessage | CompactionSummaryMessage):
+                return
             self._manager.append_message(session_id, event.message)
             return
         if isinstance(event, ToolExecutionStartEvent):

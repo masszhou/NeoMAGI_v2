@@ -35,6 +35,7 @@ from cli.core.session_types import (
     MessageStartEvent,
     QueueUpdateEvent,
 )
+from cli.core.compaction.service import SummaryGenerator
 from cli.core.session_manager import BranchSessionResult, SessionManager
 from cli.extensions.event_types import BashResult, UserBashEvent, UserBashEventResult
 from cli.tools import (
@@ -49,6 +50,7 @@ from policy.audit import AuditSink, InMemoryAuditSink
 from storage.ids import short_session_id
 from storage.session_repository import SessionRecord
 
+from .compaction_runtime import CompactionRuntimeMixin
 from .runtime_events import agent_event_to_session_event
 from .session_writer import DurableSessionEventWriter
 
@@ -83,7 +85,7 @@ def _empty_usage() -> Usage:
     )
 
 
-class InteractiveAgentRuntime:
+class InteractiveAgentRuntime(CompactionRuntimeMixin):
     """Owns one ``Agent`` plus a background asyncio loop.
 
     The runtime never mutates TUI components directly. Agent listeners adapt
@@ -101,6 +103,7 @@ class InteractiveAgentRuntime:
         tool_profile: str = "coding",
         audit_sink: AuditSink | None = None,
         session_manager: SessionManager | None = None,
+        summary_generator: SummaryGenerator | None = None,
         user_bash_hook: Callable[
             [UserBashEvent], UserBashEventResult | Awaitable[UserBashEventResult] | Any
         ]
@@ -120,6 +123,8 @@ class InteractiveAgentRuntime:
         self._session_manager = session_manager
         self._durable_session = self._start_durable_session()
         self._session_context_messages = self._load_session_context_messages()
+        self._summary_generator = summary_generator
+        self._last_tree_summary_notice: str | None = None
         self._user_bash_hook = user_bash_hook
 
         self._events: queue.Queue[AgentSessionEvent] = queue.Queue()
@@ -325,14 +330,6 @@ class InteractiveAgentRuntime:
         self._activate_durable_session(result.session)
         return result
 
-    def select_session_leaf(self, entry_id: str) -> SessionRecord:
-        self._ensure_idle_for_session_switch()
-        if self._session_manager is None or self._durable_session is None:
-            raise RuntimeError("durable session manager is not available")
-        session = self._session_manager.select_leaf(self._durable_session.id, entry_id)
-        self._activate_durable_session(session)
-        return session
-
     def session_tree(self):
         if self._session_manager is None or self._durable_session is None:
             return []
@@ -411,6 +408,7 @@ class InteractiveAgentRuntime:
 
     async def _run_prompt(self, text: str, generation: int) -> None:
         try:
+            await self._auto_compact_before_prompt(text, generation)
             await self._agent.prompt(text)
         except Exception as exc:
             self._enqueue_error(str(exc), generation)
@@ -451,6 +449,7 @@ class InteractiveAgentRuntime:
                 get_api_key=self._get_api_key,
                 tools=self._build_tools(run_id_provider=active_run_id),
                 convert_to_llm=convert_coding_messages_to_llm,
+                recover_assistant_response=self._recover_assistant_response,
             )
         )
         agent_ref.append(agent)

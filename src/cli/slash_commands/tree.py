@@ -23,6 +23,9 @@ def handle_tree(ctx: SlashCommandContext) -> None:
             f"selected leaf in session {short_session_id(session.id)}",
             summary=runtime.session_switch_summary("selected"),
         )
+        notice = runtime.consume_tree_summary_notice()
+        if notice:
+            ctx.controller.push_session_message(notice)
         return
     tree = runtime.session_tree()
     if not tree:

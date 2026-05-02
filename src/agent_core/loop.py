@@ -204,10 +204,48 @@ async def stream_assistant_response(
     emit: AgentEventSink,
 ) -> AssistantMessage:
     llm_context = await _build_llm_context(context, config, signal)
+    if config.recover_assistant_response is not None:
+        return await _stream_assistant_response_with_recovery(
+            context,
+            llm_context,
+            config,
+            signal,
+            emit,
+        )
     stream = await _open_assistant_stream(llm_context, config, signal)
     if config.on_stream_created is not None:
         config.on_stream_created(stream)
     return await _consume_assistant_stream(context, stream, emit)
+
+
+async def _stream_assistant_response_with_recovery(
+    context: AgentContext,
+    llm_context: Context,
+    config: AgentLoopConfig,
+    signal: asyncio.Event | None,
+    emit: AgentEventSink,
+) -> AssistantMessage:
+    attempt = 1
+    max_attempts = 2
+    while True:
+        stream = await _open_assistant_stream(llm_context, config, signal)
+        if config.on_stream_created is not None:
+            config.on_stream_created(stream)
+        events, message = await _consume_assistant_stream_buffered(stream)
+        retry_context = await maybe_await(
+            config.recover_assistant_response(
+                message,
+                llm_context,
+                attempt,
+                max_attempts,
+                signal,
+            )
+        )
+        if retry_context is None or attempt >= max_attempts:
+            await _replay_buffered_events(context, events, emit)
+            return message
+        llm_context = retry_context
+        attempt += 1
 
 
 async def _build_llm_context(
@@ -281,6 +319,60 @@ async def _consume_assistant_stream(
         if event.type in {"done", "error"}:
             return await _finish_stream_message(context, state, stream, emit)
     return await _finish_stream_message(context, state, stream, emit)
+
+
+async def _consume_assistant_stream_buffered(stream: Any) -> tuple[list[Any], AssistantMessage]:
+    state = _AssistantStreamState()
+    events: list[Any] = []
+    async for event in stream:
+        events.append(event)
+        if event.type == "start":
+            state.partial_message = event.partial
+            state.added_partial = True
+            continue
+        if _is_update_event(event):
+            partial_message = getattr(event, "partial", None)
+            if partial_message is not None:
+                state.partial_message = partial_message
+            continue
+        if event.type in {"done", "error"}:
+            return events, await stream.result()
+    return events, await stream.result()
+
+
+async def _replay_buffered_events(
+    context: AgentContext,
+    events: list[Any],
+    emit: AgentEventSink,
+) -> None:
+    state = _AssistantStreamState()
+    for event in events:
+        if event.type == "start":
+            await _handle_stream_start(context, state, event.partial, emit)
+            continue
+        if _is_update_event(event):
+            await _handle_stream_update(context, state, event, emit)
+            continue
+        if event.type == "done":
+            await _finish_buffered_message(context, state, event.message, emit)
+            continue
+        if event.type == "error":
+            await _finish_buffered_message(context, state, event.error, emit)
+            continue
+
+
+async def _finish_buffered_message(
+    context: AgentContext,
+    state: _AssistantStreamState,
+    final_message: AssistantMessage,
+    emit: AgentEventSink,
+) -> None:
+    if state.added_partial:
+        context.messages[-1] = final_message
+    else:
+        context.messages.append(final_message)
+        await _emit(emit, MessageStartEvent(message=final_message.model_copy(deep=True)))
+    await _emit(emit, MessageEndEvent(message=final_message))
 
 
 async def _handle_stream_start(

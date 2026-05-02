@@ -7,7 +7,11 @@ from typing import Any
 
 from agent_core.loop import default_convert_to_llm
 from ai_provider.types import Message, TextContent, ToolResultMessage, UserMessage
-from cli.core.session_types import BashExecutionMessage
+from cli.core.session_types import (
+    BashExecutionMessage,
+    BranchSummaryMessage,
+    CompactionSummaryMessage,
+)
 
 
 def convert_coding_messages_to_llm(messages: list[Any]) -> list[Message]:
@@ -20,6 +24,12 @@ def convert_coding_messages_to_llm(messages: list[Any]) -> list[Message]:
             continue
         if isinstance(message, ToolResultMessage):
             converted.append(_strip_run_metadata(message))
+            continue
+        if isinstance(message, CompactionSummaryMessage):
+            converted.append(_compaction_summary_to_user_message(message))
+            continue
+        if isinstance(message, BranchSummaryMessage):
+            converted.append(_branch_summary_to_user_message(message))
             continue
         converted.append(message)
     return default_convert_to_llm(converted)
@@ -46,6 +56,33 @@ def _bash_execution_to_user_message(message: BashExecutionMessage) -> UserMessag
     return UserMessage(
         role="user",
         content=[TextContent(text=bash_execution_to_text(message))],
+        timestamp=int(time.time() * 1000),
+    )
+
+
+def _compaction_summary_to_user_message(message: CompactionSummaryMessage) -> UserMessage:
+    text = (
+        "<session-context type=\"compactionSummary\" "
+        f"tokensBefore=\"{message.tokens_before}\">\n"
+        f"{message.summary}\n"
+        "</session-context>"
+    )
+    return UserMessage(
+        role="user",
+        content=[TextContent(text=text)],
+        timestamp=int(time.time() * 1000),
+    )
+
+
+def _branch_summary_to_user_message(message: BranchSummaryMessage) -> UserMessage:
+    text = (
+        f"<session-context type=\"branchSummary\" fromId=\"{message.from_id}\">\n"
+        f"{message.summary}\n"
+        "</session-context>"
+    )
+    return UserMessage(
+        role="user",
+        content=[TextContent(text=text)],
         timestamp=int(time.time() * 1000),
     )
 

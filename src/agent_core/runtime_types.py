@@ -14,7 +14,17 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from ai_provider.runtime_types import PayloadCallback, ResponseCallback, SimpleStreamFunction
-from ai_provider.types import CacheRetention, ImageContent, Message, Model, ThinkingLevel, Tool, Transport
+from ai_provider.types import (
+    AssistantMessage,
+    CacheRetention,
+    Context,
+    ImageContent,
+    Message,
+    Model,
+    ThinkingLevel,
+    Tool,
+    Transport,
+)
 
 from .types import (
     AfterToolCallContext,
@@ -36,6 +46,10 @@ QueueMode = Literal["all", "one-at-a-time"]
 ToolUpdateCallback = Callable[[AgentToolResult], None]
 ConvertToLlm = Callable[[list[Any]], list[Message] | Awaitable[list[Message]]]
 TransformContext = Callable[[list[Any], AbortSignal | None], list[Any] | Awaitable[list[Any]]]
+RecoverAssistantResponse = Callable[
+    [AssistantMessage, Context, int, int, AbortSignal | None],
+    Context | None | Awaitable[Context | None],
+]
 ApiKeyResolver = Callable[[str], str | None | Awaitable[str | None]]
 BeforeToolCallHook = Callable[
     [BeforeToolCallContext, AbortSignal | None],
@@ -95,6 +109,7 @@ class AgentLoopConfig:
     tool_execution: ToolExecutionMode = "parallel"
     convert_to_llm: ConvertToLlm | None = None
     transform_context: TransformContext | None = None
+    recover_assistant_response: RecoverAssistantResponse | None = None
     stream_fn: SimpleStreamFunction | None = None
     get_api_key: ApiKeyResolver | None = None
     cache_retention: CacheRetention | None = None
@@ -124,6 +139,7 @@ class AgentOptions:
     follow_up_mode: QueueMode = "one-at-a-time"
     convert_to_llm: ConvertToLlm | None = None
     transform_context: TransformContext | None = None
+    recover_assistant_response: RecoverAssistantResponse | None = None
     stream_fn: SimpleStreamFunction | None = None
     get_api_key: ApiKeyResolver | None = None
     cache_retention: CacheRetention | None = None
@@ -168,6 +184,7 @@ __all__ = [
     "ConvertToLlm",
     "QueueDrain",
     "QueueMode",
+    "RecoverAssistantResponse",
     "RuntimeAgentTool",
     "StreamCreatedCallback",
     "ToolUpdateCallback",

@@ -104,7 +104,6 @@ class _ToolExecutionEndRequest:
     def resolved_duration_ms(self) -> int | None:
         return self.duration_ms or _duration_from_details(self.details)
 
-
 @dataclass(frozen=True, slots=True)
 class _ToolExecutionBase:
     id: str
@@ -112,7 +111,6 @@ class _ToolExecutionBase:
     started_at: str
     runtime_session_id: str | None
     run_id: str | None
-
 
 class SessionRepository(Protocol):
     def create_session(
@@ -160,6 +158,9 @@ class SessionRepository(Protocol):
         ...
 
     def list_entries(self, session_id: str) -> list[EntryRecord]:
+        ...
+
+    def list_tool_executions(self, session_id: str) -> list[ToolExecutionRecord]:
         ...
 
     def record_tool_execution_start(
@@ -363,6 +364,10 @@ class PostgresSessionRepository:
             )
             rows = cur.fetchall()
         return [_entry_from_row(row) for row in rows]
+
+    def list_tool_executions(self, session_id: str) -> list[ToolExecutionRecord]:
+        from .tool_execution_queries import list_tool_executions as _list_tool_executions
+        return _list_tool_executions(self._conn, self._schema, session_id)
 
     def record_tool_execution_start(
         self,
@@ -768,7 +773,6 @@ def _session_from_row(row: Any) -> SessionRecord:
         deleted_at=_iso(row[9]) if row[9] is not None else None,
     )
 
-
 def _entry_from_row(row: Any) -> EntryRecord:
     payload = SessionEntryAdapter.validate_python(row[6])
     return EntryRecord(
@@ -782,7 +786,6 @@ def _entry_from_row(row: Any) -> EntryRecord:
         context_participates=bool(row[7]),
         created_at=_iso(row[8]),
     )
-
 
 __all__ = [
     "EntryRecord",

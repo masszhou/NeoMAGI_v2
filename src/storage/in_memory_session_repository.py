@@ -133,6 +133,13 @@ class InMemorySessionRepository(SessionRepository):
     def list_entries(self, session_id: str) -> list[EntryRecord]:
         return list(self.entries.get(session_id, []))
 
+    def list_tool_executions(self, session_id: str) -> list[ToolExecutionRecord]:
+        return [
+            record
+            for record in self.tool_executions
+            if record.session_id == session_id
+        ]
+
     def record_tool_execution_start(
         self,
         *,

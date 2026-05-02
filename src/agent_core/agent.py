@@ -93,6 +93,7 @@ class Agent:
         )
         self.convert_to_llm = options.convert_to_llm or default_convert_to_llm
         self.transform_context = options.transform_context
+        self.recover_assistant_response = options.recover_assistant_response
         self.stream_fn = options.stream_fn
         self.get_api_key = options.get_api_key
         self.cache_retention = options.cache_retention
@@ -389,6 +390,7 @@ class Agent:
             tool_execution=self.tool_execution,
             convert_to_llm=self.convert_to_llm,
             transform_context=self.transform_context,
+            recover_assistant_response=self.recover_assistant_response,
             stream_fn=self.stream_fn,
             get_api_key=self.get_api_key,
             cache_retention=self.cache_retention,

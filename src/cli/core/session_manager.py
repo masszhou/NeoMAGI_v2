@@ -23,6 +23,7 @@ from cli.core.session_types import (
     SessionInfoEntry,
     SessionTreeNode,
 )
+from cli.core.compaction.models import BranchSummaryResult, CompactionResult
 from storage.session_jsonl import export_session_jsonl, import_session_jsonl
 from storage.session_repository import (
     EntryRecord,
@@ -229,6 +230,51 @@ class SessionManager:
         self.resume_session(session_id)
         return self.repository.append_entry(session_id, payload)
 
+    def append_compaction(
+        self,
+        session_id: str,
+        result: CompactionResult,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        parent_id = self._current_leaf_pi_id(session)
+        payload = self._entry_payload_with_parent(
+            session.id,
+            "compaction",
+            {
+                "summary": result.summary,
+                "firstKeptEntryId": result.first_kept_entry_id,
+                "tokensBefore": result.tokens_before,
+                "details": result.details_payload(),
+                "fromHook": result.from_hook,
+            },
+            parent_id=parent_id,
+        )
+        return self.repository.append_entry(session.id, payload)
+
+    def append_branch_summary(
+        self,
+        session_id: str,
+        *,
+        target_entry_id: str,
+        result: BranchSummaryResult,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        target = self.repository.get_entry(session.id, target_entry_id)
+        if target is None:
+            raise SessionManagerError(f"unknown entry: {target_entry_id}")
+        payload = self._entry_payload_with_parent(
+            session.id,
+            "branch_summary",
+            {
+                "fromId": result.from_id,
+                "summary": result.summary,
+                "details": result.details_payload(),
+                "fromHook": result.from_hook,
+            },
+            parent_id=target.pi_export_id,
+        )
+        return self.repository.append_entry(session.id, payload)
+
     def record_tool_execution_start(
         self,
         *,
@@ -410,6 +456,18 @@ class SessionManager:
             raise SessionManagerError(f"unknown entry: {leaf_entry_id}")
         return self.repository.update_session_leaf(session.id, entry.id)
 
+    def entry_path(
+        self,
+        session_id: str,
+        leaf_entry_id: str | None = None,
+    ) -> list[EntryRecord]:
+        session = self.resume_session(session_id)
+        return self._entry_path(session.id, leaf_entry_id or session.current_leaf_entry_id)
+
+    def list_tool_executions(self, session_id: str):
+        self.resume_session(session_id)
+        return self.repository.list_tool_executions(session_id)
+
     def export_jsonl(self, session_id: str, path: str | Path) -> Path:
         self.resume_session(session_id)
         return export_session_jsonl(self.repository, session_id, path)
@@ -438,6 +496,28 @@ class SessionManager:
             payload=payload,
             existing_ids=(entry.pi_export_id for entry in entries),
         )
+
+    def _entry_payload_with_parent(
+        self,
+        session_id: str,
+        entry_type: str,
+        payload: dict[str, Any],
+        *,
+        parent_id: str | None,
+    ) -> dict[str, Any]:
+        entries = self.repository.list_entries(session_id)
+        return allocate_entry_payload(
+            entry_type=entry_type,
+            parent_id=parent_id,
+            payload=payload,
+            existing_ids=(entry.pi_export_id for entry in entries),
+        )
+
+    def _current_leaf_pi_id(self, session: SessionRecord) -> str | None:
+        if session.current_leaf_entry_id is None:
+            return None
+        entry = self.repository.get_entry(session.id, session.current_leaf_entry_id)
+        return entry.pi_export_id if entry is not None else None
 
     def _entry_path(
         self,

@@ -13,6 +13,33 @@ from cli.slash_commands.registry import SlashCommandRegistry, register_builtin_c
 from storage.in_memory_session_repository import InMemorySessionRepository
 from tui.app import TUIApp
 
+SUMMARY = """## Goal
+Continue the task.
+## Constraints & Preferences
+Keep repo boundaries.
+## Progress
+### Done
+Older context summarized.
+### In Progress
+Current work.
+### Blocked
+None.
+## Key Decisions
+Use durable session summaries.
+## Next Steps
+Continue.
+## Critical Context
+Important details.
+<read-files>
+</read-files>
+<modified-files>
+</modified-files>"""
+
+
+class _FakeSummaryGenerator:
+    async def generate(self, _prompt: str, *, model) -> str:
+        return SUMMARY
+
 
 def _controller_with_session_manager(
     tmp_path: Path,
@@ -25,6 +52,7 @@ def _controller_with_session_manager(
         cwd=tmp_path,
         session_manager=manager,
         tool_profile="none",
+        summary_generator=_FakeSummaryGenerator(),
     )
     controller = InteractiveController(
         tui_app=TUIApp(render_mode=render_mode, out_stream=out_stream),
@@ -146,10 +174,10 @@ def test_tree_command_keeps_session_and_cache_affinity(tmp_path: Path) -> None:
         assert runtime.state.durable_session_id == before_session
         assert runtime.state.provider_cache_affinity_id == before_affinity
         assert runtime.state.current_leaf_entry_id == manager.resume_session(session_id).current_leaf_entry_id
-        assert any(
-            "selected session=" in note.text and f"leaf=entry:{first.pi_export_id}" in note.text
-            for note in controller.status._notifications  # noqa: SLF001
-        )
+        rendered = "\n".join(note.text for note in controller.status._notifications)  # noqa: SLF001
+        assert "selected session=" in rendered
+        assert "branch summary appended" in rendered
+        assert manager.session_stats(session_id).current_leaf != first.pi_export_id
     finally:
         runtime.shutdown()
 
