@@ -188,6 +188,24 @@ def test_bash_execution_excluded_from_context_marker() -> None:
     assert "[no-context]" in out
 
 
+def test_bash_execution_summarises_multiline_command_as_single_rows() -> None:
+    msg = BashExecutionMessage(
+        role="bashExecution",
+        command="cat > weather.py <<'PY'\n#!/usr/bin/env python3\nprint('ok')\nPY",
+        output="created:weather.py",
+        cancelled=False,
+        truncated=False,
+        timestamp=1,
+    )
+
+    rows = BashExecutionComponent(msg).render(80)
+    out = "\n".join(rows)
+
+    assert all("\n" not in row and "\r" not in row for row in rows)
+    assert "$ cat > weather.py <<'PY' (+3 lines)" in out
+    assert "#!/usr/bin/env python3" not in out
+
+
 def test_custom_message_skipped_when_display_false() -> None:
     msg = CustomMessage(
         role="custom",
@@ -242,6 +260,18 @@ def test_status_notification_lane_stays_below_status_row() -> None:
     assert "  two" in rows[2]
 
 
+def test_status_split_renderers_support_bottom_notification_lane() -> None:
+    s = StatusComponent()
+    s.push_notification("saved", level="info")
+
+    status_rows = s.render_status(40)
+    notification_rows = s.render_notifications(40)
+
+    assert status_rows == []
+    assert len(notification_rows) == 1
+    assert "● saved" in notification_rows[0]
+
+
 def test_generic_tool_renderer_includes_duration_after_end() -> None:
     ctx = ToolRenderContext(
         tool_name="read",
@@ -278,6 +308,24 @@ def test_registered_read_renderer_keeps_partial_preview() -> None:
     comp.update({"content": [{"type": "text", "text": "partial"}]})
     out = "\n".join(comp.render(60))
     assert "partial" in out
+
+
+def test_bash_renderer_summarises_multiline_command_as_single_rows() -> None:
+    comp = ToolExecutionComponent(
+        tool_call_id="c1",
+        tool_name="bash",
+        args={
+            "command": "cat > weather.py <<'PY'\n#!/usr/bin/env python3\nprint('ok')\nPY",
+        },
+        registry=ToolRendererRegistry(),
+    )
+
+    rows = comp.render(80)
+    out = "\n".join(rows)
+
+    assert all("\n" not in row and "\r" not in row for row in rows)
+    assert "$ cat > weather.py <<'PY' (+3 lines)" in out
+    assert "#!/usr/bin/env python3" not in out
 
 
 def test_registry_falls_back_to_generic_for_unknown_tools() -> None:

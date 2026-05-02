@@ -59,6 +59,21 @@ def _summarise(value: Any, *, limit: int = 200) -> str:
         return _truncate(repr(value), limit)
 
 
+def single_line_summary(value: Any, *, limit: int = 200) -> str:
+    """Return a row-safe summary for command-mode live rendering."""
+
+    if value is None:
+        return ""
+    text = str(value)
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    summary = lines[0]
+    if len(lines) > 1:
+        summary = f"{summary} (+{len(lines) - 1} lines)"
+    return _truncate(summary, limit)
+
+
 def generic_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
     """Default renderer: name + args + (partial|final|aborted) state.
 
@@ -140,7 +155,7 @@ def bash_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
         return generic_tool_renderer(ctx, width)
     details = _result_details(ctx)
     command = _arg(ctx.args, "command") or "$"
-    rows = [f"$ {command}"[:width]]
+    rows = [f"$ {single_line_summary(command, limit=max(1, width - 2))}"[:width]]
     output = _text_output(ctx.partial_result if ctx.is_partial else ctx.result)
     if output:
         rows.extend(f"  {line}"[:width] for line in output.strip().splitlines()[-5:])

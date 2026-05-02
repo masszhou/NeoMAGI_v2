@@ -38,24 +38,79 @@ def _tree_lines(nodes, *, stats=None) -> list[str]:
     current_leaf = stats.current_leaf if stats is not None else None
     lines = [
         f"session={session_id} current={_entry_ref(current_leaf)}",
-        "entries:",
+        "active path:",
     ]
-    for node in _flatten_tree(nodes):
-        entry = node.entry
-        marker = " \u2190 active" if entry.id == current_leaf else ""
-        lines.append(
-            f"+- entry={_short_entry(entry.id)} "
-            f"parent={_entry_ref(entry.parent_id)} {_entry_detail(entry)}{marker}"
-        )
+    active_path = _active_path(nodes, current_leaf)
+    if active_path:
+        active_ids = {node.entry.id for node in active_path}
+        for node in reversed(active_path):
+            lines.append(_active_line(node, current_leaf=current_leaf, active_ids=active_ids))
+    else:
+        lines.extend(_root_lines(nodes, current_leaf=current_leaf))
+
+    side_branches = _side_branch_lines(active_path, current_leaf=current_leaf)
+    if side_branches:
+        lines.append("side branches:")
+        lines.extend(side_branches)
     return lines
 
 
-def _flatten_tree(nodes) -> list:
-    flattened = []
+def _active_path(nodes, current_leaf: str | None) -> list:
+    if current_leaf is None:
+        return []
     for node in nodes:
-        flattened.append(node)
-        flattened.extend(_flatten_tree(node.children))
-    return flattened
+        path = _find_path(node, current_leaf)
+        if path:
+            return path
+    return []
+
+
+def _find_path(node, entry_id: str) -> list:
+    if node.entry.id == entry_id:
+        return [node]
+    for child in node.children:
+        path = _find_path(child, entry_id)
+        if path:
+            return [node, *path]
+    return []
+
+
+def _active_line(node, *, current_leaf: str | None, active_ids: set[str] | None = None) -> str:
+    entry = node.entry
+    marker = " \u2190 active" if entry.id == current_leaf else ""
+    branch_count = _side_branch_count(node, active_ids=active_ids or set())
+    branch_text = f" branches={branch_count}" if branch_count else ""
+    return (
+        f"* entry={_short_entry(entry.id)} {_entry_detail(entry)}{marker}"
+        f"{branch_text} parent={_entry_ref(entry.parent_id)}"
+    )
+
+
+def _root_lines(nodes, *, current_leaf: str | None) -> list[str]:
+    return [_active_line(node, current_leaf=current_leaf) for node in nodes]
+
+
+def _side_branch_lines(active_path: list, *, current_leaf: str | None) -> list[str]:
+    active_ids = {node.entry.id for node in active_path}
+    lines: list[str] = []
+    for node in reversed(active_path):
+        for child in node.children:
+            if child.entry.id in active_ids:
+                continue
+            lines.append(_side_branch_line(child, parent_id=node.entry.id))
+    return lines
+
+
+def _side_branch_line(node, *, parent_id: str) -> str:
+    entry = node.entry
+    return (
+        f"| * entry={_short_entry(entry.id)} {_entry_detail(entry)} "
+        f"from={_entry_ref(parent_id)}"
+    )
+
+
+def _side_branch_count(node, *, active_ids: set[str]) -> int:
+    return sum(1 for child in node.children if child.entry.id not in active_ids)
 
 
 def _entry_detail(entry) -> str:

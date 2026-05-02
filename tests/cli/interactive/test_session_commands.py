@@ -167,6 +167,11 @@ def test_tree_output_labels_entry_and_session_ids(tmp_path: Path) -> None:
             session_id,
             UserMessage(content=[TextContent(text="second")], timestamp=2),
         )
+        manager.select_leaf(session_id, first.pi_export_id)
+        third = manager.append_message(
+            session_id,
+            UserMessage(content=[TextContent(text="third")], timestamp=3),
+        )
 
         _dispatch(controller, "/tree")
 
@@ -174,6 +179,14 @@ def test_tree_output_labels_entry_and_session_ids(tmp_path: Path) -> None:
         assert f"session={session_id.split('-', 1)[0]}" in rendered
         assert f"entry={first.pi_export_id}" in rendered
         assert f"entry={second.pi_export_id}" in rendered
+        assert f"entry={third.pi_export_id}" in rendered
+        assert "active path:" in rendered
+        assert f"* entry={third.pi_export_id} message:user \u2190 active" in rendered
+        assert f"* entry={first.pi_export_id} message:user branches=1 parent=none" in rendered
+        assert "side branches:" in rendered
+        assert f"| * entry={second.pi_export_id} message:user from=entry:{first.pi_export_id}" in rendered
+        assert "+- entry=" not in rendered
+        assert "`-- entry=" not in rendered
         assert "message:user" in rendered
         assert "\u2190 active" in rendered
         assert "parent=entry:" in rendered

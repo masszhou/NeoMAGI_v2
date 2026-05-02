@@ -15,6 +15,7 @@ from tui.app import TUIApp
 from tui.editor import EditorState
 from tui.overlay import Selector
 from tui.stdin_buffer import KeyEvent, MouseWheelEvent
+from tui.width import strip_ansi
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "fixtures" / "pi_compat"
 
@@ -525,6 +526,42 @@ def test_command_mode_commits_completed_messages_to_scrollback() -> None:
     assert "prompt one" in written
     live = "\n".join(app._compose_command_frame())  # noqa: SLF001
     assert "prompt one" not in live
+
+
+def test_command_notifications_render_below_editor_footer() -> None:
+    app, c, _out = _make_command_controller()
+    app._cols, app._rows = 100, 12  # noqa: SLF001
+    c.status.push_notification("saved", ttl_seconds=60)
+
+    frame = [
+        strip_ansi(row).rstrip()
+        for row in app._compose_command_frame()  # noqa: SLF001
+    ]
+
+    footer_row = next(index for index, row in enumerate(frame) if row.startswith("[idle]"))
+    notification_row = next(index for index, row in enumerate(frame) if "saved" in row)
+    assert notification_row > footer_row
+
+
+def test_command_idle_cursor_row_stays_stable_when_notification_appears() -> None:
+    app, c, _out = _make_command_controller()
+    app._cols, app._rows = 100, 12  # noqa: SLF001
+
+    before_frame = app._compose_command_frame()  # noqa: SLF001
+    before = [strip_ansi(row).rstrip() for row in before_frame]
+    cursor_before = app._compose_cursor(before_frame)  # noqa: SLF001
+    prompt_before = next(index for index, row in enumerate(before) if row.startswith(">"))
+
+    c.status.push_notification("renamed session", ttl_seconds=60)
+    after_frame = app._compose_command_frame()  # noqa: SLF001
+    after = [strip_ansi(row).rstrip() for row in after_frame]
+    cursor_after = app._compose_cursor(after_frame)  # noqa: SLF001
+    prompt_after = next(index for index, row in enumerate(after) if row.startswith(">"))
+
+    assert prompt_after == prompt_before
+    assert cursor_before is not None
+    assert cursor_after is not None
+    assert cursor_after.row == cursor_before.row
 
 
 def test_command_mode_does_not_commit_empty_assistant_start_before_done() -> None:

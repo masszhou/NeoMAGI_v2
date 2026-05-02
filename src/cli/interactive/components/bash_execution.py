@@ -7,6 +7,7 @@ bash output won't be re-fed into the LLM context.
 from __future__ import annotations
 
 from cli.core.session_types import BashExecutionMessage
+from cli.interactive.tool_renderer_registry import single_line_summary
 from tui.component import Component
 from tui.width import pad_to_width, wrap_to_width
 
@@ -19,7 +20,8 @@ class BashExecutionComponent(Component):
     def render(self, width: int) -> list[str]:
         excluded = self.message.exclude_from_context
         excl_tag = " [no-context]" if excluded else ""
-        head = f"\x1b[35m▎ bash{excl_tag}\x1b[0m  $ {self.message.command}"
+        command = single_line_summary(self.message.command, limit=max(1, width - 14))
+        head = f"\x1b[35m▎ bash{excl_tag}\x1b[0m  $ {command}"
         rows: list[str] = [pad_to_width(head, width)]
         for line in wrap_to_width(self.message.output, max(1, width - 4)):
             rows.append(pad_to_width(f"  \x1b[2m{line}\x1b[0m", width))

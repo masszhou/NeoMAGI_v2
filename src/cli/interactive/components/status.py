@@ -86,28 +86,35 @@ class StatusComponent(Component):
         return self._notifications
 
     def render(self, width: int) -> list[str]:
-        rows: list[str] = []
-        bits: list[str] = []
-        notifications = self._alive_notifications()
-        steering = len(self.queue.steering)
-        follow_up = len(self.queue.follow_up)
-        if steering or follow_up:
-            bits.append(f"queue: steering={steering} followup={follow_up}")
-        if self.compacting:
-            bits.append("compacting…")
-        if self.auto_retry is not None:
-            attempt, mx = self.auto_retry
-            bits.append(f"auto-retry {attempt}/{mx}")
-        status_text = "  ·  ".join(bits)
-        if not status_text and not notifications:
+        status_rows = self.render_status(width)
+        notification_rows = self.render_notifications(width)
+        if not status_rows and not notification_rows:
             return []
-        rows.append(
-            pad_to_width(
-                f"\x1b[2m{status_text}\x1b[0m" if status_text else "",
-                width,
-            )
+
+        rows: list[str] = []
+        if status_rows:
+            rows.extend(status_rows)
+        else:
+            # Preserve the original component-local contract: when only
+            # notifications exist, they still render below an empty status
+            # row. Root layouts that need a bottom notification lane call
+            # render_status/render_notifications separately.
+            rows.append(pad_to_width("", width))
+        rows.extend(notification_rows)
+        return self.enforce_width(rows, width)
+
+    def render_status(self, width: int) -> list[str]:
+        status_text = self._status_text()
+        if not status_text:
+            return []
+        return self.enforce_width(
+            [pad_to_width(f"\x1b[2m{status_text}\x1b[0m", width)],
+            width,
         )
-        for note in notifications:
+
+    def render_notifications(self, width: int) -> list[str]:
+        rows: list[str] = []
+        for note in self._alive_notifications():
             color = {
                 "info": "\x1b[36m",
                 "warn": "\x1b[33m",
@@ -117,6 +124,19 @@ class StatusComponent(Component):
                 marker = "● " if index == 0 else "  "
                 rows.append(pad_to_width(f"{color}{marker}{line}\x1b[0m", width))
         return self.enforce_width(rows, width)
+
+    def _status_text(self) -> str:
+        bits: list[str] = []
+        steering = len(self.queue.steering)
+        follow_up = len(self.queue.follow_up)
+        if steering or follow_up:
+            bits.append(f"queue: steering={steering} followup={follow_up}")
+        if self.compacting:
+            bits.append("compacting…")
+        if self.auto_retry is not None:
+            attempt, mx = self.auto_retry
+            bits.append(f"auto-retry {attempt}/{mx}")
+        return "  ·  ".join(bits)
 
 
 __all__ = ["Notification", "QueueState", "StatusComponent"]
