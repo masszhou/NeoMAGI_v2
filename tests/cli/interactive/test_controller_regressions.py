@@ -609,6 +609,18 @@ def test_command_new_session_appends_boundary_without_erasing_scrollback() -> No
     assert "[new session] previous runtime transcript cleared" in text
 
 
+def test_command_session_messages_split_multiline_output_into_crlf_rows() -> None:
+    _, c, out = _make_command_controller()
+
+    c.push_session_message("root\n  child\n    leaf")
+
+    text = out.getvalue()
+    assert "root\x1b[0m\r\n  child\x1b[0m\r\n    leaf\x1b[0m\r\n" in text
+    assert "root\x1b[0m\n  child" not in text
+    assert all("\n" not in note.text for note in c.status._notifications)  # noqa: SLF001
+    assert c.status._notifications[0].text == "root (+2 lines)"  # noqa: SLF001
+
+
 def test_scrolled_message_history_keeps_cursor_on_editor_row() -> None:
     app, c = _make_controller()
     app._cols, app._rows = 80, 10  # noqa: SLF001

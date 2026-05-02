@@ -623,7 +623,7 @@ class InteractiveAgentRuntime:
         if self._session_manager is None or self._durable_session is None:
             return []
         context = self._session_manager.build_session_context(self._durable_session.id)
-        return list(context.messages)
+        return convert_coding_messages_to_llm(list(context.messages))
 
     def _resolve_provider_cache_affinity_id(self) -> str | None:
         if self._durable_session is not None:

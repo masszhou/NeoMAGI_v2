@@ -4,7 +4,10 @@ import time
 
 from agent_core import Agent
 from ai_provider.auth_storage import AUTH_PATH_ENV
+from cli.core.session_manager import SessionManager
+from cli.core.session_types import BashExecutionMessage
 from cli.interactive.runtime import InteractiveAgentRuntime
+from storage.in_memory_session_repository import InMemorySessionRepository
 
 
 def _drain_until_idle(runtime: InteractiveAgentRuntime, *, timeout: float = 3.0):
@@ -73,6 +76,49 @@ def test_runtime_supplies_default_system_prompt_for_codex() -> None:
         assert captured[0].system_prompt == "You are a helpful coding assistant."
     finally:
         runtime.shutdown()
+
+
+def test_runtime_imported_bash_execution_context_hydrates_as_agent_message(tmp_path) -> None:
+    source_manager = SessionManager(InMemorySessionRepository())
+    source = source_manager.new_session(tmp_path / "source")
+    source_manager.append_message(
+        source.id,
+        BashExecutionMessage(
+            command="printf marker",
+            output="P1M6_IMPORT_BASH_CONTEXT",
+            exitCode=0,
+            cancelled=False,
+            truncated=False,
+            timestamp=1,
+            excludeFromContext=False,
+        ),
+    )
+    path = tmp_path / "session.jsonl"
+    source_manager.export_jsonl(source.id, path)
+
+    manager = SessionManager(InMemorySessionRepository())
+    captured = []
+
+    def factory(options):
+        captured.append(options)
+        return Agent(options)
+
+    runtime = InteractiveAgentRuntime(
+        cwd=tmp_path / "runtime",
+        session_manager=manager,
+        agent_factory=factory,
+    )
+    try:
+        imported = runtime.import_jsonl(path)
+        imported_entries = manager.repository.list_entries(imported.id)
+    finally:
+        runtime.shutdown()
+
+    assert imported_entries[0].payload.message.role == "bashExecution"
+    messages = captured[-1].messages
+    assert len(messages) == 1
+    assert messages[0].role == "user"
+    assert "Ran `printf marker`" in messages[0].content[0].text
 
 
 def test_runtime_reset_mints_new_session_and_drops_old_queue() -> None:

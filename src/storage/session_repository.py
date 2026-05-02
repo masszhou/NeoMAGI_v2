@@ -14,7 +14,7 @@ from cli.core.session_types import (
 )
 
 from .config import DatabaseConfig
-from .ids import new_db_uuid, provider_cache_affinity_for_session
+from .ids import is_db_uuid, new_db_uuid, provider_cache_affinity_for_session
 from .schema import _quote_identifier
 from .session_utils import (
     allocate_entry_payload,
@@ -240,6 +240,8 @@ class PostgresSessionRepository:
         return _session_from_row(row)
 
     def get_session(self, session_id: str) -> SessionRecord | None:
+        if not is_db_uuid(session_id):
+            return None
         with self._conn.cursor() as cur:
             cur.execute(
                 f"""

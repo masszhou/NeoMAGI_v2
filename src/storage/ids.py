@@ -35,7 +35,16 @@ def short_session_id(session_id: str | None) -> str:
     return session_id.split("-", 1)[0]
 
 
+def is_db_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 __all__ = [
+    "is_db_uuid",
     "new_db_uuid",
     "new_pi_export_id",
     "provider_cache_affinity_for_session",

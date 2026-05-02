@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_provider.types import (
     AssistantMessage,
     ImageContent,
@@ -10,7 +12,7 @@ from ai_provider.types import (
     UsageCost,
     UserMessage,
 )
-from cli.core.session_manager import SessionManager
+from cli.core.session_manager import SessionManager, SessionManagerError
 from storage.in_memory_session_repository import InMemorySessionRepository
 
 
@@ -55,6 +57,42 @@ def test_session_manager_builds_context_and_stats(tmp_path: Path) -> None:
     assert stats.message_count == 2
     assert stats.current_leaf is not None
     assert user.pi_export_id
+
+
+def test_session_manager_resumes_by_unique_session_id_prefix(tmp_path: Path) -> None:
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    session = repo.create_session(
+        cwd=str(tmp_path),
+        session_id="019de884-0000-7000-8000-000000000001",
+    )
+    repo.create_session(
+        cwd=str(tmp_path),
+        session_id="119de884-0000-7000-8000-000000000002",
+    )
+
+    assert manager.resume_session("019de884").id == session.id
+    assert manager.resume_session(f" {session.id} ").id == session.id
+
+
+def test_session_manager_rejects_unknown_or_ambiguous_session_prefix(
+    tmp_path: Path,
+) -> None:
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    repo.create_session(
+        cwd=str(tmp_path),
+        session_id="019de884-0000-7000-8000-000000000001",
+    )
+    repo.create_session(
+        cwd=str(tmp_path),
+        session_id="019de884-0000-7000-8000-000000000002",
+    )
+
+    with pytest.raises(SessionManagerError, match="ambiguous session id prefix"):
+        manager.resume_session("019de884")
+    with pytest.raises(SessionManagerError, match="unknown session"):
+        manager.resume_session("not-a-session")
 
 
 def test_session_manager_fork_and_clone_preserve_source(tmp_path: Path) -> None:

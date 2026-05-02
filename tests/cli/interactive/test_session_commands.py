@@ -53,6 +53,19 @@ def test_session_name_and_resume_commands_dispatch(tmp_path: Path) -> None:
         _dispatch(controller, f"/resume {other.id}")
 
         assert runtime.state.durable_session_id == other.id
+        prefixed = manager.repository.create_session(
+            cwd=str(tmp_path),
+            session_id="aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaa1",
+        )
+        _dispatch(controller, "/resume aaaaaaaa")
+
+        assert runtime.state.durable_session_id == prefixed.id
+        _dispatch(controller, "/resume not-a-session")
+        assert runtime.state.durable_session_id == prefixed.id
+        assert any(
+            "unknown session" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
         _dispatch(controller, "/session")
         assert any("session" in note.text for note in controller.status._notifications)  # noqa: SLF001
     finally:

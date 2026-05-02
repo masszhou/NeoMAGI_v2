@@ -105,7 +105,9 @@ class StatusComponent(Component):
                 "warn": "\x1b[33m",
                 "error": "\x1b[31m",
             }[note.level]
-            rows.append(pad_to_width(f"{color}● {note.text}\x1b[0m", width))
+            for index, line in enumerate(note.text.splitlines() or [""]):
+                marker = "● " if index == 0 else "  "
+                rows.append(pad_to_width(f"{color}{marker}{line}\x1b[0m", width))
         return self.enforce_width(rows, width)
 
 

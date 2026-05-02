@@ -14,3 +14,15 @@ complexity-baseline:
 # Ensure markdown files have the standard doc_id front matter 为 markdown 文件补标准头
 md-doc-header path:
     uv run python scripts/upsert_md_doc_header.py "{{path}}"
+
+# Create missing local Postgres session schema objects 创建缺失的本地 session schema/table
+db-session-ensure:
+    uv run python scripts/session_db.py ensure
+
+# Show local Postgres session schema metadata 查看本地 session schema metadata
+db-session-status:
+    uv run python scripts/session_db.py status
+
+# Drop and recreate the configured local session schema 重建本地测试 session schema（会删数据；需 --yes）
+db-session-reset confirm="":
+    uv run python scripts/session_db.py reset {{confirm}}

@@ -316,9 +316,14 @@ class InteractiveController:
         self._app.request_render()
 
     def push_session_message(self, message: str, *, level: str = "info") -> None:
+        lines = message.splitlines() or [""]
         if self._app.render_mode == "command":
-            self._app.commit_lines([message])
-        self._status.push_notification(message, level=level, ttl_seconds=8.0)
+            self._app.commit_lines(lines)
+            first = next((line for line in lines if line.strip()), lines[0])
+            notification = lines[0] if len(lines) == 1 else f"{first} (+{len(lines) - 1} lines)"
+        else:
+            notification = message
+        self._status.push_notification(notification, level=level, ttl_seconds=8.0)
         self._app.request_render()
 
     # ------------------------------------------------------------------ #

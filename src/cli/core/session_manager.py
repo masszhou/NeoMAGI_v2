@@ -30,6 +30,7 @@ from storage.session_repository import (
     SessionRepository,
     allocate_entry_payload,
 )
+from storage.ids import is_db_uuid
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,10 +95,29 @@ class SessionManager:
         )
 
     def resume_session(self, session_id: str) -> SessionRecord:
-        session = self.repository.get_session(session_id)
+        session_ref = session_id.strip()
+        session = (
+            self.repository.get_session(session_ref) if is_db_uuid(session_ref) else None
+        )
         if session is None:
-            raise SessionManagerError(f"unknown session: {session_id}")
+            session = self._resolve_session_prefix(session_ref)
+        if session is None:
+            raise SessionManagerError(f"unknown session: {session_ref}")
         return session
+
+    def _resolve_session_prefix(self, session_ref: str) -> SessionRecord | None:
+        if not _is_session_id_prefix(session_ref):
+            return None
+        matches = [
+            session
+            for session in self.repository.list_recent_sessions(limit=1000)
+            if session.id.startswith(session_ref)
+        ]
+        if len(matches) > 1:
+            raise SessionManagerError(
+                f"ambiguous session id prefix: {session_ref}; use the full session id"
+            )
+        return matches[0] if matches else None
 
     def fork_session(self, session_id: str, from_entry_id: str) -> BranchSessionResult:
         return self._branch_into_new_session(
@@ -465,6 +485,12 @@ def _entry_ms(value: str) -> int:
         return int(datetime_from_iso(parsed).timestamp() * 1000)
     except Exception:
         return 0
+
+
+def _is_session_id_prefix(value: str) -> bool:
+    if len(value) < 8:
+        return False
+    return all(char in "0123456789abcdefABCDEF-" for char in value)
 
 
 def datetime_from_iso(value: str):

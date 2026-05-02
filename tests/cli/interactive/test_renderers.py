@@ -161,6 +161,18 @@ def test_status_notifications_render_with_color_marker() -> None:
     assert "hello" in out
 
 
+def test_status_multiline_notifications_render_as_separate_rows() -> None:
+    s = StatusComponent()
+    s.push_notification("one\ntwo", level="info")
+
+    rows = s.render(40)
+
+    assert len(rows) == 2
+    assert all("\n" not in row for row in rows)
+    assert "● one" in rows[0]
+    assert "  two" in rows[1]
+
+
 def test_generic_tool_renderer_includes_duration_after_end() -> None:
     ctx = ToolRenderContext(
         tool_name="read",
