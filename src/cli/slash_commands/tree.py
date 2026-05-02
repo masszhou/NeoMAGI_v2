@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from storage.ids import short_session_id
+
 from .registry import SlashCommandContext
 
 
@@ -11,13 +13,15 @@ def handle_tree(ctx: SlashCommandContext) -> None:
         ctx.controller.push_session_message("no interactive runtime", level="warn")
         return
     if ctx.args:
+        entry_id = ctx.args[0]
         try:
-            session = runtime.select_session_leaf(ctx.args[0])
+            session = runtime.select_session_leaf(entry_id)
         except RuntimeError as exc:
             ctx.controller.push_session_message(str(exc), level="error")
             return
         ctx.controller.refresh_after_session_switch(
-            f"selected leaf in session {session.id.split('-', 1)[0]}"
+            f"selected leaf in session {short_session_id(session.id)}",
+            summary=runtime.session_switch_summary("selected"),
         )
         return
     tree = runtime.session_tree()

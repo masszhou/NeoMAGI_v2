@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from concurrent.futures import Future
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from tui.app import TUIApp
 
 def _controller_with_session_manager(
     tmp_path: Path,
+    *,
+    render_mode: str = "canvas",
+    out_stream=None,
 ) -> tuple[InteractiveController, InteractiveAgentRuntime, SessionManager]:
     manager = SessionManager(InMemorySessionRepository())
     runtime = InteractiveAgentRuntime(
@@ -22,7 +26,10 @@ def _controller_with_session_manager(
         session_manager=manager,
         tool_profile="none",
     )
-    controller = InteractiveController(tui_app=TUIApp(), runtime=runtime)
+    controller = InteractiveController(
+        tui_app=TUIApp(render_mode=render_mode, out_stream=out_stream),
+        runtime=runtime,
+    )
     controller.bootstrap()
     return controller, runtime, manager
 
@@ -48,11 +55,16 @@ def test_session_name_and_resume_commands_dispatch(tmp_path: Path) -> None:
     try:
         _dispatch(controller, "/name Daily branch")
         assert runtime.session_stats().name == "Daily branch"
+        assert "name=Daily branch" in controller.editor._footer  # noqa: SLF001
 
         other = manager.new_session(tmp_path)
         _dispatch(controller, f"/resume {other.id}")
 
         assert runtime.state.durable_session_id == other.id
+        assert any(
+            "resumed session=" in note.text and "context=0 messages" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
         prefixed = manager.repository.create_session(
             cwd=str(tmp_path),
             session_id="aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaa1",
@@ -91,6 +103,10 @@ def test_fork_and_clone_commands_switch_sessions_with_expected_editor_state(
         assert manager.resume_session(forked_id).parent_session_id == source_id
         assert runtime.state.provider_cache_affinity_id != source_session.provider_cache_affinity_id
         assert controller.editor.buffer.text == "rewrite this"
+        assert any(
+            "forked session=" in note.text and "parent=session:" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
 
         controller.editor.buffer.text = ""
         controller.editor.buffer.cursor = 0
@@ -101,6 +117,10 @@ def test_fork_and_clone_commands_switch_sessions_with_expected_editor_state(
         assert manager.resume_session(cloned_id).parent_session_id == source_id
         assert runtime.state.provider_cache_affinity_id != source_session.provider_cache_affinity_id
         assert controller.editor.buffer.text == ""
+        assert any(
+            "cloned session=" in note.text and "parent=session:" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
     finally:
         runtime.shutdown()
 
@@ -126,6 +146,34 @@ def test_tree_command_keeps_session_and_cache_affinity(tmp_path: Path) -> None:
         assert runtime.state.durable_session_id == before_session
         assert runtime.state.provider_cache_affinity_id == before_affinity
         assert runtime.state.current_leaf_entry_id == manager.resume_session(session_id).current_leaf_entry_id
+        assert any(
+            "selected session=" in note.text and f"leaf=entry:{first.pi_export_id}" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
+    finally:
+        runtime.shutdown()
+
+
+def test_command_mode_session_switch_commits_compact_summary(tmp_path: Path) -> None:
+    out = io.StringIO()
+    controller, runtime, manager = _controller_with_session_manager(
+        tmp_path,
+        render_mode="command",
+        out_stream=out,
+    )
+    try:
+        session = manager.new_session(tmp_path)
+        manager.append_message(
+            session.id,
+            UserMessage(content=[TextContent(text="loaded")], timestamp=1),
+        )
+
+        _dispatch(controller, f"/resume {session.id}")
+
+        committed = out.getvalue()
+        assert "resumed session=" in committed
+        assert "context=1 messages" in committed
+        assert "leaf=entry:" in committed
     finally:
         runtime.shutdown()
 

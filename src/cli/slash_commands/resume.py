@@ -30,7 +30,8 @@ def handle_resume(ctx: SlashCommandContext) -> None:
         ctx.controller.push_session_message(str(exc), level="error")
         return
     ctx.controller.refresh_after_session_switch(
-        f"resumed session {short_session_id(session.id)}"
+        f"resumed session {short_session_id(session.id)}",
+        summary=runtime.session_switch_summary("resumed"),
     )
 
 

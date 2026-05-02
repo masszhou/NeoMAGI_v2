@@ -170,12 +170,32 @@ class InteractiveAgentRuntime:
         cache = self._cache_retention or "default"
         durable = (
             f"  session={short_session_id(self._durable_session.id)}"
+            f" name={_display_name(self._durable_session.display_name)}"
             if self._durable_session is not None
             else ""
         )
         return (
             f"runtime: {self._model_ref}  thinking={self._thinking_level}  "
             f"cache={cache}{durable}"
+        )
+
+    def session_switch_summary(self, action: str) -> str:
+        """Compact session-aware UI summary prepared for the TUI layer."""
+
+        stats = self.session_stats()
+        if stats is None:
+            return f"{action} session=none name=(unnamed) leaf=none context=0 messages"
+        parent = (
+            f" parent=session:{short_session_id(stats.parent_session_id)}"
+            if stats.parent_session_id
+            else ""
+        )
+        return (
+            f"{action} session={short_session_id(stats.session_id)}"
+            f" name={_display_name(stats.name)}"
+            f" leaf={_leaf_ref(stats.current_leaf)}"
+            f" context={len(self._session_context_messages)} messages"
+            f"{parent}"
         )
 
     def set_event_wake(self, wake: Callable[[], None] | None) -> None:
@@ -685,6 +705,16 @@ def _tool_text(result: Any) -> str:
         elif getattr(block, "type", None) == "text":
             parts.append(str(block.text))
     return "\n".join(parts)
+
+
+def _display_name(value: str | None) -> str:
+    return value or "(unnamed)"
+
+
+def _leaf_ref(value: str | None) -> str:
+    if not value:
+        return "none"
+    return f"entry:{value[:8]}"
 
 
 __all__ = ["InteractiveAgentRuntime", "RuntimeState"]

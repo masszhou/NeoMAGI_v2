@@ -51,6 +51,7 @@ def handle_name(ctx: SlashCommandContext) -> None:
     ctx.controller.push_session_message(
         f"renamed session {short_session_id(session.id)} to {name}"
     )
+    ctx.controller.editor.set_footer(runtime.footer_summary)
 
 
 __all__ = ["handle_name", "handle_session"]

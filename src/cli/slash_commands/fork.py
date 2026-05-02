@@ -22,6 +22,7 @@ def handle_fork(ctx: SlashCommandContext) -> None:
         return
     ctx.controller.refresh_after_session_switch(
         f"forked session {short_session_id(result.session.id)}",
+        summary=runtime.session_switch_summary("forked"),
         editor_prefill=result.editor_prefill,
     )
 

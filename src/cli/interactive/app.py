@@ -296,6 +296,7 @@ class InteractiveController:
         self,
         boundary: str,
         *,
+        summary: str | None = None,
         editor_prefill: str = "",
     ) -> None:
         self._flush_command_transcript()
@@ -303,9 +304,9 @@ class InteractiveController:
         self._router.clear_active()
         self._status.set_queue([], [])
         if self._app.render_mode == "command":
-            self._app.commit_lines(["", f"--- [{boundary}] ---", ""])
+            self._app.commit_lines(["", f"--- [{boundary}] ---", *([summary] if summary else []), ""])
         else:
-            self._status.push_notification(boundary, level="info", ttl_seconds=4.0)
+            self._status.push_notification(summary or boundary, level="info", ttl_seconds=4.0)
         self._editor.buffer.text = editor_prefill
         self._editor.buffer.cursor = len(editor_prefill)
         self._editor._last_seen_text = ""  # noqa: SLF001 - controller owns editor callbacks
@@ -368,7 +369,7 @@ class InteractiveController:
         if not tree:
             self._status.push_notification("current session has no entries", level="info")
             return
-        self.push_session_message("\n".join(_tree_lines(tree)[:12]))
+        self.push_session_message("\n".join(_tree_lines(tree, stats=runtime.session_stats())[:12]))
 
     def _has_active_work(self) -> bool:
         return (

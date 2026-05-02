@@ -18,7 +18,8 @@ def handle_clone(ctx: SlashCommandContext) -> None:
         ctx.controller.push_session_message(str(exc), level="error")
         return
     ctx.controller.refresh_after_session_switch(
-        f"cloned session {short_session_id(result.session.id)}"
+        f"cloned session {short_session_id(result.session.id)}",
+        summary=runtime.session_switch_summary("cloned"),
     )
 
 
