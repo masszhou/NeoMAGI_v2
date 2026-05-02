@@ -31,10 +31,7 @@ def select_cut_point(
     pinned_entry_ids: set[str] | None = None,
 ) -> CutPointSelection:
     if not entries:
-        return CutPointSelection(
-            ok=False,
-            first_kept_entry_id=None,
-            keep_from_index=None,
+        return _selection_failure(
             tokens_before=0,
             tokens_after=0,
             reason="empty-context",
@@ -44,10 +41,7 @@ def select_cut_point(
     tokens_before = sum(weights)
     budget = _effective_budget(keep_recent_tokens, target_budget)
     if tokens_before <= budget:
-        return CutPointSelection(
-            ok=False,
-            first_kept_entry_id=None,
-            keep_from_index=None,
+        return _selection_failure(
             tokens_before=tokens_before,
             tokens_after=tokens_before,
             reason="under-budget",
@@ -56,36 +50,61 @@ def select_cut_point(
     pinned = pinned_entry_ids or set()
     candidate = _suffix_index_under_budget(entries, weights, budget, pinned)
     if candidate is None:
-        return CutPointSelection(
-            ok=False,
-            first_kept_entry_id=None,
-            keep_from_index=None,
+        return _selection_failure(
             tokens_before=tokens_before,
             tokens_after=tokens_before,
             reason="over-budget",
         )
 
+    return _validated_selection(
+        entries,
+        weights,
+        candidate=candidate,
+        tokens_before=tokens_before,
+        keep_recent_tokens=keep_recent_tokens,
+        target_budget=target_budget,
+    )
+
+
+def _selection_failure(
+    *,
+    tokens_before: int,
+    tokens_after: int,
+    reason: str,
+) -> CutPointSelection:
+    return CutPointSelection(
+        ok=False,
+        first_kept_entry_id=None,
+        keep_from_index=None,
+        tokens_before=tokens_before,
+        tokens_after=tokens_after,
+        reason=reason,
+    )
+
+
+def _validated_selection(
+    entries: list[Any],
+    weights: list[int],
+    *,
+    candidate: int,
+    tokens_before: int,
+    keep_recent_tokens: int,
+    target_budget: int | None,
+) -> CutPointSelection:
     adjusted = _expand_to_tool_call_boundary(entries, candidate)
     tokens_after = sum(weights[adjusted:])
     if target_budget is not None and tokens_after > target_budget:
-        return CutPointSelection(
-            ok=False,
-            first_kept_entry_id=None,
-            keep_from_index=None,
+        return _selection_failure(
             tokens_before=tokens_before,
             tokens_after=tokens_after,
             reason="over-budget",
         )
     if tokens_after > keep_recent_tokens and adjusted < candidate:
-        return CutPointSelection(
-            ok=False,
-            first_kept_entry_id=None,
-            keep_from_index=None,
+        return _selection_failure(
             tokens_before=tokens_before,
             tokens_after=tokens_after,
             reason="no-safe-cut",
         )
-
     return CutPointSelection(
         ok=True,
         first_kept_entry_id=_entry_pi_id(entries[adjusted]),

@@ -101,19 +101,72 @@ def _done_stream(message: AssistantMessage) -> AssistantMessageEventStream:
     return stream
 
 
+def _session_with_user_messages(tmp_path: Path, *texts: str):
+    manager = SessionManager(InMemorySessionRepository())
+    session = manager.new_session(tmp_path)
+    for index, text in enumerate(texts, start=1):
+        manager.append_message(
+            session.id,
+            UserMessage(content=[TextContent(text=text)], timestamp=index),
+        )
+    return manager, session
+
+
+def _runtime_for_stream(
+    tmp_path: Path,
+    manager: SessionManager,
+    stream_fn,
+    *,
+    model_ref: str | None = None,
+    summary_generator=None,
+) -> InteractiveAgentRuntime:
+    def factory(options):
+        options.stream_fn = stream_fn
+        return Agent(options)
+
+    kwargs = {
+        "cwd": tmp_path,
+        "session_manager": manager,
+        "tool_profile": "none",
+        "summary_generator": summary_generator or FakeSummaryGenerator(),
+        "agent_factory": factory,
+    }
+    if model_ref is not None:
+        kwargs["model_ref"] = model_ref
+    return InteractiveAgentRuntime(**kwargs)
+
+
+def _assert_successful_overflow_recovery(
+    manager: SessionManager,
+    session_id: str,
+    contexts: list[Context],
+    events,
+) -> None:
+    entries = manager.repository.list_entries(session_id)
+    assert [entry.entry_type for entry in entries] == [
+        "message",
+        "message",
+        "message",
+        "compaction",
+        "message",
+    ]
+    assert entries[-1].payload.message.role == "assistant"
+    assert entries[-1].payload.message.error_message is None
+    assert entries[-1].payload.message.content[0].text == "recovered"
+    assert len(contexts) == 2
+    assert any(
+        "<session-context type=\"compactionSummary\"" in message.content[0].text
+        for message in contexts[1].messages
+        if message.role == "user"
+    )
+    assert "auto_retry_start" in [event.type for event in events]
+    assert "auto_retry_end" in [event.type for event in events]
+
+
 def test_overflow_recovery_compacts_and_retries_without_persisting_first_error(
     tmp_path: Path,
 ) -> None:
-    manager = SessionManager(InMemorySessionRepository())
-    session = manager.new_session(tmp_path)
-    manager.append_message(
-        session.id,
-        UserMessage(content=[TextContent(text="old")], timestamp=1),
-    )
-    manager.append_message(
-        session.id,
-        UserMessage(content=[TextContent(text="recent")], timestamp=2),
-    )
+    manager, session = _session_with_user_messages(tmp_path, "old", "recent")
     contexts: list[Context] = []
 
     def stream_fn(model: Model, context: Context, options: SimpleStreamOptions | None = None):
@@ -133,42 +186,14 @@ def test_overflow_recovery_compacts_and_retries_without_persisting_first_error(
             SimpleStreamOptions(metadata={"response": response}),
         )
 
-    def factory(options):
-        options.stream_fn = stream_fn
-        return Agent(options)
-
-    runtime = InteractiveAgentRuntime(
-        cwd=tmp_path,
-        session_manager=manager,
-        tool_profile="none",
-        summary_generator=FakeSummaryGenerator(),
-        agent_factory=factory,
-    )
+    runtime = _runtime_for_stream(tmp_path, manager, stream_fn)
     try:
         runtime.submit("current prompt")
         events = _drain_until_idle(runtime)
     finally:
         runtime.shutdown()
 
-    entries = manager.repository.list_entries(session.id)
-    assert [entry.entry_type for entry in entries] == [
-        "message",
-        "message",
-        "message",
-        "compaction",
-        "message",
-    ]
-    assert entries[-1].payload.message.role == "assistant"
-    assert entries[-1].payload.message.error_message is None
-    assert entries[-1].payload.message.content[0].text == "recovered"
-    assert len(contexts) == 2
-    assert any(
-        "<session-context type=\"compactionSummary\"" in message.content[0].text
-        for message in contexts[1].messages
-        if message.role == "user"
-    )
-    assert "auto_retry_start" in [event.type for event in events]
-    assert "auto_retry_end" in [event.type for event in events]
+    _assert_successful_overflow_recovery(manager, session.id, contexts, events)
 
 
 def test_overflow_recovery_retry_still_overflow_compacts_once_and_fails_fast(
@@ -425,15 +450,10 @@ def test_auto_compaction_runs_before_provider_call_without_dropping_prompt(
         update={"id": "faux-auto-compact-test", "context_window": 17_000}
     )
     register_model(tiny)
-    manager = SessionManager(InMemorySessionRepository())
-    session = manager.new_session(tmp_path)
-    manager.append_message(
-        session.id,
-        UserMessage(content=[TextContent(text="old " * 3000)], timestamp=1),
-    )
-    manager.append_message(
-        session.id,
-        UserMessage(content=[TextContent(text="recent")], timestamp=2),
+    manager, session = _session_with_user_messages(
+        tmp_path,
+        "old " * 3000,
+        "recent",
     )
     contexts: list[Context] = []
 
@@ -445,17 +465,11 @@ def test_auto_compaction_runs_before_provider_call_without_dropping_prompt(
             SimpleStreamOptions(metadata={"response": "ok"}),
         )
 
-    def factory(options):
-        options.stream_fn = stream_fn
-        return Agent(options)
-
-    runtime = InteractiveAgentRuntime(
-        cwd=tmp_path,
+    runtime = _runtime_for_stream(
+        tmp_path,
+        manager,
+        stream_fn,
         model_ref="faux/faux-auto-compact-test",
-        session_manager=manager,
-        tool_profile="none",
-        summary_generator=FakeSummaryGenerator(),
-        agent_factory=factory,
     )
     before_affinity = runtime.state.provider_cache_affinity_id
     try:

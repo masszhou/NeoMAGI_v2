@@ -39,6 +39,7 @@ _REQUIRED_KEYS = (
     "DATABASE_NAME",
 )
 _SCHEMA_KEY = "DATABASE_SCHEMA"
+_ENV_FILE_KEY = "NEOMAGI_ENV_FILE"
 
 
 def load_database_config(
@@ -46,15 +47,20 @@ def load_database_config(
     env: Mapping[str, str] | None = None,
     dotenv_path: str | Path | None = None,
 ) -> DatabaseConfig:
-    """Load DATABASE_* settings from environment, falling back to local .env.
+    """Load DATABASE_* settings from environment, falling back to NeoMAGI .env.
 
-    Environment variables deliberately win over `.env`, matching the repo's
-    deployment and docker-compose conventions. The real `.env` file is never
-    required by tests; callers can pass an explicit `env` mapping instead.
+    Environment variables deliberately win over dotenv values, matching the
+    repo's deployment and docker-compose conventions. Dotenv discovery is
+    scoped to NeoMAGI config, not the current workspace: explicit
+    ``dotenv_path`` for tests/internal callers, then ``NEOMAGI_ENV_FILE``,
+    then the app/repo root ``.env``.
     """
 
     env_values = env if env is not None else os.environ
-    dotenv_values = _read_dotenv(Path(dotenv_path) if dotenv_path is not None else Path(".env"))
+    dotenv_values = _read_dotenv(
+        _resolve_dotenv_path(env_values, dotenv_path),
+        required=dotenv_path is None and bool(env_values.get(_ENV_FILE_KEY)),
+    )
     values: dict[str, str | None] = {}
     for key in (*_REQUIRED_KEYS, _SCHEMA_KEY):
         values[key] = env_values.get(key) or dotenv_values.get(key)
@@ -63,8 +69,8 @@ def load_database_config(
     if missing:
         joined = ", ".join(missing)
         raise DatabaseConfigError(
-            f"missing database configuration: {joined}; create .env from .env_template "
-            "or export DATABASE_* variables"
+            f"missing database configuration: {joined}; export DATABASE_* variables, "
+            f"set {_ENV_FILE_KEY}, or create .env from .env_template in the NeoMAGI root"
         )
 
     try:
@@ -91,8 +97,28 @@ def load_database_config(
     )
 
 
-def _read_dotenv(path: Path) -> dict[str, str]:
+def _resolve_dotenv_path(
+    env_values: Mapping[str, str],
+    explicit_path: str | Path | None,
+) -> Path:
+    if explicit_path is not None:
+        return Path(explicit_path).expanduser()
+    configured = env_values.get(_ENV_FILE_KEY)
+    if configured:
+        return Path(configured).expanduser()
+    return _app_root_dotenv_path()
+
+
+def _app_root_dotenv_path() -> Path:
+    return Path(__file__).resolve().parents[2] / ".env"
+
+
+def _read_dotenv(path: Path, *, required: bool = False) -> dict[str, str]:
     if not path.is_file():
+        if required:
+            raise DatabaseConfigError(
+                f"{_ENV_FILE_KEY} points to a missing file: {path}"
+            )
         return {}
     values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
