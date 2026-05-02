@@ -87,12 +87,33 @@ def test_read_policy_audit_and_details(tmp_path: Path) -> None:
         assert "one\ntwo" in result.content[0]["text"]
         assert result.details["path"] == "a.txt"
         assert result.details["resolvedPath"].endswith("a.txt")
+        assert result.details["lineStart"] == 1
+        assert result.details["lineEnd"] == 2
+        assert result.details["totalLines"] == 3
+        assert result.details["outputLines"] == 2
         assert "policyDecision" in result.details
         assert {"durationMs", "startedAt", "endedAt"}.issubset(result.details)
         assert blocked.is_error is True
         assert blocked.details["policyDecision"]["effect"] == "block"
         assert [record.tool_name for record in audit.records] == ["read", "read"]
         assert [record.is_error for record in audit.records] == [False, True]
+
+    asyncio.run(run())
+
+
+def test_read_details_follow_offset_and_continuation_notice(tmp_path: Path) -> None:
+    async def run() -> None:
+        (tmp_path / "a.txt").write_text("\n".join(f"line-{i}" for i in range(1, 13)), encoding="utf-8")
+        read = _tool_map(create_coding_tools(tmp_path))["read"]
+
+        result = await read.execute("call-read", {"path": "a.txt", "offset": 10, "limit": 2}, None, None)
+
+        assert result.is_error is False
+        assert result.details["lineStart"] == 10
+        assert result.details["lineEnd"] == 11
+        assert result.details["totalLines"] == 12
+        assert result.details["outputLines"] == 2
+        assert "Use offset=12 to continue" in result.content[0]["text"]
 
     asyncio.run(run())
 

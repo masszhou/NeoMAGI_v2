@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_provider.types import TextContent, UserMessage
+from ai_provider.types import TextContent, ToolResultMessage, UserMessage
 from cli.core.session_manager import SessionManager
 from storage.in_memory_session_repository import InMemorySessionRepository
 
@@ -64,3 +64,40 @@ def test_session_jsonl_round_trip_preserves_fork_parent_session(
 
     assert imported.parent_session_id == source.id
     assert imported.source["sourceHeaderId"] == forked.session.id
+
+
+def test_session_jsonl_round_trip_preserves_read_tool_line_details(
+    tmp_path: Path,
+) -> None:
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    session = manager.new_session(tmp_path)
+    manager.append_message(
+        session.id,
+        ToolResultMessage(
+            toolCallId="call-read",
+            toolName="read",
+            content=[TextContent(text="one\ntwo")],
+            details={
+                "path": "README.md",
+                "lineStart": 1,
+                "lineEnd": 2,
+                "totalLines": 4,
+                "outputLines": 2,
+            },
+            isError=False,
+            timestamp=1,
+        ),
+    )
+    path = tmp_path / "session.jsonl"
+
+    manager.export_jsonl(session.id, path)
+    imported = manager.import_jsonl(path)
+
+    imported_context = manager.build_session_context(imported.id)
+    message = imported_context.messages[0]
+    assert isinstance(message, ToolResultMessage)
+    assert message.details["lineStart"] == 1
+    assert message.details["lineEnd"] == 2
+    assert message.details["totalLines"] == 4
+    assert message.details["outputLines"] == 2

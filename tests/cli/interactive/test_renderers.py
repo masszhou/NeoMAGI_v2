@@ -106,6 +106,74 @@ def test_tool_result_renders_error_glyph_when_is_error() -> None:
     assert "read" in out
 
 
+def test_read_tool_result_renders_line_number_gutter() -> None:
+    msg = ToolResultMessage(
+        role="toolResult",
+        toolCallId="c1",
+        toolName="read",
+        content=[TextContent(type="text", text="ten\neleven\ntwelve\n\n[2 more lines in file.]")],
+        details={
+            "path": "README.md",
+            "lineStart": 10,
+            "lineEnd": 12,
+            "totalLines": 14,
+            "outputLines": 3,
+        },
+        isError=False,
+        timestamp=1,
+    )
+
+    out = "\n".join(ToolResultComponent(msg).render(80))
+
+    assert "README.md:10-12" in out
+    assert "10 | ten" in out
+    assert "12 | twelve" in out
+    assert "[2 more lines in file.]" in out
+    assert "13 | [2 more" not in out
+
+
+def test_read_tool_result_without_line_metadata_uses_generic_renderer() -> None:
+    msg = ToolResultMessage(
+        role="toolResult",
+        toolCallId="c1",
+        toolName="read",
+        content=[TextContent(type="text", text="plain legacy output")],
+        details={"path": "README.md"},
+        isError=False,
+        timestamp=1,
+    )
+
+    out = "\n".join(ToolResultComponent(msg).render(80))
+
+    assert "plain legacy output" in out
+    assert "README.md:" not in out
+    assert "1 |" not in out
+
+
+def test_read_tool_result_narrow_width_falls_back_to_generic_renderer() -> None:
+    msg = ToolResultMessage(
+        role="toolResult",
+        toolCallId="c1",
+        toolName="read",
+        content=[TextContent(type="text", text="first\nsecond")],
+        details={
+            "path": "README.md",
+            "lineStart": 1,
+            "lineEnd": 2,
+            "totalLines": 2,
+            "outputLines": 2,
+        },
+        isError=False,
+        timestamp=1,
+    )
+
+    out = "\n".join(ToolResultComponent(msg).render(49))
+
+    assert "first" in out
+    assert "README.md:1-2" not in out
+    assert "1 | first" not in out
+
+
 def test_bash_execution_excluded_from_context_marker() -> None:
     msg = BashExecutionMessage(
         role="bashExecution",

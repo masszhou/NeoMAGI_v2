@@ -71,6 +71,10 @@ async def execute_read(
     output = _with_read_notice(truncation.content, truncation, offset, len(lines), limit)
     details = {
         **resolved_path_details(logical_path, resolved),
+        "lineStart": offset,
+        "lineEnd": offset + max(truncation.output_lines, 1) - 1,
+        "totalLines": len(lines),
+        "outputLines": truncation.output_lines,
         "truncation": truncation.to_details(),
     }
     return text_result(output, details=details)

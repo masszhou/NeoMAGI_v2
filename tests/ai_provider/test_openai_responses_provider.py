@@ -170,7 +170,7 @@ def test_openai_responses_flattens_tool_call_history_for_continuation() -> None:
                 toolCallId="call_read_1",
                 toolName="read_file",
                 content=[TextContent(text="README.md says this is NeoMAGI_v2.")],
-                details={"text": "README.md says this is NeoMAGI_v2."},
+                details={"path": "README.md", "lineStart": 1, "lineEnd": 1, "totalLines": 1, "outputLines": 1},
                 isError=False,
                 timestamp=3,
             ),
@@ -201,6 +201,7 @@ def test_openai_responses_flattens_tool_call_history_for_continuation() -> None:
         },
     ]
     assert "function_call" not in str(payload["input"][0].get("content"))
+    assert "1 |" not in str(payload["input"])
 
 
 def test_openai_responses_stream_text_and_tool_call() -> None:
