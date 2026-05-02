@@ -12,6 +12,7 @@ from .branch_summary import BranchSummaryComponent
 from .compaction_summary import CompactionSummaryComponent
 from .custom_message import CustomMessageComponent
 from .message_list import MessageListComponent
+from .run_divider import RunDividerComponent
 from .status import StatusComponent
 from .tool_execution import ToolExecutionComponent
 from .tool_result import ToolResultComponent
@@ -24,6 +25,7 @@ __all__ = [
     "CompactionSummaryComponent",
     "CustomMessageComponent",
     "MessageListComponent",
+    "RunDividerComponent",
     "StatusComponent",
     "ToolExecutionComponent",
     "ToolResultComponent",

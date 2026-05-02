@@ -162,3 +162,25 @@ def test_neither_tui_nor_interactive_define_pydantic_models() -> None:
                         if {"BaseModel", "_PiModel"} & set(names):
                             bad.append(path)
     assert not bad, f"forbidden pydantic models in: {bad}"
+
+
+def test_agent_end_appends_run_divider_with_elapsed_time() -> None:
+    from agent_core.types import AgentEndEvent, AgentStartEvent
+    from cli.interactive.components import RunDividerComponent
+
+    now = 100.0
+
+    def clock() -> float:
+        return now
+
+    ml = MessageListComponent()
+    st = StatusComponent()
+    reg = ToolRendererRegistry()
+    router = EventRouter(ml, st, reg, clock=clock)
+    router.route(AgentStartEvent())
+    now = 169.0
+    router.route(AgentEndEvent(messages=[]))
+
+    assert any(isinstance(c, RunDividerComponent) for c in ml.children)
+    rendered = "\n".join(ml.render(80))
+    assert "Worked for 1m 09s" in rendered

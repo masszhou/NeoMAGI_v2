@@ -28,6 +28,7 @@ from cli.interactive.components import (
     BranchSummaryComponent,
     CompactionSummaryComponent,
     CustomMessageComponent,
+    RunDividerComponent,
     StatusComponent,
     ToolExecutionComponent,
     ToolResultComponent,
@@ -258,6 +259,21 @@ def test_status_notification_lane_stays_below_status_row() -> None:
     assert rows[0].strip() == ""
     assert "● one" in rows[1]
     assert "  two" in rows[2]
+
+
+def test_run_divider_renders_elapsed_time_as_single_row() -> None:
+    rows = RunDividerComponent(elapsed_ms=69_000).render(80)
+
+    assert len(rows) == 1
+    assert "Worked for 1m 09s" in rows[0]
+    assert all("\n" not in row and "\r" not in row for row in rows)
+
+
+def test_run_divider_narrow_width_does_not_overflow() -> None:
+    rows = RunDividerComponent(elapsed_ms=69_000).render(12)
+
+    assert len(rows) == 1
+    assert all("\n" not in row and "\r" not in row for row in rows)
 
 
 def test_status_split_renderers_support_bottom_notification_lane() -> None:

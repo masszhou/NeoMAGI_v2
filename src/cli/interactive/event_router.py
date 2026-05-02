@@ -17,6 +17,8 @@ architecture acceptance line 1163 ("contract violation must surface").
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Any
 
 from agent_core.types import (
@@ -71,6 +73,7 @@ from .components import (
     CompactionSummaryComponent,
     CustomMessageComponent,
     MessageListComponent,
+    RunDividerComponent,
     StatusComponent,
     ToolExecutionComponent,
     ToolResultComponent,
@@ -102,10 +105,13 @@ class EventRouter:
         message_list: MessageListComponent,
         status: StatusComponent,
         tool_registry: ToolRendererRegistry,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._messages = message_list
         self._status = status
         self._tool_registry = tool_registry
+        self._clock = clock
+        self._run_started_at: float | None = None
         self._active_assistant: AssistantMessageComponent | None = None
         self._tool_components: dict[str, ToolExecutionComponent] = {}
 
@@ -147,8 +153,11 @@ class EventRouter:
 
     def _route_lifecycle_event(self, event: Any) -> bool:
         if isinstance(event, AgentStartEvent):
+            self._run_started_at = self._clock()
             return True
         if isinstance(event, CoreAgentEndEvent | AgentEndEvent):
+            self._messages.append(RunDividerComponent(elapsed_ms=self._elapsed_ms()))
+            self._run_started_at = None
             return True
         if isinstance(event, TurnStartEvent):
             return True
@@ -269,6 +278,11 @@ class EventRouter:
         self._active_assistant.request_render()
         if isinstance(frame, StreamDone | StreamError):
             self._active_assistant = None
+
+    def _elapsed_ms(self) -> int | None:
+        if self._run_started_at is None:
+            return None
+        return max(0, int((self._clock() - self._run_started_at) * 1_000))
 
     # ------------------------------------------------------------------ #
     # Type guard so test suites can assert "no fall-through"              #
