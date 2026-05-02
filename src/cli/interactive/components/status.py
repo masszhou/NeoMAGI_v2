@@ -88,6 +88,7 @@ class StatusComponent(Component):
     def render(self, width: int) -> list[str]:
         rows: list[str] = []
         bits: list[str] = []
+        notifications = self._alive_notifications()
         steering = len(self.queue.steering)
         follow_up = len(self.queue.follow_up)
         if steering or follow_up:
@@ -97,9 +98,16 @@ class StatusComponent(Component):
         if self.auto_retry is not None:
             attempt, mx = self.auto_retry
             bits.append(f"auto-retry {attempt}/{mx}")
-        if bits:
-            rows.append(pad_to_width("\x1b[2m" + "  ·  ".join(bits) + "\x1b[0m", width))
-        for note in self._alive_notifications():
+        status_text = "  ·  ".join(bits)
+        if not status_text and not notifications:
+            return []
+        rows.append(
+            pad_to_width(
+                f"\x1b[2m{status_text}\x1b[0m" if status_text else "",
+                width,
+            )
+        )
+        for note in notifications:
             color = {
                 "info": "\x1b[36m",
                 "warn": "\x1b[33m",

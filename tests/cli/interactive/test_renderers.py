@@ -161,16 +161,17 @@ def test_status_notifications_render_with_color_marker() -> None:
     assert "hello" in out
 
 
-def test_status_multiline_notifications_render_as_separate_rows() -> None:
+def test_status_notification_lane_stays_below_status_row() -> None:
     s = StatusComponent()
     s.push_notification("one\ntwo", level="info")
 
     rows = s.render(40)
 
-    assert len(rows) == 2
+    assert len(rows) == 3
     assert all("\n" not in row for row in rows)
-    assert "● one" in rows[0]
-    assert "  two" in rows[1]
+    assert rows[0].strip() == ""
+    assert "● one" in rows[1]
+    assert "  two" in rows[2]
 
 
 def test_generic_tool_renderer_includes_duration_after_end() -> None:
