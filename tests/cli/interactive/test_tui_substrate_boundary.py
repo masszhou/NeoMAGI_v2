@@ -4,7 +4,14 @@ import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-FORBIDDEN_PROTOCOL_MODULES = ("agent_core", "cli.core", "cli.tools", "policy", "ai_provider")
+FORBIDDEN_PROTOCOL_MODULES = (
+    "agent_core",
+    "cli.core",
+    "cli.tools",
+    "policy",
+    "ai_provider",
+    "storage",
+)
 
 
 def _walk_py(root: Path):

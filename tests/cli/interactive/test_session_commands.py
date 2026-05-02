@@ -154,6 +154,49 @@ def test_tree_command_keeps_session_and_cache_affinity(tmp_path: Path) -> None:
         runtime.shutdown()
 
 
+def test_tree_output_labels_entry_and_session_ids(tmp_path: Path) -> None:
+    controller, runtime, manager = _controller_with_session_manager(tmp_path)
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+        first = manager.append_message(
+            session_id,
+            UserMessage(content=[TextContent(text="first")], timestamp=1),
+        )
+        second = manager.append_message(
+            session_id,
+            UserMessage(content=[TextContent(text="second")], timestamp=2),
+        )
+
+        _dispatch(controller, "/tree")
+
+        rendered = "\n".join(note.text for note in controller.status._notifications)  # noqa: SLF001
+        assert f"session={session_id.split('-', 1)[0]}" in rendered
+        assert f"entry={first.pi_export_id}" in rendered
+        assert f"entry={second.pi_export_id}" in rendered
+        assert "message:user" in rendered
+        assert "\u2190 active" in rendered
+        assert "parent=entry:" in rendered
+    finally:
+        runtime.shutdown()
+
+
+def test_tree_session_id_misuse_points_to_resume(tmp_path: Path) -> None:
+    controller, runtime, _manager = _controller_with_session_manager(tmp_path)
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+
+        _dispatch(controller, f"/tree {session_id.split('-', 1)[0]}")
+
+        assert any(
+            "unknown entry id" in note.text and "use /resume for session ids" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
+    finally:
+        runtime.shutdown()
+
+
 def test_command_mode_session_switch_commits_compact_summary(tmp_path: Path) -> None:
     out = io.StringIO()
     controller, runtime, manager = _controller_with_session_manager(
