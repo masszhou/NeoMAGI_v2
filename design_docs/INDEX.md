@@ -8,6 +8,7 @@ doc_id_assigned_at: 2026-04-24T01:57:07+02:00
 | Area | Entry |
 | --- | --- |
 | Architecture | `design_docs/architecture/INDEX.md` |
+| Data models | `design_docs/data_models/index.md` |
 | Decisions | `design_docs/decisions/INDEX.md` |
 | Glossary | `design_docs/GLOSSARY.md` |
 | Roadmap | `design_docs/roadmap/` |
