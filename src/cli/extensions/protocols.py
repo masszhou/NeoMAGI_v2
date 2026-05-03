@@ -8,7 +8,7 @@ Mirrors `extensions/types.ts:88–351, 1040–1259` (pi-mono `97a38bf6`):
   command-handler context.
 - :class:`MessageRenderer` — alias for custom-message renderers.
 - :class:`ExtensionAPI` — full mirror of the surface registered by an
-  extension's ``activate(api: ExtensionAPI)`` entry point.
+  extension's ``setup(api: ExtensionAPI)`` entry point.
 
 Protocol classes are not validated at the wire level; tests mock them.
 

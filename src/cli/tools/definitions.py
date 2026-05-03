@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from agent_core.runtime_types import AbortSignal, ToolUpdateCallback
 from agent_core.types import AgentToolResult, ToolExecutionMode
 from policy.types import PolicyDecision
 
-ToolName = Literal["read", "bash", "edit", "write", "grep", "find", "ls"]
+ToolName = str
+BUILTIN_TOOL_NAMES: frozenset[ToolName] = frozenset(
+    {"read", "bash", "edit", "write", "grep", "find", "ls"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +58,7 @@ def object_schema(
 
 
 __all__ = [
+    "BUILTIN_TOOL_NAMES",
     "ToolDefinition",
     "ToolExecutionContext",
     "ToolExecute",
