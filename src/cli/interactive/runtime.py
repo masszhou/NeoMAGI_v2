@@ -184,6 +184,10 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
             f"cache={cache}{durable}"
         )
 
+    @property
+    def cwd(self) -> Path:
+        return self._cwd
+
     def session_switch_summary(self, action: str) -> str:
         """Compact session-aware UI summary prepared for the TUI layer."""
 
@@ -335,16 +339,20 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
             return []
         return self._session_manager.session_tree(self._durable_session.id)
 
-    def export_jsonl(self, path: str | Path) -> Path:
+    def export_jsonl(self, path: str | Path, *, allowed_root: str | Path | None = None) -> Path:
         if self._session_manager is None or self._durable_session is None:
             raise RuntimeError("durable session manager is not available")
-        return self._session_manager.export_jsonl(self._durable_session.id, path)
+        return self._session_manager.export_jsonl(
+            self._durable_session.id,
+            path,
+            allowed_root=allowed_root,
+        )
 
-    def import_jsonl(self, path: str | Path) -> SessionRecord:
+    def import_jsonl(self, path: str | Path, *, allowed_root: str | Path | None = None) -> SessionRecord:
         self._ensure_idle_for_session_switch()
         if self._session_manager is None:
             raise RuntimeError("durable session manager is not available")
-        session = self._session_manager.import_jsonl(path)
+        session = self._session_manager.import_jsonl(path, allowed_root=allowed_root)
         self._activate_durable_session(session)
         return session
 

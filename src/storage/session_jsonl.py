@@ -20,8 +20,10 @@ def export_session_jsonl(
     repository: SessionRepository,
     session_id: str,
     path: str | Path,
+    *,
+    allowed_root: str | Path | None = None,
 ) -> Path:
-    target = Path(path)
+    target = _resolve_jsonl_path(path, allowed_root=allowed_root)
     if target.suffix != ".jsonl":
         raise SessionJsonlError("M6 export only supports .jsonl; structured exports are M10")
     session = repository.get_session(session_id)
@@ -47,8 +49,9 @@ def import_session_jsonl(
     path: str | Path,
     *,
     cwd_override: str | None = None,
+    allowed_root: str | Path | None = None,
 ) -> SessionRecord:
-    source = Path(path)
+    source = _resolve_jsonl_path(path, allowed_root=allowed_root)
     if source.suffix != ".jsonl":
         raise SessionJsonlError("M6 import only supports .jsonl; structured imports are M10")
     header, entries = _load_migrated_jsonl(source)
@@ -61,6 +64,24 @@ def import_session_jsonl(
     for entry in entries:
         repository.append_entry(session.id, entry)
     return repository.get_session(session.id) or session
+
+
+def _resolve_jsonl_path(path: str | Path, *, allowed_root: str | Path | None) -> Path:
+    raw = Path(path).expanduser()
+    if allowed_root is None:
+        return raw
+    try:
+        root = Path(allowed_root).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise SessionJsonlError(f"session JSONL allowed root is unavailable: {allowed_root}") from exc
+    if not root.is_dir():
+        raise SessionJsonlError(f"session JSONL allowed root is not a directory: {allowed_root}")
+    target = raw.resolve(strict=False) if raw.is_absolute() else (root / raw).resolve(strict=False)
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise SessionJsonlError(f"session JSONL path escapes allowed root: {path}") from exc
+    return target
 
 
 def _load_migrated_jsonl(source: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:

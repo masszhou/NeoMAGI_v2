@@ -72,10 +72,36 @@ def test_m6_session_commands_are_registered_as_live_handlers() -> None:
     registry = SlashCommandRegistry()
     register_builtin_commands(registry)
 
-    for name in ("session", "name", "resume", "fork", "clone", "tree"):
+    for name in ("session", "name", "resume", "fork", "clone", "tree", "export", "import"):
         command = registry.get(name)
         assert command is not None
         assert command.stub_milestone is None
+
+
+def test_export_import_commands_stay_inside_runtime_cwd(tmp_path: Path) -> None:
+    controller, runtime, manager = _controller_with_session_manager(tmp_path)
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+        manager.append_message(
+            session_id,
+            UserMessage(content=[TextContent(text="export me")], timestamp=1),
+        )
+
+        _dispatch(controller, "/export ../escape.jsonl")
+        _dispatch(controller, f"/export {tmp_path / 'absolute.jsonl'}")
+        _dispatch(controller, "/export ~/session.jsonl")
+        _dispatch(controller, "/export sessions/session.jsonl")
+        _dispatch(controller, "/import ../escape.jsonl")
+
+        notices = [note.text for note in controller.status._notifications]  # noqa: SLF001
+        assert any("/export path must stay inside" in text for text in notices)
+        assert sum("/export path must be relative" in text for text in notices) == 2
+        assert any("/import path must stay inside" in text for text in notices)
+        assert (tmp_path / "sessions" / "session.jsonl").exists()
+        assert not (tmp_path.parent / "escape.jsonl").exists()
+    finally:
+        runtime.shutdown()
 
 
 def test_session_name_and_resume_commands_dispatch(tmp_path: Path) -> None:

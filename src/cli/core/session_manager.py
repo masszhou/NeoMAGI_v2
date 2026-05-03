@@ -481,12 +481,23 @@ class SessionManager:
         self.resume_session(session_id)
         return self.repository.list_tool_executions(session_id)
 
-    def export_jsonl(self, session_id: str, path: str | Path) -> Path:
+    def export_jsonl(
+        self,
+        session_id: str,
+        path: str | Path,
+        *,
+        allowed_root: str | Path | None = None,
+    ) -> Path:
         self.resume_session(session_id)
-        return export_session_jsonl(self.repository, session_id, path)
+        return export_session_jsonl(self.repository, session_id, path, allowed_root=allowed_root)
 
-    def import_jsonl(self, path: str | Path) -> SessionRecord:
-        return import_session_jsonl(self.repository, path)
+    def import_jsonl(
+        self,
+        path: str | Path,
+        *,
+        allowed_root: str | Path | None = None,
+    ) -> SessionRecord:
+        return import_session_jsonl(self.repository, path, allowed_root=allowed_root)
 
     def _entry_payload(
         self,

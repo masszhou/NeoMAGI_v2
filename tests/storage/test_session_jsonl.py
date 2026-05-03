@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from ai_provider.types import TextContent, ToolResultMessage, UserMessage
 from cli.core.session_manager import SessionManager
 from storage.in_memory_session_repository import InMemorySessionRepository
+from storage.session_jsonl import SessionJsonlError
 
 
 def test_session_jsonl_exports_and_imports_round_trip(tmp_path: Path) -> None:
@@ -101,3 +104,21 @@ def test_session_jsonl_round_trip_preserves_read_tool_line_details(
     assert message.details["lineEnd"] == 2
     assert message.details["totalLines"] == 4
     assert message.details["outputLines"] == 2
+
+
+def test_session_jsonl_allowed_root_blocks_path_escape(tmp_path: Path) -> None:
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    session = manager.new_session(tmp_path)
+    manager.append_message(
+        session.id,
+        UserMessage(content=[TextContent(text="persist me")], timestamp=1),
+    )
+
+    exported = manager.export_jsonl(session.id, "session.jsonl", allowed_root=tmp_path)
+
+    assert exported == tmp_path / "session.jsonl"
+    with pytest.raises(SessionJsonlError, match="escapes allowed root"):
+        manager.export_jsonl(session.id, "../escape.jsonl", allowed_root=tmp_path)
+    with pytest.raises(SessionJsonlError, match="escapes allowed root"):
+        manager.import_jsonl(tmp_path.parent / "session.jsonl", allowed_root=tmp_path)
