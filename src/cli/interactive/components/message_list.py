@@ -53,10 +53,17 @@ class MessageListComponent(Component):
         )
 
     def render_uncommitted_tail(self, width: int, budget: int) -> list[str]:
-        groups = [
-            child.render(width)
-            for child in self._container.children[self._committed_children_count :]
-        ]
+        children = self._container.children
+        groups = []
+        for index, child in enumerate(children[self._committed_children_count :]):
+            absolute_index = self._committed_children_count + index
+            groups.append(
+                _render_uncommitted_child(
+                    child,
+                    width,
+                    is_last_child=absolute_index == len(children) - 1,
+                )
+            )
         return self._render_tail_rows(groups, budget)
 
     def commit_ready_rows(self, width: int) -> list[str]:
@@ -64,6 +71,9 @@ class MessageListComponent(Component):
         children = self._container.children
         while self._committed_children_count < len(children):
             child = children[self._committed_children_count]
+            is_last_child = self._committed_children_count == len(children) - 1
+            if is_last_child and getattr(child, "defer_commit_while_last", False):
+                break
             if not _is_committable(child):
                 break
             rows.extend(child.render(width))
@@ -140,6 +150,19 @@ def _is_committable(child: Component) -> bool:
 
 def _is_live_component(child: Component) -> bool:
     return hasattr(child, "completed") or hasattr(child, "ended")
+
+
+def _render_uncommitted_child(
+    child: Component,
+    width: int,
+    *,
+    is_last_child: bool,
+) -> list[str]:
+    if is_last_child and getattr(child, "defer_commit_while_last", False):
+        render_deferred = getattr(child, "render_deferred", None)
+        if callable(render_deferred):
+            return render_deferred(width)
+    return child.render(width)
 
 
 __all__ = ["MessageListComponent"]

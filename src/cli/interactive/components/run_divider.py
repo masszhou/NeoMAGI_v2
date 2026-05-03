@@ -8,9 +8,12 @@ from tui.width import pad_to_width, truncate_to_width, visible_width
 _DIM = "\x1b[2m"
 _RESET = "\x1b[0m"
 _RULE = "─"
+_DEFERRED_MAX_WIDTH = 36
 
 
 class RunDividerComponent(Component):
+    defer_commit_while_last = True
+
     def __init__(self, *, elapsed_ms: int | None = None) -> None:
         super().__init__()
         self.elapsed_ms = elapsed_ms
@@ -29,6 +32,25 @@ class RunDividerComponent(Component):
         left = remaining // 2
         right = remaining - left
         row = f"{_DIM}{_RULE * left}{label}{_RULE * right}{_RESET}"
+        return self.enforce_width([pad_to_width(row, width)], width)
+
+    def render_deferred(self, width: int) -> list[str]:
+        if width <= 0:
+            return [""]
+        target_width = min(width, _DEFERRED_MAX_WIDTH)
+        label = truncate_to_width(
+            _divider_label(self.elapsed_ms).strip(),
+            max(1, target_width - 4),
+        )
+        label_width = visible_width(label)
+        remaining = max(0, target_width - label_width - 2)
+        if remaining <= 0:
+            row_text = label
+        else:
+            left = max(1, remaining // 2)
+            right = max(1, remaining - left)
+            row_text = f"{_RULE * left} {label} {_RULE * right}"
+        row = f"{_DIM}{row_text}{_RESET}"
         return self.enforce_width([pad_to_width(row, width)], width)
 
 

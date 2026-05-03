@@ -39,6 +39,7 @@ from cli.interactive.tool_renderer_registry import (
     ToolRendererRegistry,
     generic_tool_renderer,
 )
+from tui.width import strip_ansi, visible_width
 
 
 def _zero_usage() -> Usage:
@@ -336,6 +337,15 @@ def test_run_divider_narrow_width_does_not_overflow() -> None:
 
     assert len(rows) == 1
     assert all("\n" not in row and "\r" not in row for row in rows)
+
+
+def test_run_divider_deferred_render_avoids_full_width_rule() -> None:
+    rows = RunDividerComponent(elapsed_ms=6_000).render_deferred(80)
+
+    assert len(rows) == 1
+    assert "Worked for 6s" in rows[0]
+    assert "─" in strip_ansi(rows[0])
+    assert visible_width(rows[0].rstrip()) <= 36
 
 
 def test_status_split_renderers_support_bottom_notification_lane() -> None:

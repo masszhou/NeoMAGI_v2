@@ -659,19 +659,46 @@ def test_command_session_messages_split_multiline_output_into_crlf_rows() -> Non
     assert c.status._notifications[0].text == "root (+2 lines)"  # noqa: SLF001
 
 
-def test_command_resize_next_committed_divider_uses_new_width() -> None:
+def test_command_resize_redraws_live_run_divider() -> None:
     app, c, out = _make_command_controller()
     app._cols, app._rows = 80, 12  # noqa: SLF001
-    app.simulate_resize(40, 12)
+    c.dispatch_event(AgentEndEvent(messages=[]))
+    assert "Run complete" not in out.getvalue()
     app.step()
+    initial_rows = [
+        strip_ansi(row)
+        for row in out.getvalue().split("\r\n")
+        if "Run complete" in row
+    ]
+    assert initial_rows
+    assert all(visible_width(row.rstrip()) < 80 for row in initial_rows)
     out.truncate(0)
     out.seek(0)
 
-    c.dispatch_event(AgentEndEvent(messages=[]))
+    app.simulate_resize(40, 12)
+    app.step()
 
-    rows = [strip_ansi(row) for row in out.getvalue().split("\r\n") if "Run complete" in row]
+    rows = [
+        strip_ansi(row)
+        for row in out.getvalue().split("\r\n")
+        if "Run complete" in row
+    ]
     assert rows
     assert all(visible_width(row.rstrip()) <= 40 for row in rows)
+
+
+def test_command_run_divider_commits_when_next_message_arrives() -> None:
+    _, c, out = _make_command_controller()
+    c.dispatch_event(AgentEndEvent(messages=[]))
+    assert "Run complete" not in out.getvalue()
+
+    c.dispatch_event(
+        MessageStartEvent(message=UserMessage(content="next prompt", timestamp=1))
+    )
+
+    written = out.getvalue()
+    assert "Run complete" in written
+    assert "next prompt" in written
 
 
 def test_scrolled_message_history_keeps_cursor_on_editor_row() -> None:
