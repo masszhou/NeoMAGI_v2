@@ -11,9 +11,11 @@ from typing import Any
 
 from ai_provider.types import ToolResultMessage
 from tui.component import Component
-from tui.width import wrap_to_width
+from tui.width import truncate_to_width, wrap_to_width
 
 from ..transcript import TOOL_ERROR, TOOL_OK, blank, child_rows, header_row, row
+
+_READ_GUTTER_MIN_WIDTH = 50
 
 
 def _summarise_blocks(message: ToolResultMessage) -> str:
@@ -67,10 +69,20 @@ class ToolResultComponent(Component):
         lines = body.split("\n")
         file_lines = lines[:output_lines]
         notice_lines = lines[output_lines:]
-        rows = child_rows(file_lines, width, max_lines=1 if width < 50 else 4)
+        if width < _READ_GUTTER_MIN_WIDTH:
+            rows = child_rows(file_lines, width, max_lines=1)
+        else:
+            rows = _read_gutter_rows(
+                file_lines,
+                width,
+                line_start=line_start,
+                line_end=line_end,
+            )
         for line in notice_lines:
             for wrapped_line in wrap_to_width(line, max(1, width - 2)) or [""]:
-                rows.append(row(f"    {wrapped_line}", width))
+                rows.append(
+                    row(f"  {truncate_to_width(wrapped_line, width - 2)}", width)
+                )
         return rows
 
 
@@ -93,6 +105,34 @@ def _int_detail(details: dict[str, Any], key: str) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _read_gutter_rows(
+    file_lines: list[str],
+    width: int,
+    *,
+    line_start: int,
+    line_end: int,
+) -> list[str]:
+    rows: list[str] = []
+    gutter_width = max(len(str(line_end)), len(str(line_start)))
+    for index, line in enumerate(file_lines, start=line_start):
+        prefix = f"  {index:>{gutter_width}} | "
+        available = max(1, width - len(prefix))
+        wrapped = wrap_to_width(line, available) or [""]
+        for wrapped_index, wrapped_line in enumerate(wrapped):
+            current_prefix = prefix if wrapped_index == 0 else " " * len(prefix)
+            rows.append(
+                row(
+                    current_prefix
+                    + truncate_to_width(
+                        wrapped_line,
+                        max(1, width - len(current_prefix)),
+                    ),
+                    width,
+                )
+            )
+    return rows
 
 
 def _tool_label(message: ToolResultMessage) -> str:

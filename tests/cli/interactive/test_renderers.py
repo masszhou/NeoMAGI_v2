@@ -107,7 +107,7 @@ def test_tool_result_renders_error_header_when_is_error() -> None:
     assert "└ boom" in out
 
 
-def test_read_tool_result_renders_compact_path_range_preview() -> None:
+def test_read_tool_result_renders_line_number_gutter_when_wide() -> None:
     msg = ToolResultMessage(
         role="toolResult",
         toolCallId="c1",
@@ -127,11 +127,10 @@ def test_read_tool_result_renders_compact_path_range_preview() -> None:
     out = "\n".join(ToolResultComponent(msg).render(80))
 
     assert "README.md:10-12" in out
-    assert "└ ten" in out
-    assert "eleven" in out
-    assert "twelve" in out
+    assert "10 | ten" in out
+    assert "11 | eleven" in out
+    assert "12 | twelve" in out
     assert "[2 more lines in file.]" in out
-    assert "10 | ten" not in out
 
 
 def test_read_tool_result_without_line_metadata_uses_generic_renderer() -> None:
@@ -388,6 +387,33 @@ def test_registered_read_renderer_keeps_partial_preview() -> None:
     comp.update({"content": [{"type": "text", "text": "partial"}]})
     out = "\n".join(comp.render(60))
     assert "partial" in out
+
+
+def test_registered_read_renderer_uses_compact_final_preview() -> None:
+    comp = ToolExecutionComponent(
+        tool_call_id="c1",
+        tool_name="read",
+        args={"path": "README.md"},
+        registry=ToolRendererRegistry(),
+    )
+    comp.end(
+        {
+            "content": [{"type": "text", "text": "first\nsecond"}],
+            "details": {
+                "path": "README.md",
+                "lineStart": 1,
+                "lineEnd": 2,
+                "outputLines": 2,
+            },
+        },
+        is_error=False,
+    )
+
+    out = "\n".join(comp.render(80))
+
+    assert "⏺ Read README.md:1-2" in out
+    assert "└ first" in out
+    assert "1 | first" not in out
 
 
 def test_edit_renderer_shows_path_stats_and_small_diff_preview() -> None:
