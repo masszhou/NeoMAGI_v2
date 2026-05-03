@@ -9,6 +9,23 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+_SUBPROCESS_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "TERM",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "TMPDIR",
+    }
+)
+_DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
 
 @dataclass(frozen=True, slots=True)
 class SandboxResult:
@@ -48,10 +65,22 @@ async def _spawn_shell(command: str, cwd: Path) -> asyncio.subprocess.Process:
     return await asyncio.create_subprocess_shell(
         command,
         cwd=str(cwd),
+        env=sandbox_environment(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
+
+
+def sandbox_environment(cwd: Path) -> dict[str, str]:
+    env = {
+        key: value
+        for key in _SUBPROCESS_ENV_ALLOWLIST
+        if isinstance((value := os.environ.get(key)), str)
+    }
+    env.setdefault("PATH", _DEFAULT_PATH)
+    env["PWD"] = str(cwd)
+    return env
 
 
 async def _read_output(
@@ -139,4 +168,4 @@ def _kill_process_group(process: asyncio.subprocess.Process) -> None:
         process.kill()
 
 
-__all__ = ["SandboxResult", "run_shell_command"]
+__all__ = ["SandboxResult", "run_shell_command", "sandbox_environment"]

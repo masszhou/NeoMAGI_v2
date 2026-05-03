@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import stat
 import time
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,10 @@ from ai_provider.runtime_types import SimpleStreamOptions
 from ai_provider.tools import ToolArgumentValidationError, validate_tool_arguments
 from ai_provider.types import Context, Model, TextContent, ToolResultMessage
 from cli.core.session_types import BashExecutionMessage
+from cli.core.session_manager import SessionManager
 from cli.interactive.runtime import InteractiveAgentRuntime
 from cli.tools import (
+    RuntimeArtifactStore,
     create_all_tool_definitions,
     create_coding_tools,
     create_read_only_tools,
@@ -362,6 +365,53 @@ def test_bash_success_block_and_audit(tmp_path: Path) -> None:
         assert [record.policy_decision.effect for record in audit.records] == ["allow", "block"]
 
     asyncio.run(run())
+
+
+def test_tool_audit_args_are_summarized_and_redacted(tmp_path: Path) -> None:
+    async def run() -> None:
+        audit = InMemoryAuditSink()
+        tools = _tool_map(create_coding_tools(tmp_path, audit_sink=audit))
+        secret = "sk-" + ("A" * 40)
+
+        await tools["bash"].execute(
+            "bash-audit",
+            {"command": f"echo {secret} $OPENAI_API_KEY", "timeout": 1},
+            None,
+            None,
+        )
+        await tools["write"].execute(
+            "write-audit",
+            {"path": "secret.txt", "content": "super-secret-content"},
+            None,
+            None,
+        )
+
+        bash_args = audit.records[0].args
+        write_args = audit.records[1].args
+        assert "<redacted:" in bash_args["commandPreview"]
+        assert secret not in bash_args["commandPreview"]
+        assert "$OPENAI_API_KEY" in bash_args["commandPreview"]
+        assert bash_args["commandLength"] == len(f"echo {secret} $OPENAI_API_KEY")
+        assert audit.records[0].redaction_status == "applied"
+        assert write_args == {
+            "path": "secret.txt",
+            "contentBytes": len("super-secret-content"),
+        }
+        assert "super-secret-content" not in str(write_args)
+        assert audit.records[1].redaction_status == "applied"
+
+    asyncio.run(run())
+
+
+def test_runtime_artifact_store_uses_private_permissions() -> None:
+    store = RuntimeArtifactStore(f"pytest-{time.time_ns()}")
+    try:
+        output = store.write_output("tool-call", "full output")
+
+        assert stat.S_IMODE(store.root.stat().st_mode) == 0o700
+        assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    finally:
+        store.cleanup()
 
 
 def test_wrapped_tools_validate_schema_before_policy(tmp_path: Path) -> None:

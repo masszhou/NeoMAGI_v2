@@ -14,8 +14,13 @@ DEFAULT_TIMEOUT_SECONDS = 120
 MAX_TIMEOUT_SECONDS = 600
 
 _DESTRUCTIVE_PATTERNS = (
-    re.compile(r"(^|[;&|]\s*)rm\s+[^;&|]*\s(-[^\s]*r[^\s]*f|-f[^\s]*r)", re.IGNORECASE),
-    re.compile(r"(^|[;&|]\s*)rm\s+-rf\s+(/|\*|\.($|/|\s))", re.IGNORECASE),
+    re.compile(
+        r"(^|[;&|]\s*)rm\s+"
+        r"(?=[^;&|]*(?:--recursive|-r|-[^\s;&|]*r[^\s;&|]*))"
+        r"(?=[^;&|]*(?:--force|-f|-[^\s;&|]*f[^\s;&|]*))",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(^|[;&|]\s*)rm\s+[^;&|]*--no-preserve-root\b", re.IGNORECASE),
     re.compile(r"(^|[;&|]\s*)mkfs(\.|$|\s)", re.IGNORECASE),
     re.compile(r"(^|[;&|]\s*)dd\s+[^;&|]*\bof=/dev/", re.IGNORECASE),
     re.compile(r":\s*\(\)\s*\{\s*:\s*\|\s*:\s*;", re.IGNORECASE),
@@ -92,7 +97,7 @@ def decide_shell_access(request: PolicyRequest) -> PolicyDecision:
     if output_block:
         return PolicyDecision.block(output_block, audit_tags=["shell:path:block"])
 
-    normalized_args = dict(timeout_decision.normalized_args)
+    normalized_args = dict(timeout_decision.normalized_args or {})
     normalized_args["command"] = command
     return PolicyDecision.allow(
         normalized_args=normalized_args,
@@ -124,6 +129,8 @@ def _blocked_command_reason(command: str) -> str | None:
 
 def _blocked_command(command: str, *, depth: int = 0) -> _BlockedCommand | None:
     tokens = _split_command(command)
+    if tokens is None:
+        return _BlockedCommand("shell command cannot be parsed safely")
     blocked = _top_level_block(command, tokens)
     if blocked is not None:
         return blocked
@@ -166,6 +173,8 @@ def _nested_block(tokens: list[str], depth: int) -> _BlockedCommand | None:
 
 def _blocked_output_path_reason(command: str, cwd: Path) -> str | None:
     tokens = _split_command(command)
+    if tokens is None:
+        return "shell command cannot be parsed safely"
     for index, token in enumerate(tokens):
         reason = _blocked_output_option_reason(tokens, index, cwd)
         if reason:
@@ -219,8 +228,8 @@ def _path_escapes(raw: str, cwd: Path) -> bool:
 def _is_privileged_path(token: str) -> bool:
     if not token.startswith("/"):
         return False
-    path = token.rstrip("/").split("=", 1)[-1]
-    return any(path == base or path.startswith(f"{base}/") for base in _PRIVILEGED_PATHS)
+    path = token.split("=", 1)[-1].rstrip("/") or "/"
+    return path == "/" or any(path == base or path.startswith(f"{base}/") for base in _PRIVILEGED_PATHS)
 
 
 def _shell_wrapper_script(tokens: list[str]) -> str | None:
@@ -287,11 +296,11 @@ def _compact_redirect_target(token: str) -> str | None:
     return target or None
 
 
-def _split_command(command: str) -> list[str]:
+def _split_command(command: str) -> list[str] | None:
     try:
         return shlex.split(command, posix=True)
     except ValueError:
-        return command.split()
+        return None
 
 
 __all__ = [

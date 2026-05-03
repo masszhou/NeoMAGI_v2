@@ -112,8 +112,7 @@ def _retain_full_output(
 ) -> str | None:
     if not truncated or artifact_store is None:
         return None
-    path = artifact_store.output_path(context.tool_call_id)
-    path.write_text(output, encoding="utf-8")
+    path = artifact_store.write_output(context.tool_call_id, output)
     return str(path)
 
 
