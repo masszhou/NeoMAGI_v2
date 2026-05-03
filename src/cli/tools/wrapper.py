@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -173,7 +174,8 @@ async def _run_or_block_tool(
         runtime_session_id=runtime.runtime_session_id,
         run_id=run_id,
     )
-    result = await maybe_await(definition.execute(decision.normalized_args or args, context, signal, on_update))
+    effective_args = args if decision.normalized_args is None else decision.normalized_args
+    result = await maybe_await(definition.execute(effective_args, context, signal, on_update))
     if not isinstance(result, AgentToolResult):
         return AgentToolResult.model_validate(result)
     return result
@@ -246,14 +248,19 @@ async def _audit(
     details = result.details if isinstance(result.details, dict) else {}
     ended = details.get("endedAt") if isinstance(details.get("endedAt"), str) else _now_iso()
     duration = details.get("durationMs")
+    try:
+        audit_args, redaction_status = _audit_args(definition.name, args, runtime.cwd)
+    except Exception:
+        audit_args = {"redactionError": "audit argument redaction failed"}
+        redaction_status = "failed"
     record = AuditRecord(
         runtimeSessionId=runtime.runtime_session_id,
         runId=run_id,
         actor=runtime.actor,
         toolName=definition.name,
         toolCallId=tool_call_id,
-        args=_redact_args(args),
-        policyDecision=decision,
+        args=audit_args,
+        policyDecision=_audit_policy_decision(decision),
         startedAt=started,
         endedAt=ended,
         durationMs=duration if isinstance(duration, int) else int((time.monotonic() - start_monotonic) * 1000),
@@ -262,6 +269,7 @@ async def _audit(
         affectedPaths=_affected_paths(details, decision),
         fullOutputPath=details.get("fullOutputPath") if isinstance(details.get("fullOutputPath"), str) else None,
         redactionTags=list(decision.redaction_tags),
+        redactionStatus=redaction_status,
         exceptionClass=type(exception).__name__ if exception else details.get("exceptionClass"),
         exceptionMessage=str(exception) if exception else details.get("exceptionMessage"),
     )
@@ -273,10 +281,18 @@ def _error_result(message: str, *, is_error: bool) -> AgentToolResult:
 
 
 def _decision_details(decision: PolicyDecision, run_id: str | None) -> dict[str, Any]:
-    details = decision.model_dump(by_alias=True, exclude_none=True)
+    details = decision.model_dump(
+        by_alias=True,
+        exclude_none=True,
+        exclude={"normalized_args"},
+    )
     if run_id is not None:
         details["runId"] = run_id
     return details
+
+
+def _audit_policy_decision(decision: PolicyDecision) -> PolicyDecision:
+    return decision.model_copy(update={"normalized_args": None})
 
 
 def _affected_paths(details: dict[str, Any], decision: PolicyDecision) -> list[str]:
@@ -290,9 +306,146 @@ def _affected_paths(details: dict[str, Any], decision: PolicyDecision) -> list[s
     return paths
 
 
-def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
-    blocked = {"api_key", "apiKey", "access_token", "refresh_token", "password", "secret"}
-    return {key: ("[redacted]" if key in blocked else value) for key, value in args.items()}
+_SECRET_KEY_RE = re.compile(r"token|secret|password|api[_-]?key|authorization|cookie", re.IGNORECASE)
+_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_/+\-]{24,}")
+_ENV_REF_RE = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)")
+_BASH_PREVIEW_LIMIT = 512
+
+
+def _audit_args(tool_name: str, args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], str]:
+    if tool_name == "bash":
+        return _bash_audit_args(args, cwd)
+    if tool_name == "read":
+        return _read_audit_args(args), "not_required"
+    if tool_name == "grep":
+        return _grep_audit_args(args), "applied" if isinstance(args.get("pattern"), str) else "not_required"
+    if tool_name == "find":
+        return _find_audit_args(args), "applied" if isinstance(args.get("pattern"), str) else "not_required"
+    if tool_name == "ls":
+        return _ls_audit_args(args), "not_required"
+    if tool_name == "write":
+        return _write_audit_args(args), "applied"
+    if tool_name == "edit":
+        return _edit_audit_args(args), "applied"
+    redacted, applied = _redact_secrets(args)
+    return _ensure_dict(redacted), "applied" if applied else "not_required"
+
+
+def _bash_audit_args(args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], str]:
+    command = args.get("command")
+    command_text = command if isinstance(command, str) else ""
+    preview, applied = _redacted_command_preview(command_text)
+    result: dict[str, Any] = {
+        "commandPreview": preview,
+        "commandLength": len(command_text),
+        "cwd": cwd,
+    }
+    if "timeout" in args:
+        result["timeout"] = args["timeout"]
+    return result, "applied" if applied else "not_required"
+
+
+def _redacted_command_preview(command: str) -> tuple[str, bool]:
+    env_refs: list[str] = []
+
+    def protect_env_ref(match: re.Match[str]) -> str:
+        env_refs.append(match.group(0))
+        return f"\x00ENV{len(env_refs) - 1}\x00"
+
+    protected = _ENV_REF_RE.sub(protect_env_ref, command)
+    applied = False
+
+    def redact_long_token(match: re.Match[str]) -> str:
+        nonlocal applied
+        applied = True
+        return f"<redacted:{len(match.group(0))}>"
+
+    redacted = _LONG_TOKEN_RE.sub(redact_long_token, protected)
+    for index, value in enumerate(env_refs):
+        redacted = redacted.replace(f"\x00ENV{index}\x00", value)
+    if len(redacted) > _BASH_PREVIEW_LIMIT:
+        applied = True
+        redacted = redacted[:_BASH_PREVIEW_LIMIT]
+    return redacted, applied
+
+
+def _read_audit_args(args: dict[str, Any]) -> dict[str, Any]:
+    return _select_args(args, "path", "offset", "limit")
+
+
+def _grep_audit_args(args: dict[str, Any]) -> dict[str, Any]:
+    result = _select_args(args, "path", "glob", "ignoreCase", "literal", "context", "limit")
+    if isinstance(args.get("pattern"), str):
+        result["patternLength"] = len(args["pattern"])
+    return result
+
+
+def _find_audit_args(args: dict[str, Any]) -> dict[str, Any]:
+    result = _select_args(args, "path", "limit")
+    if isinstance(args.get("pattern"), str):
+        result["patternLength"] = len(args["pattern"])
+    return result
+
+
+def _ls_audit_args(args: dict[str, Any]) -> dict[str, Any]:
+    return _select_args(args, "path", "limit")
+
+
+def _write_audit_args(args: dict[str, Any]) -> dict[str, Any]:
+    result = _select_args(args, "path")
+    content = args.get("content")
+    if isinstance(content, str):
+        result["contentBytes"] = len(content.encode("utf-8"))
+    return result
+
+
+def _edit_audit_args(args: dict[str, Any]) -> dict[str, Any]:
+    result = _select_args(args, "path")
+    edits = args.get("edits")
+    if isinstance(edits, list):
+        result["editsCount"] = len(edits)
+        result["oldTextBytes"] = sum(
+            len(item.get("oldText", "").encode("utf-8"))
+            for item in edits
+            if isinstance(item, dict) and isinstance(item.get("oldText"), str)
+        )
+        result["newTextBytes"] = sum(
+            len(item.get("newText", "").encode("utf-8"))
+            for item in edits
+            if isinstance(item, dict) and isinstance(item.get("newText"), str)
+        )
+    return result
+
+
+def _select_args(args: dict[str, Any], *keys: str) -> dict[str, Any]:
+    return {key: args[key] for key in keys if key in args}
+
+
+def _redact_secrets(value: Any) -> tuple[Any, bool]:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        applied = False
+        for key, item in value.items():
+            if _SECRET_KEY_RE.search(str(key)):
+                result[key] = "[redacted]"
+                applied = True
+                continue
+            result[key], item_applied = _redact_secrets(item)
+            applied = applied or item_applied
+        return result, applied
+    if isinstance(value, list):
+        items = []
+        applied = False
+        for item in value:
+            redacted, item_applied = _redact_secrets(item)
+            items.append(redacted)
+            applied = applied or item_applied
+        return items, applied
+    return value, False
+
+
+def _ensure_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {"value": value}
 
 
 def _now_iso() -> str:

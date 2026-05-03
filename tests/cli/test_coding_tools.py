@@ -207,6 +207,43 @@ def test_wrapped_tool_audit_keeps_captured_run_id_after_provider_changes(tmp_pat
     asyncio.run(run())
 
 
+def test_wrapped_tool_respects_empty_normalized_args(tmp_path: Path) -> None:
+    async def run() -> None:
+        async def execute(
+            args: dict[str, Any],
+            _context: Any,
+            _signal: Any,
+            _on_update: Any,
+        ) -> AgentToolResult:
+            return AgentToolResult(
+                content=[{"type": "text", "text": "ok"}],
+                details={"seenArgs": args},
+            )
+
+        tool = wrap_tool_definition(
+            ToolDefinition(
+                name="bash",
+                label="normalized",
+                description="normalized args test tool",
+                parameters=object_schema(
+                    {"raw": {"type": "string"}},
+                    required=["raw"],
+                ),
+                execute=execute,
+            ),
+            ToolRuntime(
+                cwd=str(tmp_path),
+                policy_decider=lambda _request: PolicyDecision.allow(normalized_args={}),
+            ),
+        )
+
+        result = await tool.execute("normalized-call", {"raw": "original"}, None, None)
+
+        assert result.details["seenArgs"] == {}
+
+    asyncio.run(run())
+
+
 def test_agent_model_tool_audit_run_ids_are_prompt_scoped(tmp_path: Path) -> None:
     async def run() -> None:
         (tmp_path / "a.txt").write_text("one", encoding="utf-8")

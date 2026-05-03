@@ -28,7 +28,7 @@ class PolicyRequest(_PolicyModel):
 class PolicyDecision(_PolicyModel):
     effect: PolicyEffect
     reason: str | None = None
-    normalized_args: dict[str, Any] = Field(default_factory=dict, alias="normalizedArgs")
+    normalized_args: dict[str, Any] | None = Field(default=None, alias="normalizedArgs")
     resolved_paths: dict[str, str] = Field(default_factory=dict, alias="resolvedPaths")
     audit_tags: list[str] = Field(default_factory=list, alias="auditTags")
     redaction_tags: list[str] = Field(default_factory=list, alias="redactionTags")
@@ -43,7 +43,7 @@ class PolicyDecision(_PolicyModel):
     ) -> PolicyDecision:
         return cls(
             effect="allow",
-            normalizedArgs=normalized_args or {},
+            normalizedArgs=normalized_args,
             resolvedPaths=resolved_paths or {},
             auditTags=audit_tags or [],
         )

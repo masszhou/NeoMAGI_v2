@@ -119,8 +119,11 @@ def _event_from_audit_record(
     entry_id: str | None,
     tool_execution_id: str | None,
 ) -> AuditEventRecord:
-    payload = record.model_dump(by_alias=True, exclude_none=True)
-    decision = payload.get("policyDecision")
+    decision = record.policy_decision.model_dump(
+        by_alias=True,
+        exclude_none=True,
+        exclude={"normalized_args"},
+    )
     return AuditEventRecord(
         id=new_db_uuid(),
         session_id=session_id,
@@ -130,10 +133,35 @@ def _event_from_audit_record(
         actor_type=record.actor,
         action=record.tool_name,
         target={"toolCallId": record.tool_call_id, "toolName": record.tool_name},
-        decision=decision if isinstance(decision, dict) else {"value": decision},
-        metadata=payload,
+        decision=decision,
+        metadata=_metadata_from_audit_record(record),
         occurred_at=record.ended_at or utc_now_iso(),
     )
+
+
+def _metadata_from_audit_record(record: AuditRecord) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "args": record.args,
+        "startedAt": record.started_at,
+        "endedAt": record.ended_at,
+        "durationMs": record.duration_ms,
+        "isError": record.is_error,
+        "redactionStatus": record.redaction_status,
+    }
+    optional_fields: tuple[tuple[str, Any], ...] = (
+        ("runtimeSessionId", record.runtime_session_id),
+        ("runId", record.run_id),
+        ("truncation", record.truncation),
+        ("affectedPaths", record.affected_paths),
+        ("fullOutputPath", record.full_output_path),
+        ("redactionTags", record.redaction_tags),
+        ("exceptionClass", record.exception_class),
+        ("exceptionMessage", record.exception_message),
+    )
+    for key, value in optional_fields:
+        if value not in (None, [], {}):
+            metadata[key] = value
+    return metadata
 
 
 def _jsonb(value: Any) -> Any:

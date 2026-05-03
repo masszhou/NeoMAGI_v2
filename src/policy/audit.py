@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .types import PolicyDecision
+
+RedactionStatus = Literal["not_required", "applied", "failed"]
 
 
 class _AuditModel(BaseModel):
@@ -30,7 +32,7 @@ class AuditRecord(_AuditModel):
     affected_paths: list[str] = Field(default_factory=list, alias="affectedPaths")
     full_output_path: str | None = Field(default=None, alias="fullOutputPath")
     redaction_tags: list[str] = Field(default_factory=list, alias="redactionTags")
-    redaction_status: str = Field(default="not_applied", alias="redactionStatus")
+    redaction_status: RedactionStatus = Field(default="not_required", alias="redactionStatus")
     exception_class: str | None = Field(default=None, alias="exceptionClass")
     exception_message: str | None = Field(default=None, alias="exceptionMessage")
 
@@ -65,4 +67,5 @@ __all__ = [
     "AuditSink",
     "CallbackAuditSink",
     "InMemoryAuditSink",
+    "RedactionStatus",
 ]
