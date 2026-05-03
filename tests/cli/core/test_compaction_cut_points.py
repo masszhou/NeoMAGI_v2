@@ -83,6 +83,45 @@ def test_cut_point_refuses_to_keep_orphan_tool_result(tmp_path: Path) -> None:
     assert selection.first_kept_entry_id == assistant.pi_export_id
 
 
+def test_cut_point_can_retain_safe_text_block_fragment(tmp_path: Path) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    session = manager.new_session(tmp_path)
+    entry = manager.append_message(
+        session.id,
+        UserMessage(
+            content=[
+                TextContent(text="old context " * 400),
+                TextContent(text="RECENT_MARKER keep this block"),
+            ],
+            timestamp=1,
+        ),
+    )
+    budget = estimate_entry_tokens(TextContent(text="RECENT_MARKER keep this block")) + 4
+
+    selection = select_cut_point(manager.entry_path(session.id), keep_recent_tokens=budget)
+
+    assert selection.ok is True
+    assert selection.first_kept_entry_id == entry.pi_export_id
+    assert selection.keep_from_index == 1
+    assert [fragment.text for fragment in selection.retained_fragments] == [
+        "RECENT_MARKER keep this block"
+    ]
+
+
+def test_cut_point_refuses_to_split_inside_single_text_block(tmp_path: Path) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    session = manager.new_session(tmp_path)
+    manager.append_message(
+        session.id,
+        UserMessage(content=[TextContent(text="one huge block " * 800)], timestamp=1),
+    )
+
+    selection = select_cut_point(manager.entry_path(session.id), keep_recent_tokens=20)
+
+    assert selection.ok is False
+    assert selection.retained_fragments == ()
+
+
 def test_file_extractor_uses_tool_execution_args_and_details(tmp_path: Path) -> None:
     manager = SessionManager(InMemorySessionRepository())
     session = manager.new_session(tmp_path)

@@ -24,6 +24,7 @@ from cli.core.session_types import (
     SessionTreeNode,
 )
 from cli.core.compaction.models import BranchSummaryResult, CompactionResult
+from cli.core.compaction.models import retained_fragments_from_details
 from storage.session_jsonl import export_session_jsonl, import_session_jsonl
 from storage.session_repository import (
     EntryRecord,
@@ -378,6 +379,18 @@ class SessionManager:
                 for entry_id, message in state.messages
                 if entry_id in keep_ids
             ]
+        fragments = retained_fragments_from_details(getattr(payload, "details", None))
+        if fragments:
+            fragments_by_source: dict[str, list] = {}
+            for fragment in fragments:
+                fragments_by_source.setdefault(fragment.source_entry_id, []).append(fragment)
+            state.messages = [
+                (
+                    entry_id,
+                    _apply_retained_fragments(message, fragments_by_source.get(entry_id)),
+                )
+                for entry_id, message in state.messages
+            ]
         state.messages.append(
             (
                 payload.id,
@@ -589,6 +602,15 @@ def _dump(value: Any) -> Any:
     if isinstance(value, TextContent):
         return value.model_dump(by_alias=True, exclude_none=True)
     return value
+
+
+def _apply_retained_fragments(message: Any, fragments: list[Any] | None) -> Any:
+    if not fragments or getattr(message, "role", None) not in {"user", "assistant"}:
+        return message
+    content = [TextContent(text=fragment.text) for fragment in fragments]
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"content": content})
+    return message
 
 
 __all__ = [

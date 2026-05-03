@@ -6,17 +6,25 @@ import inspect
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import Protocol
 
 from ai_provider.api_registry import stream_simple
 from ai_provider.runtime_types import SimpleStreamOptions, SimpleStreamFunction
 from ai_provider.types import Context, Model, TextContent, UserMessage
+from cli.core.session_types import MessageEntry
 from cli.core.session_manager import SessionManager
 from storage.session_repository import EntryRecord, SessionRecord
 
 from .cut_points import CutPointSelection, select_cut_point
 from .files import FileContext, extract_file_context
-from .models import BranchSummaryResult, CompactionFailure, CompactionResult
+from .models import (
+    BranchSummaryResult,
+    CompactionFailure,
+    CompactionResult,
+    RetainedFragment,
+    retained_fragments_from_details,
+)
 from .prompts import (
     build_branch_summary_prompt,
     build_compaction_prompt,
@@ -118,12 +126,13 @@ class CompactionService:
         force: bool = False,
     ) -> CompactionAppendResult:
         path = self._manager.entry_path(session_id)
-        selection = self._select(path, target_budget=target_budget, force=force)
+        hydrated_path = _hydrate_retained_fragments(path)
+        selection = self._select(hydrated_path, target_budget=target_budget, force=force)
         if not selection.ok or selection.keep_from_index is None or selection.first_kept_entry_id is None:
             raise CompactionFailure(selection.reason or "no-safe-cut")
 
-        summarized_entries = path[: selection.keep_from_index]
-        surviving_entries = path[selection.keep_from_index :]
+        summarized_entries = hydrated_path[: selection.keep_from_index]
+        surviving_entries = hydrated_path[selection.keep_from_index :]
         if not summarized_entries:
             raise CompactionFailure("no-history-to-compact")
 
@@ -133,13 +142,16 @@ class CompactionService:
             file_context=file_context,
             custom_instructions=custom_instructions,
             surviving_messages=[entry.payload for entry in surviving_entries],
+            retained_fragments=list(selection.retained_fragments),
         )
         summary = ensure_summary_outline(
             await self._generator.generate(prompt, model=self._model),
             fallback_context=prompt,
         )
-        tokens_after = estimate_text_tokens(summary) + sum(
-            estimate_entry_tokens(entry) for entry in surviving_entries
+        tokens_after = (
+            estimate_text_tokens(summary)
+            + sum(estimate_entry_tokens(entry) for entry in surviving_entries)
+            + sum(estimate_text_tokens(fragment.text) for fragment in selection.retained_fragments)
         )
         if target_budget is not None and tokens_after > target_budget:
             raise CompactionFailure(
@@ -155,6 +167,7 @@ class CompactionService:
             modifiedFiles=file_context.modified_files,
             reason=reason,
             fromHook=False,
+            retainedFragments=list(selection.retained_fragments),
         )
         entry = self._manager.append_compaction(session_id, result)
         return CompactionAppendResult(entry=entry, result=result)
@@ -290,6 +303,33 @@ def _left_branch_entries(
     while common < limit and old_path[common].pi_export_id == target_path[common].pi_export_id:
         common += 1
     return old_path[common:]
+
+
+def _hydrate_retained_fragments(path: list[EntryRecord]) -> list[EntryRecord]:
+    fragments_by_source: dict[str, list[RetainedFragment]] = {}
+    for entry in path:
+        if getattr(entry.payload, "type", None) != "compaction":
+            continue
+        for fragment in retained_fragments_from_details(getattr(entry.payload, "details", None)):
+            fragments_by_source.setdefault(fragment.source_entry_id, []).append(fragment)
+
+    if not fragments_by_source:
+        return path
+
+    hydrated: list[EntryRecord] = []
+    for entry in path:
+        fragments = fragments_by_source.get(entry.pi_export_id)
+        if not fragments or not isinstance(entry.payload, MessageEntry):
+            hydrated.append(entry)
+            continue
+        message = entry.payload.message
+        if message.role not in {"user", "assistant"}:
+            hydrated.append(entry)
+            continue
+        content = [TextContent(text=fragment.text) for fragment in fragments]
+        updated_message = message.model_copy(update={"content": content})
+        hydrated.append(replace(entry, payload=entry.payload.model_copy(update={"message": updated_message})))
+    return hydrated
 
 
 __all__ = [

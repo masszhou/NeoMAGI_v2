@@ -27,6 +27,7 @@ def build_compaction_prompt(
     file_context: FileContext,
     custom_instructions: str | None = None,
     surviving_messages: list[Any] | None = None,
+    retained_fragments: list[Any] | None = None,
 ) -> str:
     lines = [
         "Summarize the older durable session context for a coding agent.",
@@ -45,6 +46,14 @@ def build_compaction_prompt(
                 "",
                 "Surviving context to preserve:",
                 _messages_text(surviving_messages),
+            ]
+        )
+    if retained_fragments:
+        lines.extend(
+            [
+                "",
+                "Retained fragments to preserve exactly:",
+                _fragments_text(retained_fragments),
             ]
         )
     return "\n".join(lines)
@@ -129,6 +138,16 @@ def _messages_text(messages: list[Any]) -> str:
 
 def _entries_text(entries: list[Any]) -> str:
     return "\n\n".join(_dump_message(getattr(entry, "payload", entry)) for entry in entries)
+
+
+def _fragments_text(fragments: list[Any]) -> str:
+    lines: list[str] = []
+    for fragment in fragments:
+        source_id = getattr(fragment, "source_entry_id", None)
+        role = getattr(fragment, "role", None)
+        text = getattr(fragment, "text", "")
+        lines.append(f"sourceEntryId={source_id} role={role}\n{text}")
+    return "\n\n".join(lines)
 
 
 def _dump_message(value: Any) -> str:

@@ -31,6 +31,7 @@ class InMemorySessionRepository(SessionRepository):
         self.sessions: dict[str, SessionRecord] = {}
         self.entries: dict[str, list[EntryRecord]] = {}
         self.tool_executions: list[ToolExecutionRecord] = []
+        self._TEST_ONLY_fail_on_leaf_update: bool = False
 
     def create_session(
         self,
@@ -119,9 +120,20 @@ class InMemorySessionRepository(SessionRepository):
             context_participates=_context_participates(entry),
             created_at=utc_now_iso(),
         )
-        self.entries.setdefault(session_id, []).append(record)
-        self.update_session_leaf(session_id, record.id)
-        self._apply_entry_side_effects(session_id, entry)
+        previous_entries = list(self.entries.setdefault(session_id, []))
+        previous_session = self.sessions[session_id]
+        previous_tools = list(self.tool_executions)
+        try:
+            self.entries[session_id].append(record)
+            if self._TEST_ONLY_fail_on_leaf_update:
+                raise RuntimeError("injected leaf update failure")
+            self.update_session_leaf(session_id, record.id)
+            self._apply_entry_side_effects(session_id, entry)
+        except Exception:
+            self.entries[session_id] = previous_entries
+            self.sessions[session_id] = previous_session
+            self.tool_executions = previous_tools
+            raise
         return record
 
     def get_entry(self, session_id: str, entry_id: str) -> EntryRecord | None:

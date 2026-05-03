@@ -10,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .tokens import estimate_entry_tokens
+from .models import RetainedFragment
+from .tokens import estimate_entry_tokens, estimate_text_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +22,7 @@ class CutPointSelection:
     tokens_before: int
     tokens_after: int
     reason: str | None = None
+    retained_fragments: tuple[RetainedFragment, ...] = ()
 
 
 def select_cut_point(
@@ -50,6 +52,14 @@ def select_cut_point(
     pinned = pinned_entry_ids or set()
     candidate = _suffix_index_under_budget(entries, weights, budget, pinned)
     if candidate is None:
+        fragment_selection = _split_entry_semantic_suffix(
+            entries[-1],
+            entry_index=len(entries) - 1,
+            budget=budget,
+            tokens_before=tokens_before,
+        )
+        if fragment_selection is not None:
+            return fragment_selection
         return _selection_failure(
             tokens_before=tokens_before,
             tokens_after=tokens_before,
@@ -140,6 +150,73 @@ def _suffix_index_under_budget(
     if index >= len(entries):
         return None
     return index
+
+
+def _split_entry_semantic_suffix(
+    entry: Any,
+    *,
+    entry_index: int,
+    budget: int,
+    tokens_before: int,
+) -> CutPointSelection | None:
+    units = _semantic_text_units(entry)
+    if len(units) < 2:
+        return None
+
+    retained: list[RetainedFragment] = []
+    tokens_after = 0
+    role = str(getattr(_entry_message(entry), "role", ""))
+    source_entry_id = _entry_pi_id(entry)
+    for content_index, text in reversed(units):
+        weight = estimate_text_tokens(text)
+        if weight > budget:
+            if not retained:
+                return None
+            break
+        if tokens_after + weight > budget:
+            break
+        retained.append(
+            RetainedFragment(
+                sourceEntryId=source_entry_id,
+                role=role,
+                contentIndex=content_index,
+                blockType="text",
+                text=text,
+            )
+        )
+        tokens_after += weight
+
+    if not retained:
+        return None
+    retained.reverse()
+    return CutPointSelection(
+        ok=True,
+        first_kept_entry_id=source_entry_id,
+        keep_from_index=entry_index + 1,
+        tokens_before=tokens_before,
+        tokens_after=tokens_after,
+        retained_fragments=tuple(retained),
+    )
+
+
+def _semantic_text_units(entry: Any) -> list[tuple[int, str]]:
+    message = _entry_message(entry)
+    role = getattr(message, "role", None)
+    if role == "toolResult":
+        return []
+    if role == "assistant" and _assistant_tool_call_ids([entry]):
+        return []
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return [(0, content)]
+    if not isinstance(content, list):
+        return []
+    units: list[tuple[int, str]] = []
+    for index, block in enumerate(content):
+        if getattr(block, "type", None) != "text":
+            return []
+        units.append((index, str(block.text)))
+    return units
 
 
 def _expand_to_tool_call_boundary(entries: list[Any], index: int) -> int:
