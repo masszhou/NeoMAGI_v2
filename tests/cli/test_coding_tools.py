@@ -29,6 +29,7 @@ from cli.tools.wrapper import ToolRuntime, default_policy_decider, wrap_tool_def
 from policy.audit import InMemoryAuditSink
 from policy.shell_policy import decide_shell_access
 from policy.types import PolicyDecision, PolicyRequest
+from storage.in_memory_session_repository import InMemorySessionRepository
 
 
 def _tool_map(tools):
@@ -634,6 +635,44 @@ def test_runtime_user_bash_audit_run_ids_are_independent(tmp_path: Path) -> None
     run_ids = [record.run_id for record in user_records]
     assert all(run_id and run_id.startswith("run-") for run_id in run_ids)
     assert run_ids[0] != run_ids[1]
+
+
+def test_runtime_user_bash_does_not_mutate_agent_state_when_durable_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    runtime = InteractiveAgentRuntime(cwd=tmp_path, session_manager=manager)
+    try:
+        writer = runtime._session_writer  # noqa: SLF001
+        assert writer is not None
+        original_record = writer.record
+
+        def fail_bash_end(event: Any) -> None:
+            if (
+                getattr(event, "type", None) == "message_end"
+                and getattr(getattr(event, "message", None), "role", None) == "bashExecution"
+            ):
+                raise RuntimeError("injected durable write failure")
+            original_record(event)
+
+        monkeypatch.setattr(writer, "record", fail_bash_end)
+
+        runtime.run_user_bash("pwd", exclude_from_context=True)
+        events = _drain_until_message_end(runtime)
+
+        assert all(
+            getattr(message, "role", None) != "bashExecution"
+            for message in runtime._agent.state.messages  # noqa: SLF001
+        )
+        assert any(
+            getattr(event, "type", None) == "message_end"
+            and getattr(event.message, "role", None) == "assistant"
+            and "injected durable write failure" in (event.message.error_message or "")
+            for event in events
+        )
+    finally:
+        runtime.shutdown()
 
 
 def test_runtime_read_only_profile_omits_mutation_tools(tmp_path: Path) -> None:

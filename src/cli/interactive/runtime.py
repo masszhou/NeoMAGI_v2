@@ -512,9 +512,9 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
                 timestamp=_now_ms(),
                 excludeFromContext=exclude_from_context,
             )
-            self._agent.state.messages.append(message)
             self._emit_session_event(MessageStartEvent(message=message))
             self._emit_session_event(MessageEndEvent(message=message))
+            self._agent.state.messages.append(message)
         except Exception as exc:
             self._enqueue_error(str(exc), generation)
         finally:
