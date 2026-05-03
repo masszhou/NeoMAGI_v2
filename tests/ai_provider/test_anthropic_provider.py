@@ -105,6 +105,39 @@ def test_anthropic_payload_omits_empty_system_prompt() -> None:
     assert "system" not in payload
 
 
+def test_anthropic_payload_filters_metadata_to_anthropic_fields() -> None:
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
+    payload = build_anthropic_messages_params(
+        model,
+        _context(),
+        StreamOptions(
+            cache_retention="none",
+            metadata={
+                "purpose": "session-summary",
+                "thinking_enabled": True,
+                "thinking_budget_tokens": 1234,
+                "user_id": "user-123",
+            },
+        ),
+    )
+
+    assert payload["metadata"] == {"user_id": "user-123"}
+
+
+def test_anthropic_payload_omits_unsupported_metadata() -> None:
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
+    payload = build_anthropic_messages_params(
+        model,
+        _context(),
+        StreamOptions(
+            cache_retention="none",
+            metadata={"purpose": "session-summary"},
+        ),
+    )
+
+    assert "metadata" not in payload
+
+
 def test_anthropic_stream_text_fixture() -> None:
     async def run() -> None:
         fixture = _stream_fixture("provider_stream_text")

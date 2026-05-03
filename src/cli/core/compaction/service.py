@@ -73,7 +73,6 @@ class ProviderSummaryGenerator:
                 cache_retention="none",
                 session_id=None,
                 api_key=api_key,
-                metadata={"purpose": "session-summary"},
             ),
         )
         async for _event in stream:

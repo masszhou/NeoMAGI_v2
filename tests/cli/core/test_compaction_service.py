@@ -4,8 +4,11 @@ import asyncio
 from pathlib import Path
 
 from ai_provider.model_registry import get_model
-from ai_provider.types import TextContent, UserMessage
-from cli.core.compaction.service import CompactionService
+from ai_provider.providers.faux import faux_assistant_message
+from ai_provider.runtime_types import SimpleStreamOptions
+from ai_provider.streaming import AssistantMessageEventStream
+from ai_provider.types import StreamDone, TextContent, UserMessage
+from cli.core.compaction.service import CompactionService, ProviderSummaryGenerator
 from cli.core.compaction.settings import BranchSummarySettings
 from cli.core.session_manager import SessionManager
 from cli.tools.context import convert_coding_messages_to_llm
@@ -42,6 +45,18 @@ class FakeSummaryGenerator:
     async def generate(self, prompt: str, *, model) -> str:
         self.prompts.append(prompt)
         return SUMMARY
+
+
+def _summary_stream(text: str):
+    def stream_fn(_model, _context, options: SimpleStreamOptions | None = None):
+        stream_fn.options.append(options)
+        stream = AssistantMessageEventStream()
+        message = faux_assistant_message(text, get_model("faux", "faux-1"))
+        stream.push(StreamDone(reason="stop", message=message))
+        return stream
+
+    stream_fn.options = []
+    return stream_fn
 
 
 def _service(manager: SessionManager, generator: FakeSummaryGenerator) -> CompactionService:
@@ -93,6 +108,19 @@ def test_compaction_service_appends_compaction_entry_without_intermediate_messag
     assert result.entry.payload.first_kept_entry_id == recent.pi_export_id
     assert result.entry.payload.from_hook is False
     assert " keep this detail   exactly" in generator.prompts[0]
+
+
+def test_provider_summary_generator_does_not_send_nonportable_metadata() -> None:
+    stream_fn = _summary_stream(SUMMARY)
+    generator = ProviderSummaryGenerator(stream_fn=stream_fn)
+
+    result = asyncio.run(generator.generate("summarize", model=get_model("faux", "faux-1")))
+
+    assert result == SUMMARY
+    assert stream_fn.options
+    assert stream_fn.options[0].metadata == {}
+    assert stream_fn.options[0].cache_retention == "none"
+    assert stream_fn.options[0].session_id is None
 
 
 def test_hydrated_summaries_cross_provider_boundary(tmp_path: Path) -> None:

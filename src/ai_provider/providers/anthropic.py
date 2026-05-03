@@ -42,7 +42,7 @@ from ._shared import (
     start_stream,
 )
 
-_INTERNAL_METADATA_KEYS = {"thinking_enabled", "thinking_budget_tokens"}
+_ANTHROPIC_METADATA_KEYS = {"user_id"}
 
 
 def get_cache_control(base_url: str, retention: str) -> dict[str, str] | None:
@@ -363,7 +363,11 @@ def _apply_thinking_options(payload: dict[str, object], options: StreamOptions) 
 
 
 def _public_metadata(metadata: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in metadata.items() if key not in _INTERNAL_METADATA_KEYS}
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key in _ANTHROPIC_METADATA_KEYS
+    }
 
 
 def _adjust_max_tokens_for_thinking(
