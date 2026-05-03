@@ -147,7 +147,12 @@ def test_hydrated_summaries_cross_provider_boundary(tmp_path: Path) -> None:
 
     context = manager.build_session_context(session.id)
     converted = convert_coding_messages_to_llm(list(context.messages))
+    summary_messages = [
+        message for message in context.messages if getattr(message, "role", None) == "compactionSummary"
+    ]
 
+    assert summary_messages
+    assert "fromId" not in summary_messages[0].model_dump(by_alias=True, exclude_none=True)
     assert any(
         message.role == "user"
         and "<session-context type=\"compactionSummary\"" in message.content[0].text

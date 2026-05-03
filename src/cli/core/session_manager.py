@@ -396,7 +396,6 @@ class SessionManager:
                 payload.id,
                 CompactionSummaryMessage(
                     summary=payload.summary,
-                    fromId=payload.first_kept_entry_id,
                     tokensBefore=payload.tokens_before,
                     timestamp=_entry_ms(payload.timestamp),
                 ),

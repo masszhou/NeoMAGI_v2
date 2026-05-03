@@ -122,3 +122,48 @@ def test_session_jsonl_allowed_root_blocks_path_escape(tmp_path: Path) -> None:
         manager.export_jsonl(session.id, "../escape.jsonl", allowed_root=tmp_path)
     with pytest.raises(SessionJsonlError, match="escapes allowed root"):
         manager.import_jsonl(tmp_path.parent / "session.jsonl", allowed_root=tmp_path)
+
+
+def test_session_jsonl_legacy_compaction_summary_from_id_reads_but_does_not_export(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy.jsonl"
+    source.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session",
+                        "version": 3,
+                        "id": "legacy",
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "cwd": str(tmp_path),
+                    },
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "id": "entry-1",
+                        "timestamp": "2026-01-01T00:00:01+00:00",
+                        "message": {
+                            "role": "compactionSummary",
+                            "summary": "old",
+                            "tokensBefore": 10,
+                            "fromId": "legacy-extra",
+                            "timestamp": 1,
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manager = SessionManager(InMemorySessionRepository())
+
+    imported = manager.import_jsonl(source)
+    exported = manager.export_jsonl(imported.id, tmp_path / "exported.jsonl")
+
+    assert '"role":"compactionSummary"' in exported.read_text(encoding="utf-8")
+    assert '"fromId"' not in exported.read_text(encoding="utf-8")

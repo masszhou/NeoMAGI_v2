@@ -81,6 +81,8 @@ class BranchSummaryMessage(_PiModel):
 
 
 class CompactionSummaryMessage(_PiModel):
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
     role: Literal["compactionSummary"] = "compactionSummary"
     summary: str
     tokens_before: int = Field(alias="tokensBefore")
