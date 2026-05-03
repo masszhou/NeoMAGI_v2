@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 
+from agent_core.types import AgentEndEvent
 from ai_provider.types import AssistantMessage, StreamDone, TextContent, Usage, UsageCost, UserMessage
 from cli.core.session_types import MessageStartEvent, MessageUpdateEvent
 from cli.interactive.app import InteractiveController
@@ -15,7 +16,7 @@ from tui.app import TUIApp
 from tui.editor import EditorState
 from tui.overlay import Selector
 from tui.stdin_buffer import KeyEvent, MouseWheelEvent
-from tui.width import strip_ansi
+from tui.width import strip_ansi, visible_width
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "fixtures" / "pi_compat"
 
@@ -656,6 +657,21 @@ def test_command_session_messages_split_multiline_output_into_crlf_rows() -> Non
     assert "root\x1b[0m\n  child" not in text
     assert all("\n" not in note.text for note in c.status._notifications)  # noqa: SLF001
     assert c.status._notifications[0].text == "root (+2 lines)"  # noqa: SLF001
+
+
+def test_command_resize_next_committed_divider_uses_new_width() -> None:
+    app, c, out = _make_command_controller()
+    app._cols, app._rows = 80, 12  # noqa: SLF001
+    app.simulate_resize(40, 12)
+    app.step()
+    out.truncate(0)
+    out.seek(0)
+
+    c.dispatch_event(AgentEndEvent(messages=[]))
+
+    rows = [strip_ansi(row) for row in out.getvalue().split("\r\n") if "Run complete" in row]
+    assert rows
+    assert all(visible_width(row.rstrip()) <= 40 for row in rows)
 
 
 def test_scrolled_message_history_keeps_cursor_on_editor_row() -> None:

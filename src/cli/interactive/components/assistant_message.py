@@ -31,7 +31,9 @@ from ai_provider.types import (
 )
 from tui.component import Component
 from tui.markdown import render_markdown
-from tui.width import pad_to_width, wrap_to_width
+from tui.width import wrap_to_width
+
+from ..transcript import ASSISTANT, DIM, TOOL_OK, blank, header_row, row
 
 
 @dataclass
@@ -160,33 +162,30 @@ class AssistantMessageComponent(Component):
     # ------------------------------------------------------------------ #
 
     def render(self, width: int) -> list[str]:
-        rows: list[str] = [pad_to_width("\x1b[1m\x1b[32m▎ assistant\x1b[0m", width)]
+        rows: list[str] = [header_row("assistant", width, color=ASSISTANT)]
 
         for slot in self._slots:
             if slot.kind == "text":
                 for line in render_markdown(slot.text or "", max(1, width - 2)):
-                    rows.append(pad_to_width(f"  {line}", width))
+                    rows.append(row(f"  {line}", width))
             elif slot.kind == "thinking":
-                rows.append(pad_to_width("  \x1b[2m▸ thinking\x1b[0m", width))
+                rows.append(row(f"  {DIM}▸ thinking\x1b[0m", width))
                 for line in wrap_to_width(slot.text or "", max(1, width - 4)):
-                    rows.append(pad_to_width(f"    \x1b[2m{line}\x1b[0m", width))
+                    rows.append(row(f"    {DIM}{line}\x1b[0m", width))
             else:  # toolcall
                 tool = slot.tool_name or "?"
                 rows.append(
-                    pad_to_width(
-                        f"  \x1b[36m⚙ tool: {tool}\x1b[0m  args={slot.text[:120]}",
-                        width,
-                    )
+                    row(f"  {TOOL_OK}└ tool: {tool}\x1b[0m  args={slot.text[:120]}", width)
                 )
 
         if self.completed and self.aborted:
-            rows.append(pad_to_width("  \x1b[33m[aborted — partial output kept]\x1b[0m", width))
+            rows.append(row("  \x1b[33m[aborted — partial output kept]\x1b[0m", width))
         elif self.error_text:
-            rows.append(pad_to_width(f"  \x1b[31m[error: {self.error_text}]\x1b[0m", width))
+            rows.append(row(f"  \x1b[31m[error: {self.error_text}]\x1b[0m", width))
         elif self.completed and self.stop_reason and self.stop_reason != "stop":
-            rows.append(pad_to_width(f"  \x1b[2m[stopReason={self.stop_reason}]\x1b[0m", width))
+            rows.append(row(f"  {DIM}[stopReason={self.stop_reason}]\x1b[0m", width))
 
-        rows.append(pad_to_width("", width))
+        rows.append(blank(width))
         return self.enforce_width(rows, width)
 
 

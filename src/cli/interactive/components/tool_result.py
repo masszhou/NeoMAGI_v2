@@ -11,7 +11,9 @@ from typing import Any
 
 from ai_provider.types import ToolResultMessage
 from tui.component import Component
-from tui.width import pad_to_width, truncate_to_width, wrap_to_width
+from tui.width import wrap_to_width
+
+from ..transcript import TOOL_ERROR, TOOL_OK, blank, child_rows, header_row, row
 
 
 def _summarise_blocks(message: ToolResultMessage) -> str:
@@ -30,31 +32,29 @@ class ToolResultComponent(Component):
         self.message: ToolResultMessage = message
 
     def render(self, width: int) -> list[str]:
-        flag = "✗" if self.message.is_error else "✓"
-        head = pad_to_width(
-            f"\x1b[36m▎ tool result {flag} {self.message.tool_name}"
-            f" ({self.message.tool_call_id})\x1b[0m",
-            width,
-        )
-        rows: list[str] = [head]
+        status = " [error]" if self.message.is_error else ""
+        rows: list[str] = [
+            header_row(
+                _tool_label(self.message) + status,
+                width,
+                color=TOOL_ERROR if self.message.is_error else TOOL_OK,
+            )
+        ]
         read_rows = self._read_rows(width)
         if read_rows is not None:
             rows.extend(read_rows)
-            rows.append(pad_to_width("", width))
+            rows.append(blank(width))
             return self.enforce_width(rows, width)
         rows.extend(self._generic_body_rows(width))
-        rows.append(pad_to_width("", width))
+        rows.append(blank(width))
         return self.enforce_width(rows, width)
 
     def _generic_body_rows(self, width: int) -> list[str]:
-        rows: list[str] = []
         body = _summarise_blocks(self.message)
-        for line in wrap_to_width(body, max(1, width - 2)):
-            rows.append(pad_to_width(f"  {truncate_to_width(line, width - 2)}", width))
-        return rows
+        return child_rows(wrap_to_width(body, max(1, width - 4)), width, max_lines=4)
 
     def _read_rows(self, width: int) -> list[str] | None:
-        if self.message.tool_name != "read" or self.message.is_error or width < 50:
+        if self.message.tool_name != "read" or self.message.is_error:
             return None
         metadata = _read_metadata(self.message.details)
         if metadata is None:
@@ -67,24 +67,10 @@ class ToolResultComponent(Component):
         lines = body.split("\n")
         file_lines = lines[:output_lines]
         notice_lines = lines[output_lines:]
-        gutter_width = max(len(str(line_end)), len(str(line_start)))
-        rows = [pad_to_width(f"  {path}:{line_start}-{line_end}", width)]
-        for index, line in enumerate(file_lines, start=line_start):
-            prefix = f"  {index:>{gutter_width}} | "
-            available = max(1, width - len(prefix))
-            wrapped = wrap_to_width(line, available) or [""]
-            for wrapped_index, wrapped_line in enumerate(wrapped):
-                current_prefix = prefix if wrapped_index == 0 else " " * len(prefix)
-                rows.append(
-                    pad_to_width(
-                        current_prefix
-                        + truncate_to_width(wrapped_line, max(1, width - len(current_prefix))),
-                        width,
-                    )
-                )
+        rows = child_rows(file_lines, width, max_lines=1 if width < 50 else 4)
         for line in notice_lines:
             for wrapped_line in wrap_to_width(line, max(1, width - 2)) or [""]:
-                rows.append(pad_to_width(f"  {truncate_to_width(wrapped_line, width - 2)}", width))
+                rows.append(row(f"    {wrapped_line}", width))
         return rows
 
 
@@ -107,6 +93,26 @@ def _int_detail(details: dict[str, Any], key: str) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _tool_label(message: ToolResultMessage) -> str:
+    details = message.details if isinstance(message.details, dict) else {}
+    path = details.get("path")
+    if message.tool_name == "read":
+        suffix = ""
+        start = details.get("lineStart")
+        end = details.get("lineEnd")
+        if isinstance(start, int) and isinstance(end, int):
+            suffix = f":{start}-{end}"
+        return f"Read {path or message.tool_name}{suffix}"
+    if message.tool_name == "write":
+        return f"Wrote {path or message.tool_name}"
+    if message.tool_name == "edit":
+        return f"Edited {path or message.tool_name}"
+    if message.tool_name == "bash":
+        command = details.get("command") or details.get("args", {}).get("command")
+        return f"Ran {command or message.tool_name}"
+    return f"tool result {message.tool_name} ({message.tool_call_id})"
 
 
 __all__ = ["ToolResultComponent"]

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from cli.core.session_types import CustomMessage
 from tui.component import Component
-from tui.width import pad_to_width, wrap_to_width
+from tui.width import wrap_to_width
+
+from ..transcript import SYSTEM, blank, header_row, row
 
 
 def _flatten(message: CustomMessage) -> str:
@@ -27,11 +29,10 @@ class CustomMessageComponent(Component):
     def render(self, width: int) -> list[str]:
         if not self.message.display:
             return []
-        head = f"\x1b[36m▎ custom: {self.message.custom_type}\x1b[0m"
-        rows: list[str] = [pad_to_width(head, width)]
+        rows: list[str] = [header_row(f"custom: {self.message.custom_type}", width, color=SYSTEM)]
         for line in wrap_to_width(_flatten(self.message), max(1, width - 2)):
-            rows.append(pad_to_width(f"  {line}", width))
-        rows.append(pad_to_width("", width))
+            rows.append(row(f"  {line}", width))
+        rows.append(blank(width))
         return self.enforce_width(rows, width)
 
 

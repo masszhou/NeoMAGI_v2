@@ -1,7 +1,7 @@
 {"type":"agent_start"}
 {"type":"turn_start"}
 {"type":"compaction_start","reason":"threshold"}
-{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false}
+{"type":"compaction_end","reason":"threshold","result":{"summary":"## Goal\nUser asked to start and continue.\n## Progress\n### Done\nInitial response sent.\n## Next Steps\nContinue work.\n","firstKeptEntryId":"01abc003","tokensBefore":80120,"tokensAfter":412,"retainedFragments":[{"sourceEntryId":"01abc002","role":"assistant","contentIndex":0,"blockType":"text","text":"Working on it."}]},"aborted":false,"willRetry":false}
 {"type":"message_start","message":{"role":"compactionSummary","summary":"## Goal\nUser asked to start and continue.\n## Progress\n### Done\nInitial response sent.\n## Next Steps\nContinue work.\n","tokensBefore":80120,"timestamp":1714032003000}}
 {"type":"message_end","message":{"role":"compactionSummary","summary":"## Goal\nUser asked to start and continue.\n## Progress\n### Done\nInitial response sent.\n## Next Steps\nContinue work.\n","tokensBefore":80120,"timestamp":1714032003000}}
 {"type":"turn_end","message":{"role":"compactionSummary","summary":"## Goal\nUser asked to start and continue.\n## Progress\n### Done\nInitial response sent.\n## Next Steps\nContinue work.\n","tokensBefore":80120,"timestamp":1714032003000},"toolResults":[]}

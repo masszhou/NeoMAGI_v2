@@ -93,7 +93,7 @@ def test_assistant_message_initial_error_renders_error_text() -> None:
     assert "missing API key" in out
 
 
-def test_tool_result_renders_error_glyph_when_is_error() -> None:
+def test_tool_result_renders_error_header_when_is_error() -> None:
     msg = ToolResultMessage(
         role="toolResult",
         toolCallId="c1",
@@ -103,11 +103,11 @@ def test_tool_result_renders_error_glyph_when_is_error() -> None:
         timestamp=1,
     )
     out = "\n".join(ToolResultComponent(msg).render(60))
-    assert "✗" in out
-    assert "read" in out
+    assert "⏺ Read read [error]" in out
+    assert "└ boom" in out
 
 
-def test_read_tool_result_renders_line_number_gutter() -> None:
+def test_read_tool_result_renders_compact_path_range_preview() -> None:
     msg = ToolResultMessage(
         role="toolResult",
         toolCallId="c1",
@@ -127,10 +127,11 @@ def test_read_tool_result_renders_line_number_gutter() -> None:
     out = "\n".join(ToolResultComponent(msg).render(80))
 
     assert "README.md:10-12" in out
-    assert "10 | ten" in out
-    assert "12 | twelve" in out
+    assert "└ ten" in out
+    assert "eleven" in out
+    assert "twelve" in out
     assert "[2 more lines in file.]" in out
-    assert "13 | [2 more" not in out
+    assert "10 | ten" not in out
 
 
 def test_read_tool_result_without_line_metadata_uses_generic_renderer() -> None:
@@ -151,7 +152,25 @@ def test_read_tool_result_without_line_metadata_uses_generic_renderer() -> None:
     assert "1 |" not in out
 
 
-def test_read_tool_result_narrow_width_falls_back_to_generic_renderer() -> None:
+def test_compact_tool_result_renderer_does_not_mutate_provider_visible_content() -> None:
+    msg = ToolResultMessage(
+        role="toolResult",
+        toolCallId="c1",
+        toolName="read",
+        content=[TextContent(type="text", text="plain provider output")],
+        details={"path": "README.md"},
+        isError=False,
+        timestamp=1,
+    )
+
+    ToolResultComponent(msg).render(80)
+
+    assert msg.content[0].text == "plain provider output"
+    assert "⏺" not in msg.content[0].text
+    assert "└" not in msg.content[0].text
+
+
+def test_read_tool_result_narrow_width_uses_short_preview() -> None:
     msg = ToolResultMessage(
         role="toolResult",
         toolCallId="c1",
@@ -171,7 +190,9 @@ def test_read_tool_result_narrow_width_falls_back_to_generic_renderer() -> None:
     out = "\n".join(ToolResultComponent(msg).render(49))
 
     assert "first" in out
-    assert "README.md:1-2" not in out
+    assert "README.md:1-2" in out
+    assert "second" not in out
+    assert "⋮" in out
     assert "1 | first" not in out
 
 
@@ -186,7 +207,7 @@ def test_bash_execution_excluded_from_context_marker() -> None:
         excludeFromContext=True,
     )
     out = "\n".join(BashExecutionComponent(msg).render(60))
-    assert "[no-context]" in out
+    assert "⏺ Ran [!] ls" in out
 
 
 def test_bash_execution_summarises_multiline_command_as_single_rows() -> None:
@@ -203,7 +224,7 @@ def test_bash_execution_summarises_multiline_command_as_single_rows() -> None:
     out = "\n".join(rows)
 
     assert all("\n" not in row and "\r" not in row for row in rows)
-    assert "$ cat > weather.py <<'PY' (+3 lines)" in out
+    assert "⏺ Ran [user] cat > weather.py <<'PY' (+3 lines)" in out
     assert "#!/usr/bin/env python3" not in out
 
 
@@ -239,6 +260,48 @@ def test_compaction_summary_renders_tokens_before() -> None:
     out = "\n".join(CompactionSummaryComponent(msg).render(60))
     assert "42" in out
     assert "compacted!" in out
+
+
+def test_transcript_components_use_shared_marker_not_legacy_bar() -> None:
+    components = [
+        UserMessageComponent(UserMessage(content="hello", timestamp=1)),
+        AssistantMessageComponent(
+            AssistantMessage(
+                role="assistant",
+                content=[TextContent(text="hi")],
+                api="openai-responses",
+                provider="openai",
+                model="gpt-4o-mini",
+                usage=_zero_usage(),
+                stopReason="stop",
+                timestamp=2,
+            )
+        ),
+        BranchSummaryComponent(
+            BranchSummaryMessage(
+                role="branchSummary",
+                summary="branch",
+                fromId="01abc",
+                timestamp=3,
+            )
+        ),
+        CompactionSummaryComponent(
+            CompactionSummaryMessage(
+                role="compactionSummary",
+                summary="compact",
+                tokensBefore=42,
+                timestamp=4,
+            )
+        ),
+    ]
+
+    rendered = "\n".join(row for component in components for row in component.render(80))
+
+    assert "⏺ user" in rendered
+    assert "⏺ assistant" in rendered
+    assert "⏺ branch summary" in rendered
+    assert "⏺ compaction summary" in rendered
+    assert "▎" not in rendered
 
 
 def test_status_notifications_render_with_color_marker() -> None:
@@ -288,7 +351,7 @@ def test_status_split_renderers_support_bottom_notification_lane() -> None:
     assert "● saved" in notification_rows[0]
 
 
-def test_generic_tool_renderer_includes_duration_after_end() -> None:
+def test_generic_tool_renderer_omits_fast_success_status_duration() -> None:
     ctx = ToolRenderContext(
         tool_name="read",
         tool_call_id="c1",
@@ -302,8 +365,9 @@ def test_generic_tool_renderer_includes_duration_after_end() -> None:
         ended_at_ms=1250,
     )
     out = "\n".join(generic_tool_renderer(ctx, 60))
-    assert "duration: 250 ms" in out
-    assert "[ok]" in out
+    assert "⏺ Ran read" in out
+    assert "duration: 250 ms" not in out
+    assert "[ok]" not in out
 
 
 def test_registered_read_renderer_keeps_partial_preview() -> None:
@@ -326,6 +390,52 @@ def test_registered_read_renderer_keeps_partial_preview() -> None:
     assert "partial" in out
 
 
+def test_edit_renderer_shows_path_stats_and_small_diff_preview() -> None:
+    comp = ToolExecutionComponent(
+        tool_call_id="c1",
+        tool_name="edit",
+        args={"path": "app.py"},
+        registry=ToolRendererRegistry(),
+    )
+    comp.end(
+        {
+            "content": [{"type": "text", "text": "Successfully replaced 1 block."}],
+            "details": {
+                "path": "app.py",
+                "unifiedDiff": "--- app.py\n+++ app.py\n@@ -1,2 +1,2 @@\n-old\n+new\n keep\n",
+            },
+        },
+        is_error=False,
+    )
+
+    out = "\n".join(comp.render(80))
+
+    assert "⏺ Edited app.py (+1 -1)" in out
+    assert "+new" in out
+    assert "-old" in out
+
+
+def test_write_renderer_shows_path_and_result_preview() -> None:
+    comp = ToolExecutionComponent(
+        tool_call_id="c1",
+        tool_name="write",
+        args={"path": "notes.md"},
+        registry=ToolRendererRegistry(),
+    )
+    comp.end(
+        {
+            "content": [{"type": "text", "text": "Successfully wrote 12 bytes to notes.md."}],
+            "details": {"path": "notes.md"},
+        },
+        is_error=False,
+    )
+
+    out = "\n".join(comp.render(80))
+
+    assert "⏺ Wrote notes.md" in out
+    assert "└ Successfully wrote" in out
+
+
 def test_bash_renderer_summarises_multiline_command_as_single_rows() -> None:
     comp = ToolExecutionComponent(
         tool_call_id="c1",
@@ -340,7 +450,7 @@ def test_bash_renderer_summarises_multiline_command_as_single_rows() -> None:
     out = "\n".join(rows)
 
     assert all("\n" not in row and "\r" not in row for row in rows)
-    assert "$ cat > weather.py <<'PY' (+3 lines)" in out
+    assert "⏺ Ran cat > weather.py <<'PY' (+3 lines) [running]" in out
     assert "#!/usr/bin/env python3" not in out
 
 
@@ -354,7 +464,7 @@ def test_registry_falls_back_to_generic_for_unknown_tools() -> None:
     )
     out = "\n".join(comp.render(60))
     assert "custom_tool" in out
-    assert "partial: (no output yet)" in out
+    assert "└ (no output yet)" in out
 
 
 def test_registry_uses_specific_renderer_when_registered() -> None:

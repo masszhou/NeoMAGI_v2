@@ -15,6 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from tui.width import truncate_to_width
+
+from .transcript import TOOL_ERROR, TOOL_OK, child_rows, header_row, row
+
 ToolRenderer = Callable[["ToolRenderContext", int], list[str]]
 
 
@@ -75,58 +79,23 @@ def single_line_summary(value: Any, *, limit: int = 200) -> str:
 
 
 def generic_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
-    """Default renderer: name + args + (partial|final|aborted) state.
+    """Default compact transcript renderer."""
 
-    Three visual modes:
-      - **In-flight** (``is_partial`` and not aborted): show the most
-        recent ``partial_result`` snapshot.
-      - **Completed** (``result`` populated, not aborted): show the
-        result summary tagged ``[ok]`` or ``[error]`` + duration.
-      - **Aborted** (``aborted``): keep the last partial visible so the
-        user can see how far the tool got, append
-        ``[aborted after N ms]`` so it's unmistakable.
-
-    No truncation indicator is emitted — that field doesn't exist on
-    :class:`ToolExecutionEndEvent` yet (plan W4 explicitly defers this to
-    M5 once policy populates ``result.metadata`` / ``result.details``).
-    """
-
-    head = f"⚙ {ctx.tool_name}({_summarise(ctx.args, limit=120)})"
-    head = head[:width]
-
-    rows: list[str] = [head]
+    label = f"Ran {ctx.tool_name}"
+    status = _header_status(ctx)
+    if status:
+        label += f" {status}"
+    rows: list[str] = [header_row(label, width, color=_tool_color(ctx))]
 
     if ctx.aborted:
-        # Aborted mid-flight: keep the last partial visible (if any),
-        # then make the abort unambiguous. Don't render a synthetic
-        # ``result [error]: ...`` line — that would visually conflate
-        # an interrupted tool with one that returned an error response.
-        if ctx.partial_result is not None:
-            partial = _summarise(ctx.partial_result, limit=180)
-            rows.append(f"  partial: {partial}"[:width])
-        else:
-            rows.append("  partial: (no output before abort)"[:width])
-        if ctx.ended_at_ms is not None:
-            duration = max(0, ctx.ended_at_ms - ctx.started_at_ms)
-            rows.append(f"  [aborted after {duration} ms]"[:width])
-        else:
-            rows.append("  [aborted]"[:width])
+        rows.extend(child_rows([_summarise(ctx.partial_result, limit=180)], width, empty="(no output before abort)"))
+        rows.append(row(f"  [aborted{_duration_suffix(ctx)}]", width))
         return rows
 
     if ctx.is_partial:
-        if ctx.partial_result is not None:
-            partial = _summarise(ctx.partial_result, limit=180)
-            rows.append(f"  partial: {partial}"[:width])
-        else:
-            rows.append("  partial: (no output yet)"[:width])
+        rows.extend(child_rows([_summarise(ctx.partial_result, limit=180)], width, empty="(no output yet)"))
     else:
-        result = _summarise(ctx.result, limit=180)
-        flag = "error" if ctx.is_error else "ok"
-        rows.append(f"  result [{flag}]: {result}"[:width])
-
-    if ctx.ended_at_ms is not None:
-        duration = max(0, ctx.ended_at_ms - ctx.started_at_ms)
-        rows.append(f"  duration: {duration} ms"[:width])
+        rows.extend(child_rows([_summarise(ctx.result, limit=180)], width, empty="(no output)"))
 
     return rows
 
@@ -136,17 +105,14 @@ def read_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
         return generic_tool_renderer(ctx, width)
     details = _result_details(ctx)
     path = details.get("path") or _arg(ctx.args, "path") or "?"
-    rows = [f"read {path}"[:width]]
+    line_range = _line_range(details)
+    label = f"Read {path}{line_range}{_header_status(ctx, force_errors=True)}"
+    rows = [header_row(label, width, color=_tool_color(ctx))]
     truncation = details.get("truncation") if isinstance(details.get("truncation"), dict) else {}
+    output = _text_output(ctx.partial_result if ctx.is_partial else ctx.result)
+    rows.extend(child_rows(output.splitlines(), width, max_lines=_preview_limit(width), empty=None))
     if truncation.get("truncated"):
-        rows.append(
-            f"  truncated: {truncation.get('outputLines')} of {truncation.get('totalLines')} lines"[:width]
-        )
-    if ctx.is_partial:
-        output = _text_output(ctx.partial_result)
-        if output:
-            rows.append(f"  partial: {output.splitlines()[0]}"[:width])
-    rows.extend(_final_status_rows(ctx, width))
+        rows.append(row(f"    {_truncate_notice(truncation)}", width))
     return rows
 
 
@@ -155,10 +121,13 @@ def bash_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
         return generic_tool_renderer(ctx, width)
     details = _result_details(ctx)
     command = _arg(ctx.args, "command") or "$"
-    rows = [f"$ {single_line_summary(command, limit=max(1, width - 2))}"[:width]]
+    label = f"Ran {single_line_summary(command, limit=max(1, width - 8))}{_header_status(ctx)}"
+    rows = [header_row(label, width, color=_tool_color(ctx))]
     output = _text_output(ctx.partial_result if ctx.is_partial else ctx.result)
     if output:
-        rows.extend(f"  {line}"[:width] for line in output.strip().splitlines()[-5:])
+        rows.extend(child_rows(output.strip().splitlines()[:_preview_limit(width)], width, max_lines=_preview_limit(width)))
+    elif not ctx.is_partial and ctx.is_error:
+        rows.extend(child_rows(["(no output)"], width))
     status = []
     if details.get("exitCode") is not None:
         status.append(f"exit={details.get('exitCode')}")
@@ -168,8 +137,7 @@ def bash_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
     if truncation.get("truncated"):
         status.append("truncated")
     if status:
-        rows.append(f"  ({', '.join(status)})"[:width])
-    rows.extend(_final_status_rows(ctx, width))
+        rows.append(row(f"  ({', '.join(status)})", width))
     return rows
 
 
@@ -178,13 +146,16 @@ def edit_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
         return generic_tool_renderer(ctx, width)
     details = _result_details(ctx)
     path = details.get("path") or _arg(ctx.args, "path") or "?"
-    rows = [f"edit {path}"[:width]]
-    if details.get("firstChangedLine") is not None:
-        rows.append(f"  first changed line: {details.get('firstChangedLine')}"[:width])
+    diff = details.get("unifiedDiff")
+    additions, deletions = _diff_stats(diff if isinstance(diff, str) else "")
+    label = f"Edited {path} (+{additions} -{deletions}){_header_status(ctx)}"
+    rows = [header_row(label, width, color=_tool_color(ctx))]
     diff = details.get("unifiedDiff")
     if isinstance(diff, str) and diff:
-        rows.extend(f"  {line}"[:width] for line in diff.splitlines()[:8])
-    rows.extend(_final_status_rows(ctx, width))
+        rows.extend(_diff_preview_rows(diff, width))
+    else:
+        output = _text_output(ctx.result)
+        rows.extend(child_rows(output.splitlines(), width, max_lines=2))
     return rows
 
 
@@ -193,11 +164,10 @@ def write_tool_renderer(ctx: ToolRenderContext, width: int) -> list[str]:
         return generic_tool_renderer(ctx, width)
     details = _result_details(ctx)
     path = details.get("path") or _arg(ctx.args, "path") or "?"
-    rows = [f"write {path}"[:width]]
+    rows = [header_row(f"Wrote {path}{_header_status(ctx)}", width, color=_tool_color(ctx))]
     output = _text_output(ctx.result)
     if output:
-        rows.append(f"  {output.splitlines()[0]}"[:width])
-    rows.extend(_final_status_rows(ctx, width))
+        rows.extend(child_rows(output.splitlines(), width, max_lines=2))
     return rows
 
 
@@ -232,6 +202,108 @@ def _final_status_rows(ctx: ToolRenderContext, width: int) -> list[str]:
     if ctx.ended_at_ms is not None:
         rows.append(f"  duration: {max(0, ctx.ended_at_ms - ctx.started_at_ms)} ms"[:width])
     return rows
+
+
+def _tool_color(ctx: ToolRenderContext) -> str:
+    return TOOL_ERROR if ctx.aborted or ctx.is_error else TOOL_OK
+
+
+def _header_status(ctx: ToolRenderContext, *, force_errors: bool = False) -> str:
+    if ctx.aborted:
+        return " [aborted]"
+    if ctx.is_error:
+        return " [error]"
+    if ctx.is_partial:
+        return " [running]"
+    duration = _duration_ms(ctx)
+    if duration is not None and duration >= 2_000:
+        return f"  {_format_duration(duration)}"
+    if force_errors:
+        return ""
+    return ""
+
+
+def _duration_suffix(ctx: ToolRenderContext) -> str:
+    duration = _duration_ms(ctx)
+    return f" after {duration} ms" if duration is not None else ""
+
+
+def _duration_ms(ctx: ToolRenderContext) -> int | None:
+    if ctx.ended_at_ms is None:
+        return None
+    return max(0, ctx.ended_at_ms - ctx.started_at_ms)
+
+
+def _format_duration(duration_ms: int) -> str:
+    if duration_ms < 10_000:
+        return f"{duration_ms / 1000:.1f}s"
+    return f"{round(duration_ms / 1000)}s"
+
+
+def _line_range(details: dict[str, Any]) -> str:
+    start = details.get("lineStart")
+    end = details.get("lineEnd")
+    if isinstance(start, int) and isinstance(end, int):
+        return f":{start}-{end}"
+    return ""
+
+
+def _preview_limit(width: int) -> int:
+    return 1 if width < 50 else 4
+
+
+def _truncate_notice(truncation: dict[str, Any]) -> str:
+    output = truncation.get("outputLines")
+    total = truncation.get("totalLines")
+    if output is not None and total is not None:
+        return f"⋮ truncated: {output} of {total} lines"
+    return "⋮ truncated"
+
+
+def _diff_stats(diff: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return additions, deletions
+
+
+def _diff_preview_rows(diff: str, width: int) -> list[str]:
+    rows: list[str] = []
+    kept = 0
+    first_changed_line: str | None = None
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            first_changed_line = _hunk_new_start(line)
+            continue
+        if line.startswith(("---", "+++")):
+            continue
+        if not line.startswith(("+", "-", " ")):
+            continue
+        if first_changed_line is not None:
+            rows.append(row(f"    {first_changed_line}", width))
+            first_changed_line = None
+        rows.append(row("    " + truncate_to_width(line, max(1, width - 4)), width))
+        kept += 1
+        if kept >= 6:
+            rows.append(row("    ⋮", width))
+            break
+    return rows
+
+
+def _hunk_new_start(header: str) -> str | None:
+    marker = " +"
+    start = header.find(marker)
+    if start < 0:
+        return None
+    token = header[start + len(marker) :].split(" ", 1)[0]
+    line = token.split(",", 1)[0]
+    return line if line.isdigit() else None
 
 
 class ToolRendererRegistry:

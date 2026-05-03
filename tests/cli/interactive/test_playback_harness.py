@@ -7,6 +7,7 @@ from pathlib import Path
 from cli.interactive.app import InteractiveController
 from cli.interactive.components import (
     AssistantMessageComponent,
+    BranchSummaryComponent,
     CompactionSummaryComponent,
     ToolExecutionComponent,
 )
@@ -53,7 +54,7 @@ def test_tool_execution_success_renders_tool_name_and_result() -> None:
     ]
     assert len(tools) == 1
     out = "\n".join(tools[0].render(80))
-    assert "read" in out
+    assert "Read" in out
     assert "main.py" in out
 
 
@@ -76,6 +77,19 @@ def test_compaction_renders_summary_component_with_text_kept() -> None:
     assert len(summaries) == 1
     out = "\n".join(summaries[0].render(120))
     assert "Initial response sent." in out
+
+
+def test_branch_summary_renders_summary_component_with_from_id() -> None:
+    c = _play("branch_summary")
+    summaries = [
+        child
+        for child in c.messages.children
+        if isinstance(child, BranchSummaryComponent)
+    ]
+    assert len(summaries) == 1
+    out = "\n".join(summaries[0].render(120))
+    assert "branch summary" in out
+    assert "01branch-old-leaf" in out
 
 
 def test_abort_during_stream_keeps_partial_text_and_returns_editor_to_idle() -> None:

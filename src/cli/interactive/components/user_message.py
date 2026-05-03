@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from ai_provider.types import TextContent, UserContent, UserMessage
 from tui.component import Component
-from tui.width import pad_to_width, wrap_to_width
+from tui.width import wrap_to_width
+
+from ..transcript import USER, blank, header_row, row
 
 
 def _flatten_content(content: str | list[UserContent]) -> str:
@@ -31,10 +33,10 @@ class UserMessageComponent(Component):
         wrapped = wrap_to_width(body, max(1, width - 4))
         if not wrapped:
             wrapped = [""]
-        rows = [pad_to_width("\x1b[1m\x1b[34m▎ user\x1b[0m", width)]
+        rows = [header_row("user", width, color=USER)]
         for line in wrapped:
-            rows.append(pad_to_width(f"  {line}", width))
-        rows.append(pad_to_width("", width))
+            rows.append(row(f"  {line}", width))
+        rows.append(blank(width))
         return self.enforce_width(rows, width)
 
 

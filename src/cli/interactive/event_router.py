@@ -246,6 +246,8 @@ class EventRouter:
             comp.completed = False
             self._active_assistant = comp
         elif isinstance(message, ToolResultMessage):
+            if self._tool_components.get(message.tool_call_id) is not None:
+                return
             comp = ToolResultComponent(message)
         elif isinstance(message, BashExecutionMessage):
             comp = BashExecutionComponent(message)

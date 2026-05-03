@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from cli.core.session_types import BranchSummaryMessage
 from tui.component import Component
-from tui.width import pad_to_width, wrap_to_width
+from tui.width import wrap_to_width
+
+from ..transcript import BRANCH, blank, header_row, row
 
 
 class BranchSummaryComponent(Component):
@@ -13,11 +15,12 @@ class BranchSummaryComponent(Component):
         self.message: BranchSummaryMessage = message
 
     def render(self, width: int) -> list[str]:
-        head = f"\x1b[33m▎ branch summary  (from {self.message.from_id})\x1b[0m"
-        rows: list[str] = [pad_to_width(head, width)]
+        rows: list[str] = [
+            header_row(f"branch summary  (from {self.message.from_id})", width, color=BRANCH)
+        ]
         for line in wrap_to_width(self.message.summary, max(1, width - 2)):
-            rows.append(pad_to_width(f"  {line}", width))
-        rows.append(pad_to_width("", width))
+            rows.append(row(f"  {line}", width))
+        rows.append(blank(width))
         return self.enforce_width(rows, width)
 
 
