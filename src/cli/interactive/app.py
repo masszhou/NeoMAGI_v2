@@ -75,6 +75,7 @@ class InteractiveController:
         self._exit_when_playback_finishes: bool = False
         self._slash_registry: Any | None = None
         self._slash_overlay: Any | None = None
+        self._extension_command_names: set[str] = set()
 
         # Composite root: status on top, then message list, then editor.
         self._root = _RootComponent(self._status, self._messages, self._editor)
@@ -87,10 +88,12 @@ class InteractiveController:
 
     def bootstrap(self) -> None:
         from cli.slash_commands import SlashCommandRegistry, register_builtin_commands
+        from cli.slash_commands.extensions import register_extension_commands
 
         registry = SlashCommandRegistry()
         play_targets = _discover_play_targets()
         register_builtin_commands(registry, play_targets=play_targets)
+        self._extension_command_names = register_extension_commands(registry, self)
         self._slash_registry = registry
 
         self._app.attach_root(self._root)
@@ -397,11 +400,21 @@ class InteractiveController:
         self._close_slash_overlay()
         text = submission.text.strip()
         if text.startswith("/") and self._slash_registry is not None:
-            handled = self._slash_registry.parse_and_dispatch(text, self)
-            if handled:
+            name = text[1:].split(maxsplit=1)[0] if text[1:].strip() else ""
+            if name and self._slash_registry.get(name) is not None:
+                self._slash_registry.parse_and_dispatch(text, self)
                 return
+            expanded = self._runtime.expand_resource_command(text) if self._runtime is not None else None
+            if expanded is not None:
+                text = expanded
+            else:
+                handled = self._slash_registry.parse_and_dispatch(text, self)
+                if handled:
+                    return
         if self._submit_handler is not None:
-            self._submit_handler(submission)
+            self._submit_handler(
+                EditorSubmission(text=text, state_at_submit=submission.state_at_submit)
+            )
             return
         self._status.push_notification(
             "M1 mock — no agent runtime; pass --playback or use /play",

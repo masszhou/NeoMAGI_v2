@@ -78,6 +78,7 @@ LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
         "name",
         "new",
         "quit",
+        "reload",
         "resume",
         "session",
         "tree",
@@ -100,6 +101,9 @@ class SlashCommandRegistry:
 
     def get(self, name: str) -> RegisteredCommand | None:
         return self._commands.get(name)
+
+    def unregister(self, name: str) -> None:
+        self._commands.pop(name, None)
 
     def all(self) -> list[RegisteredCommand]:
         return sorted(self._commands.values(), key=lambda c: c.name)
@@ -158,19 +162,43 @@ def register_builtin_commands(
 ) -> None:
     """Register all 21 Pi builtin commands + ``/play`` (M1-only)."""
 
+    from .play import make_play_handler
+
+    live_handlers = _live_builtin_handlers()
+    for name, description, stub_milestone in PI_BUILTIN_COMMANDS:
+        handler = live_handlers.get(name)
+        registry.register(
+            RegisteredCommand(
+                name=name,
+                description=description,
+                handler=handler or _make_stub(stub_milestone or "later", description),
+                stub_milestone=None if handler else stub_milestone,
+            )
+        )
+
+    registry.register(
+        RegisteredCommand(
+            name="play",
+            description="Replay a fixture (M1 only)",
+            handler=make_play_handler(list(play_targets)),
+        )
+    )
+
+
+def _live_builtin_handlers() -> dict[str, CommandHandler]:
     from .clone import handle_clone
     from .compact import handle_compact
     from .export_import import handle_export, handle_import
     from .fork import handle_fork
     from .hotkeys import handle_hotkeys
     from .new import handle_new
-    from .play import make_play_handler
     from .quit import handle_quit
+    from .reload import handle_reload
     from .resume import handle_resume
     from .session import handle_name, handle_session
     from .tree import handle_tree
 
-    live_handlers: dict[str, CommandHandler] = {
+    return {
         "clone": handle_clone,
         "compact": handle_compact,
         "export": handle_export,
@@ -180,37 +208,11 @@ def register_builtin_commands(
         "new": handle_new,
         "hotkeys": handle_hotkeys,
         "quit": handle_quit,
+        "reload": handle_reload,
         "resume": handle_resume,
         "session": handle_session,
         "tree": handle_tree,
     }
-
-    for name, description, stub_milestone in PI_BUILTIN_COMMANDS:
-        if name in live_handlers:
-            registry.register(
-                RegisteredCommand(
-                    name=name,
-                    description=description,
-                    handler=live_handlers[name],
-                )
-            )
-        else:
-            registry.register(
-                RegisteredCommand(
-                    name=name,
-                    description=description,
-                    handler=_make_stub(stub_milestone or "later", description),
-                    stub_milestone=stub_milestone,
-                )
-            )
-
-    registry.register(
-        RegisteredCommand(
-            name="play",
-            description="Replay a fixture (M1 only)",
-            handler=make_play_handler(list(play_targets)),
-        )
-    )
 
 
 __all__ = [
