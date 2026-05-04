@@ -10,6 +10,7 @@ from cli.core.session_types import (
     AgentSessionEvent,
     BranchSummaryMessage,
     CompactionSummaryMessage,
+    CustomMessage,
     MessageEndEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -36,6 +37,9 @@ class DurableSessionEventWriter:
         session_id = self._session_id_provider()
         if isinstance(event, MessageEndEvent):
             if isinstance(event.message, BranchSummaryMessage | CompactionSummaryMessage):
+                return
+            if isinstance(event.message, CustomMessage):
+                self._manager.append_custom_message(session_id, event.message)
                 return
             self._manager.append_message(session_id, event.message)
             return

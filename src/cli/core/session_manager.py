@@ -15,6 +15,8 @@ from ai_provider.types import TextContent
 from cli.core.session_types import (
     BranchSummaryMessage,
     CompactionSummaryMessage,
+    CustomEntry,
+    CustomMessageEntry,
     CustomMessage,
     LabelEntry,
     MessageEntry,
@@ -230,6 +232,40 @@ class SessionManager:
     ) -> EntryRecord:
         self.resume_session(session_id)
         return self.repository.append_entry(session_id, payload)
+
+    def append_custom_entry(
+        self,
+        session_id: str,
+        custom_type: str,
+        data: Any | None = None,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        payload = self._entry_payload(
+            session.id,
+            "custom",
+            {"customType": custom_type, "data": data},
+        )
+        CustomEntry.model_validate(payload)
+        return self.repository.append_entry(session.id, payload)
+
+    def append_custom_message(
+        self,
+        session_id: str,
+        message: CustomMessage,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        payload = self._entry_payload(
+            session.id,
+            "custom_message",
+            {
+                "customType": message.custom_type,
+                "content": _dump(message.content),
+                "display": message.display,
+                "details": _dump(message.details),
+            },
+        )
+        CustomMessageEntry.model_validate(payload)
+        return self.repository.append_entry(session.id, payload)
 
     def append_compaction(
         self,

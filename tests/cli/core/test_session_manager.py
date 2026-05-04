@@ -186,3 +186,45 @@ def test_session_manager_fork_prefill_uses_only_text_blocks(tmp_path: Path) -> N
     forked = manager.fork_session(source.id, user.pi_export_id)
 
     assert forked.editor_prefill == "line oneline two"
+
+
+def test_custom_entry_is_durable_but_not_context_visible(tmp_path: Path) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    session = manager.new_session(tmp_path)
+
+    entry = manager.append_custom_entry(session.id, "research_note", {"metric": 0.72})
+
+    context = manager.build_session_context(session.id)
+    stats = manager.session_stats(session.id)
+    stored = manager.repository.get_entry(session.id, entry.pi_export_id)
+
+    assert stored is not None
+    assert stored.payload.type == "custom"
+    assert context.messages == []
+    assert stats.entry_count == 1
+    assert stats.message_count == 0
+
+
+def test_custom_message_entry_participates_in_context(tmp_path: Path) -> None:
+    from cli.core.session_types import CustomMessage
+
+    manager = SessionManager(InMemorySessionRepository())
+    session = manager.new_session(tmp_path)
+
+    manager.append_custom_message(
+        session.id,
+        CustomMessage(
+            customType="status_panel",
+            content="hello",
+            display=True,
+            details={"ok": True},
+            timestamp=1,
+        ),
+    )
+
+    context = manager.build_session_context(session.id)
+
+    assert len(context.messages) == 1
+    assert context.messages[0].role == "custom"
+    assert context.messages[0].custom_type == "status_panel"
+    assert context.messages[0].content == "hello"
