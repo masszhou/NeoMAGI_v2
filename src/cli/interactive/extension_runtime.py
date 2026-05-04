@@ -11,10 +11,11 @@ from datetime import date
 from typing import Any
 
 from agent_core.types import AfterToolCallResult, BeforeToolCallResult
+from ai_provider.model_registry import validate_thinking_level_for_model
 from ai_provider.runtime_types import ProviderResponse
 from ai_provider.types import Model, TextContent, UserMessage
 from cli.core.session_types import CustomMessage, MessageEndEvent, MessageStartEvent
-from cli.extensions.event_types import BeforeAgentStartEvent, InputEvent
+from cli.extensions.event_types import BeforeAgentStartEvent, BeforeProviderRequestEvent, InputEvent
 from cli.extensions.loader import load_extensions
 from cli.extensions.runner import ExtensionRunner
 from cli.extensions.tools import create_extension_tools
@@ -200,7 +201,11 @@ class ExtensionRuntimeMixin:
     async def _before_provider_request(self, payload: Any, model: Model) -> Any:
         if self._extension_runner is None:
             return payload
-        event = {"type": "before_provider_request", "payload": payload, "model": model}
+        BeforeProviderRequestEvent(payload=payload)
+        event = {"type": "before_provider_request", "payload": payload}
+        # Keep the M8 provider hook dict-shaped for Python extension handlers; the
+        # optional model field is runtime context, not part of the persisted event.
+        event["model"] = model
         for result in await self._extension_runner.emit(event):
             if isinstance(result, dict) and "payload" in result:
                 event["payload"] = result["payload"]
@@ -412,19 +417,23 @@ class ExtensionRuntimeMixin:
         self._active_tool_names = {str(name) for name in tool_names}
         with self._lock:
             if getattr(self, "_agent", None) is not None:
-                self._generation += 1
-                self._agent = self._build_agent(self._generation)
+                if self._agent.active_run_id is None:
+                    self._refresh_agent_tool_state()
                 self._enqueue_queue_update_locked()
         self._notify_wake()
 
     def _extension_set_thinking_level(self, level: str) -> None:
-        self._thinking_level = level  # validated when CLI/user-facing model switching lands in M9
+        self._thinking_level = validate_thinking_level_for_model(self._model, level)
         with self._lock:
             if getattr(self, "_agent", None) is not None:
-                self._generation += 1
-                self._agent = self._build_agent(self._generation)
+                if self._agent.active_run_id is None:
+                    self._agent.state.thinking_level = self._thinking_level
                 self._enqueue_queue_update_locked()
         self._notify_wake()
+
+    def _refresh_agent_tool_state(self) -> None:
+        self._agent.tools = self._build_tools()
+        self._agent.state.system_prompt = self._build_system_prompt()
 
 
 def _content_blocks_to_dicts(value: Any) -> list[dict[str, Any]] | None:

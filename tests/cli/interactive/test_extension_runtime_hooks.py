@@ -237,6 +237,34 @@ def test_runtime_respects_disabled_skill_commands_for_expand_and_autocomplete(tm
     assert any(item[0] == "/ask" for item in items)
 
 
+def test_runtime_extension_set_active_tools_refreshes_tools_without_generation_bump(tmp_path) -> None:
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "tools.py").write_text(
+        """
+def setup(api):
+    api.register_command("read_only", {
+        "description": "read",
+        "handler": lambda _ctx: api.set_active_tools(["read"]),
+    })
+""",
+        encoding="utf-8",
+    )
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        generation = runtime._generation  # noqa: SLF001
+        assert "bash" in {tool.name for tool in runtime._agent.tools}  # noqa: SLF001
+
+        runtime.run_extension_command("read_only", [], "/read_only")
+
+        tool_names = {tool.name for tool in runtime._agent.tools}  # noqa: SLF001
+        updated_generation = runtime._generation  # noqa: SLF001
+    finally:
+        runtime.shutdown()
+
+    assert updated_generation == generation
+    assert tool_names == {"read"}
+
+
 def test_runtime_input_event_can_transform_or_handle(tmp_path) -> None:
     (tmp_path / ".pi" / "extensions").mkdir(parents=True)
     (tmp_path / ".pi" / "extensions" / "input_ext.py").write_text(
