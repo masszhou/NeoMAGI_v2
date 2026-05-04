@@ -12,6 +12,7 @@ from cli.resources.loader import ResourceExtensionPaths
 from .diagnostics import ExtensionDiagnostic
 from .event_types import (
     BeforeAgentStartEvent,
+    ContextEventResult,
     InputEventResultAdapter,
     ResourcesDiscoverResult,
     UserBashEventResult,
@@ -89,8 +90,11 @@ class ExtensionRunner:
         event: dict[str, Any] = {"type": "context", "messages": messages}
         for extension, handler in self._handlers("context"):
             result = await self._call_handler(extension, handler, event)
-            if isinstance(result, dict) and result.get("messages") is not None:
-                event["messages"] = result["messages"]
+            if result is None:
+                continue
+            parsed = ContextEventResult.model_validate(result)
+            if parsed.messages is not None:
+                event["messages"] = parsed.messages
         return list(event["messages"])
 
     async def emit_before_agent_start(
@@ -188,9 +192,6 @@ class ExtensionRunner:
             renderer = extension.message_renderers.get(custom_type)
             if renderer is not None:
                 return renderer
-        return None
-
-    def on_error(self, _listener: Callable[[ExtensionDiagnostic], None]) -> None:
         return None
 
     def _handlers(self, event: str) -> list[tuple[LoadedExtension, Callable[..., Any]]]:
