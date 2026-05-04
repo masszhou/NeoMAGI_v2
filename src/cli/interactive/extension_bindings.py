@@ -37,3 +37,17 @@ def slash_autocomplete_items(
     if runtime is not None:
         items.extend(runtime.resource_command_items())
     return items
+
+
+def reject_queued_extension_command(text: str, runtime: Any | None, status: Any) -> bool:
+    if runtime is None:
+        return False
+    name = runtime.extension_command_name(text)
+    if name is None:
+        return False
+    status.push_notification(
+        f"extension command /{name} cannot be queued while streaming; run it while idle",
+        level="error",
+        ttl_seconds=8.0,
+    )
+    return True

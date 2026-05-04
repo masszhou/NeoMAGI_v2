@@ -242,6 +242,7 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
             if not self._is_running_locked():
                 self.submit(prompt)
                 return
+            prompt = self.prepare_queued_prompt(prompt)
             self._queued_steering.append(prompt)
             self._loop.call_soon_threadsafe(self._agent.steer, self._user_message(prompt))
             self._enqueue_queue_update_locked()
@@ -254,6 +255,7 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
             if not self._is_running_locked():
                 self.submit(prompt)
                 return
+            prompt = self.prepare_queued_prompt(prompt)
             self._queued_follow_up.append(prompt)
             self._loop.call_soon_threadsafe(self._agent.follow_up, self._user_message(prompt))
             self._enqueue_queue_update_locked()

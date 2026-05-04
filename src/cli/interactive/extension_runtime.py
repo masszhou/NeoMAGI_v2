@@ -95,6 +95,22 @@ class ExtensionRuntimeMixin:
             items.append((f"/skill:{skill.name}", skill.description))
         return items
 
+    def extension_command_name(self, text: str) -> str | None:
+        if not text.startswith("/") or self._extension_runner is None:
+            return None
+        name = text[1:].split(maxsplit=1)[0] if text[1:].strip() else ""
+        if name and name in self._extension_runner.get_registered_commands():
+            return name
+        return None
+
+    def prepare_queued_prompt(self, text: str) -> str:
+        name = self.extension_command_name(text)
+        if name is not None:
+            raise RuntimeError(
+                f"extension command /{name} cannot be queued while streaming; run it while idle"
+            )
+        return self.expand_resource_command(text) or text
+
     def run_extension_command(self, name: str, args: list[str], raw: str) -> None:
         if self._extension_runner is None:
             raise RuntimeError("extension runtime is not available")

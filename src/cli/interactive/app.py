@@ -25,7 +25,7 @@ from tui.stdin_buffer import KeyEvent, MouseWheelEvent
 
 from .components import MessageListComponent, StatusComponent
 from .event_router import EventRouter
-from .extension_bindings import custom_renderer_error, custom_renderer_lookup, slash_autocomplete_items
+from .extension_bindings import custom_renderer_error, custom_renderer_lookup, reject_queued_extension_command, slash_autocomplete_items
 from .extension_ui import InteractiveExtensionUIContext
 from .runtime import InteractiveAgentRuntime
 from .tool_renderer_registry import ToolRendererRegistry
@@ -399,12 +399,12 @@ class InteractiveController:
         return None
 
     def _on_editor_submit(self, submission: EditorSubmission) -> None:
-        # Submit ALWAYS closes the live autocomplete strip (regardless of
-        # whether dispatch matches a command).
         self._close_slash_overlay()
         text = submission.text.strip()
         if text.startswith("/") and self._slash_registry is not None:
             name = text[1:].split(maxsplit=1)[0] if text[1:].strip() else ""
+            if submission.state_at_submit == EditorState.STREAMING and reject_queued_extension_command(text, self._runtime, self._status):
+                return
             if name and self._slash_registry.get(name) is not None:
                 self._slash_registry.parse_and_dispatch(text, self)
                 return
@@ -525,6 +525,9 @@ class InteractiveController:
             )
             self._app.request_render()
             return
+        text = self._editor.buffer.text
+        if reject_queued_extension_command(text, self._runtime, self._status):
+            return
         text = self._editor.buffer.take()
         if not text.strip():
             return
@@ -569,7 +572,6 @@ class InteractiveController:
         if text.startswith("/"):
             self._ensure_slash_overlay(text)
             return
-        # Buffer no longer starts with '/': any open autocomplete is stale.
         self._close_slash_overlay()
 
     def _ensure_slash_overlay(self, query: str) -> None:

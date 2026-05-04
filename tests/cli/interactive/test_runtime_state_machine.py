@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from agent_core import Agent, AgentOptions
@@ -49,9 +50,12 @@ def _agent_factory(options: AgentOptions) -> Agent:
     return Agent(replace(options, stream_fn=_slow_stream))
 
 
-def _controller_with_runtime() -> tuple[TUIApp, InteractiveController, InteractiveAgentRuntime]:
+def _controller_with_runtime(
+    *,
+    cwd: Path | None = None,
+) -> tuple[TUIApp, InteractiveController, InteractiveAgentRuntime]:
     app = TUIApp()
-    runtime = InteractiveAgentRuntime(agent_factory=_agent_factory)
+    runtime = InteractiveAgentRuntime(agent_factory=_agent_factory, cwd=cwd)
     controller = InteractiveController(tui_app=app, runtime=runtime)
     controller.bootstrap()
     return app, controller, runtime
@@ -180,6 +184,73 @@ def test_streaming_submit_and_followup_action_update_queue_status() -> None:
     assert controller.status.queue.follow_up == []
 
 
+def test_streaming_submit_rejects_extension_command(tmp_path: Path) -> None:
+    _write_extension_command(tmp_path)
+    _app, controller, runtime = _controller_with_runtime(cwd=tmp_path)
+    try:
+        controller._handle_runtime_submit(  # noqa: SLF001
+            EditorSubmission("hello", EditorState.IDLE)
+        )
+        controller._on_editor_submit(  # noqa: SLF001
+            EditorSubmission("/extcmd", EditorState.STREAMING)
+        )
+
+        assert runtime.state.queued_steering == ()
+        assert any(
+            "extension command /extcmd cannot be queued" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
+        assert not any(
+            "unexpectedly executed" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
+        controller.handle_abort()
+        _drain_controller(controller, runtime)
+    finally:
+        runtime.shutdown()
+
+
+def test_followup_action_rejects_extension_command_and_keeps_buffer(tmp_path: Path) -> None:
+    _write_extension_command(tmp_path)
+    _app, controller, runtime = _controller_with_runtime(cwd=tmp_path)
+    try:
+        controller._handle_runtime_submit(  # noqa: SLF001
+            EditorSubmission("hello", EditorState.IDLE)
+        )
+        controller.editor.buffer.insert("/extcmd")
+        controller._handle_runtime_action(Action.QUEUE_FOLLOWUP)  # noqa: SLF001
+
+        assert controller.editor.buffer.text == "/extcmd"
+        assert runtime.state.queued_follow_up == ()
+        assert any(
+            "extension command /extcmd cannot be queued" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
+        controller.handle_abort()
+        _drain_controller(controller, runtime)
+    finally:
+        runtime.shutdown()
+
+
+def test_followup_action_expands_prompt_template(tmp_path: Path) -> None:
+    (tmp_path / ".pi" / "prompts").mkdir(parents=True)
+    (tmp_path / ".pi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
+    _app, controller, runtime = _controller_with_runtime(cwd=tmp_path)
+    try:
+        controller._handle_runtime_submit(  # noqa: SLF001
+            EditorSubmission("hello", EditorState.IDLE)
+        )
+        controller.editor.buffer.insert("/ask topic")
+        controller._handle_runtime_action(Action.QUEUE_FOLLOWUP)  # noqa: SLF001
+        controller._drain_runtime_events()  # noqa: SLF001
+
+        assert runtime.state.queued_follow_up == ("Question: topic",)
+        controller.handle_abort()
+        _drain_controller(controller, runtime)
+    finally:
+        runtime.shutdown()
+
+
 def test_idle_followup_action_starts_normal_prompt() -> None:
     _app, controller, runtime = _controller_with_runtime()
     try:
@@ -251,3 +322,17 @@ def test_quit_shutdown_stops_runtime_before_exit() -> None:
     assert app._running is False  # noqa: SLF001
     assert runtime.state.is_running is False
     assert runtime._thread.is_alive() is False  # noqa: SLF001
+
+
+def _write_extension_command(tmp_path: Path) -> None:
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "cmd.py").write_text(
+        """
+def setup(api):
+    def run(_ctx):
+        raise RuntimeError("extension command unexpectedly executed")
+
+    api.register_command("extcmd", {"description": "test", "handler": run})
+""",
+        encoding="utf-8",
+    )
