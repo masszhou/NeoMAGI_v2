@@ -51,6 +51,7 @@ from storage.ids import short_session_id
 from storage.session_repository import SessionRecord
 
 from .compaction_runtime import CompactionRuntimeMixin
+from .extension_runtime import ExtensionRuntimeMixin
 from .runtime_events import agent_event_to_session_event
 from .session_writer import DurableSessionEventWriter
 
@@ -65,9 +66,6 @@ class RuntimeState:
     provider_cache_affinity_id: str | None
     durable_session_id: str | None = None
     current_leaf_entry_id: str | None = None
-
-
-_DEFAULT_SYSTEM_PROMPT = "You are a helpful coding assistant."
 
 
 def _now_ms() -> int:
@@ -85,7 +83,7 @@ def _empty_usage() -> Usage:
     )
 
 
-class InteractiveAgentRuntime(CompactionRuntimeMixin):
+class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
     """Owns one ``Agent`` plus a background asyncio loop.
 
     The runtime never mutates TUI components directly. Agent listeners adapt
@@ -126,6 +124,7 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
         self._summary_generator = summary_generator
         self._last_tree_summary_notice: str | None = None
         self._user_bash_hook = user_bash_hook
+        self._initialize_extension_runtime()
 
         self._events: queue.Queue[AgentSessionEvent] = queue.Queue()
         self._lock = threading.RLock()
@@ -173,6 +172,13 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
     @property
     def footer_summary(self) -> str:
         cache = self._cache_retention or "default"
+        extensions = ""
+        if self._extension_runner is not None:
+            extension_count = len(self._extension_runner.runtime.extensions)
+            diagnostics_count = len(self._extension_diagnostics)
+            extensions = f"  extensions={extension_count}"
+            if diagnostics_count:
+                extensions += f" diagnostics={diagnostics_count}"
         durable = (
             f"  session={short_session_id(self._durable_session.id)}"
             f" name={_display_name(self._durable_session.display_name)}"
@@ -181,7 +187,7 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
         )
         return (
             f"runtime: {self._model_ref}  thinking={self._thinking_level}  "
-            f"cache={cache}{durable}"
+            f"cache={cache}{extensions}{durable}"
         )
 
     @property
@@ -416,8 +422,11 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
 
     async def _run_prompt(self, text: str, generation: int) -> None:
         try:
-            await self._auto_compact_before_prompt(text, generation)
-            await self._agent.prompt(text)
+            prompt = await self._apply_input_event(text)
+            if prompt is None:
+                return
+            await self._auto_compact_before_prompt(prompt, generation)
+            await self._agent.prompt(prompt)
         except Exception as exc:
             self._enqueue_error(str(exc), generation)
         finally:
@@ -449,7 +458,7 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
         agent = self._agent_factory(
             AgentOptions(
                 model=self._model,
-                system_prompt=_DEFAULT_SYSTEM_PROMPT,
+                system_prompt=self._build_system_prompt(),
                 thinking_level=self._thinking_level,
                 cache_retention=self._cache_retention,
                 session_id=self._provider_cache_affinity_id,
@@ -457,7 +466,10 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
                 get_api_key=self._get_api_key,
                 tools=self._build_tools(run_id_provider=active_run_id),
                 convert_to_llm=convert_coding_messages_to_llm,
+                transform_context=self._transform_context,
                 recover_assistant_response=self._recover_assistant_response,
+                before_tool_call=self._before_tool_call,
+                after_tool_call=self._after_tool_call,
             )
         )
         agent_ref.append(agent)
@@ -478,13 +490,14 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
         if self._tool_profile == "none":
             return []
         if self._tool_profile == "coding":
-            return create_coding_tools(
+            tools = create_coding_tools(
                 self._cwd,
                 runtime_session_id=self._runtime_session_id,
                 run_id_provider=run_id_provider,
                 audit_sink=self._audit_sink,
                 artifact_store=self._artifact_store,
             )
+            return [*tools, *self._build_extension_tools(run_id_provider=run_id_provider)]
         if self._tool_profile == "read_only":
             return create_read_only_tools(
                 self._cwd,
@@ -537,6 +550,10 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin):
             parsed = UserBashEventResult.model_validate(hook_result)
             if parsed.result is not None:
                 return parsed.result
+        if self._extension_runner is not None:
+            extension_result = await self._extension_runner.emit_user_bash(event)
+            if extension_result is not None and extension_result.result is not None:
+                return extension_result.result
 
         tool = wrap_tool_definition(
             create_bash_tool_definition(artifact_store=self._artifact_store),

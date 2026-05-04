@@ -134,10 +134,18 @@ def _policy_request(
         actor=runtime.actor,
         source={
             "tool_call_id": tool_call_id,
-            "input_origin": "model" if runtime.actor == "model" else "user_bash",
+            "input_origin": _input_origin(runtime.actor),
             "actor_role": runtime.actor,
         },
     )
+
+
+def _input_origin(actor: PolicyActor) -> str:
+    if actor == "model":
+        return "model"
+    if actor == "user":
+        return "user_bash"
+    return "extension"
 
 
 async def _resolve_policy_decision(runtime: ToolRuntime, request: PolicyRequest) -> PolicyDecision:

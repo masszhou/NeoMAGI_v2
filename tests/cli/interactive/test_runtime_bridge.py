@@ -73,7 +73,7 @@ def test_runtime_supplies_default_system_prompt_for_codex() -> None:
         agent_factory=factory,
     )
     try:
-        assert captured[0].system_prompt == "You are a helpful coding assistant."
+        assert captured[0].system_prompt.startswith("You are a helpful coding assistant.")
     finally:
         runtime.shutdown()
 
