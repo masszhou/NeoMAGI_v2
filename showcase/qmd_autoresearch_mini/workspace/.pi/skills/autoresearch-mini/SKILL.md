@@ -46,7 +46,7 @@ bash autoresearch.sh
 If `autoresearch.checks.sh` exists, it runs after a passing benchmark and can turn the run into `checks_failed`.
 
 ## Decision
-Baseline logs with status `baseline`. A successful trial is an agent decision: use `keep` only for a defensible improvement, otherwise use `discard`. Use `crash` for benchmark failures and `checks_failed` for check failures. After each decision, update `autoresearch.md` with what was learned.
+Baseline logs with status `baseline`. A successful non-baseline `run_experiment` returns `status=ready`; do not pass `ready` to `log_experiment`. This is the decision point: use `keep` only for a defensible improvement, otherwise use `discard`. Use `crash` for benchmark failures and `checks_failed` for check failures. After each decision, update `autoresearch.md` with what was learned.
 
 ## Restart Note
 Every `log_experiment` call must include what the next session should know: last hypothesis, result, changed files, whether the idea should be retried, and the safest next hypothesis. On restart, trust `autoresearch.md`, `autoresearch.jsonl`, and `git log` over conversation memory.

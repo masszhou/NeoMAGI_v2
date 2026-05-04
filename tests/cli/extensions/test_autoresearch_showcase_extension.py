@@ -153,7 +153,7 @@ def test_log_appends_jsonl_and_redacts_secret_values(monkeypatch: pytest.MonkeyP
                 "hypothesis": "",
                 "changes": "used hf_" + "A" * 32,
                 "command": "echo $HF_TOKEN",
-                "metrics": {"score": 0.5},
+                "metrics": {"score": 0.5, "output_tokens": 1234, "tokens_per_sec": 42.5},
                 "metrics_source": "returned_output",
                 "exit_code": 0,
                 "duration_ms": 10,
@@ -165,6 +165,8 @@ def test_log_appends_jsonl_and_redacts_secret_values(monkeypatch: pytest.MonkeyP
     entry = json.loads(line)
     assert result["isError"] is False
     assert entry["status"] == "baseline"
+    assert entry["metrics"]["output_tokens"] == 1234
+    assert entry["metrics"]["tokens_per_sec"] == 42.5
     assert "hf_" + "A" * 32 not in line
     assert "<redacted:HF_TOKEN>" in line
 
@@ -209,12 +211,29 @@ def test_keep_rejects_default_branch(tmp_path: Path) -> None:
     assert "refuses default" in result["content"][0]["text"]
 
 
+def test_discard_rejects_default_branch_without_removing_untracked_files(tmp_path: Path) -> None:
+    workspace = _copy_workspace(tmp_path)
+    _git_init_with_commit(workspace, "main")
+    (workspace / "IMPORTANT_USER_NOTES.txt").write_text("keep me\n", encoding="utf-8")
+    (workspace / "my_workdir").mkdir()
+    (workspace / "my_workdir" / "wip.txt").write_text("keep me too\n", encoding="utf-8")
+
+    result = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "discard", "restart_note": "Do not discard on main."}))
+
+    assert result["isError"] is True
+    assert "refuses default" in result["content"][0]["text"]
+    assert (workspace / "IMPORTANT_USER_NOTES.txt").is_file()
+    assert (workspace / "my_workdir" / "wip.txt").is_file()
+
+
 def test_discard_reverts_non_autoresearch_files_only(tmp_path: Path) -> None:
     workspace = _copy_workspace(tmp_path)
     _git_init_with_commit(workspace, "scratch/autoresearch-test")
     original_config = (workspace / "finetune" / "configs" / "baseline.json").read_text(encoding="utf-8")
     _replace_in_file(workspace / "finetune" / "configs" / "baseline.json", '"n_examples": 4', '"n_examples": 5')
     (workspace / "scratch.txt").write_text("remove me\n", encoding="utf-8")
+    (workspace / "scratch_dir").mkdir()
+    (workspace / "scratch_dir" / "scratch.txt").write_text("remove me too\n", encoding="utf-8")
     (workspace / "autoresearch.md").write_text("preserve me\n", encoding="utf-8")
 
     result = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "discard", "restart_note": "Discarded noisy change."}))
@@ -222,9 +241,11 @@ def test_discard_reverts_non_autoresearch_files_only(tmp_path: Path) -> None:
     assert result["isError"] is False
     assert (workspace / "finetune" / "configs" / "baseline.json").read_text(encoding="utf-8") == original_config
     assert not (workspace / "scratch.txt").exists()
+    assert not (workspace / "scratch_dir").exists()
     assert (workspace / "autoresearch.md").read_text(encoding="utf-8") == "preserve me\n"
     entry = json.loads((workspace / "autoresearch.jsonl").read_text(encoding="utf-8").strip())
-    assert entry["revert"]["removed"] == ["scratch.txt"]
+    assert entry["revert"]["removed"] == ["scratch.txt", "scratch_dir/scratch.txt"]
+    assert entry["revert"]["removed_dirs"] == ["scratch_dir"]
 
 
 async def _call_tool(

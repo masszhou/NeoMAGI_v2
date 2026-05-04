@@ -20,7 +20,10 @@ from typing import Any
 
 
 METRIC_RE = re.compile(r"^METRIC\s+([A-Za-z][A-Za-z0-9_]{0,63})=(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$")
-SECRET_KEY_RE = re.compile(r"token|secret|password|api[_-]?key|authorization|cookie", re.IGNORECASE)
+SECRET_KEY_RE = re.compile(
+    r"(?:^|[_-])(?:token|secret|password|authorization|cookie)(?:$|[_-])|(?:^|[_-])api[_-]?key(?:$|[_-])",
+    re.IGNORECASE,
+)
 SECRET_VALUE_RE = re.compile(
     r"\b(?:sk-[A-Za-z0-9_-]{16,}|hf_[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{16,}|"
     r"github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b"
@@ -53,7 +56,10 @@ def setup(api: Any) -> None:
         {
             "name": "run_experiment",
             "label": "run experiment",
-            "description": "Run the benchmark via governed api.exec, parse METRIC lines, and run optional checks.",
+            "description": (
+                "Run the benchmark via governed api.exec, parse METRIC lines, and run optional checks. "
+                "A successful non-baseline run returns status=ready; the agent must then choose keep or discard."
+            ),
             "parameters": _object_schema(
                 {
                     "trial_id": {"type": "string"},
@@ -134,7 +140,7 @@ def _init_experiment(api: Any, args: dict[str, Any]) -> dict[str, Any]:
         if bool(args.get("create_checks", False)):
             _write_once(
                 workdir / "autoresearch.checks.sh",
-                "#!/usr/bin/env bash\nset -euo pipefail\npython finetune/benchmark.py --config finetune/configs/baseline.json >/dev/null\n",
+                "#!/usr/bin/env bash\nset -euo pipefail\npython3 finetune/benchmark.py --config finetune/configs/baseline.json >/dev/null\n",
                 overwrite=overwrite,
                 executable=True,
                 created=created,
@@ -195,7 +201,7 @@ def _log_experiment(api: Any, args: dict[str, Any]) -> dict[str, Any]:
         status = str(args["status"])
         if status not in VALID_STATUSES:
             raise ValueError(f"invalid status: {status}")
-        if status == "keep":
+        if status in {"keep", "discard"}:
             _refuse_default_branch(workdir)
 
         entry = _entry_from_args(args, run_result, status)
@@ -368,7 +374,7 @@ def _benchmark_script() -> str:
     return (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "python finetune/benchmark.py --config finetune/configs/baseline.json\n"
+        "python3 finetune/benchmark.py --config finetune/configs/baseline.json\n"
     )
 
 
@@ -400,6 +406,7 @@ def _keep_changes(workdir: Path) -> str:
 def _discard_changes(workdir: Path) -> dict[str, Any]:
     reverted: list[str] = []
     removed: list[str] = []
+    removed_dirs: list[str] = []
     for rel in _git_lines(workdir, "diff", "--name-only"):
         if not _is_preserved(rel):
             _git(workdir, "checkout", "--", rel, check=False)
@@ -420,13 +427,14 @@ def _discard_changes(workdir: Path) -> dict[str, Any]:
         elif target.exists():
             target.unlink()
         removed.append(rel)
-    return {"reverted": sorted(set(reverted)), "removed": sorted(set(removed))}
+        _remove_empty_parents(workdir, target.parent, removed_dirs)
+    return {"reverted": sorted(set(reverted)), "removed": sorted(set(removed)), "removed_dirs": sorted(set(removed_dirs))}
 
 
 def _refuse_default_branch(workdir: Path) -> None:
     branch = _git(workdir, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if branch in {"HEAD", "main", "master", _default_branch(workdir)}:
-        raise ValueError(f"keep refuses default or detached branch: {branch}")
+        raise ValueError(f"autoresearch refuses default or detached branch: {branch}")
 
 
 def _default_branch(workdir: Path) -> str | None:
@@ -457,18 +465,35 @@ def _is_preserved(rel: str) -> bool:
     return rel in PRESERVED_FILES or rel.startswith(PRESERVED_PREFIXES)
 
 
+def _remove_empty_parents(workdir: Path, directory: Path, removed_dirs: list[str]) -> None:
+    current = directory.resolve()
+    while current != workdir and workdir in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        removed_dirs.append(current.relative_to(workdir).as_posix())
+        current = current.parent
+
+
+def _is_secret_key(key: Any) -> bool:
+    text = str(key)
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    return bool(SECRET_KEY_RE.search(normalized))
+
+
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            redacted[key] = f"<redacted:{key}>" if SECRET_KEY_RE.search(str(key)) else _redact(item)
+            redacted[key] = f"<redacted:{key}>" if _is_secret_key(key) and isinstance(item, str) else _redact(item)
         return redacted
     if isinstance(value, list):
         return [_redact(item) for item in value]
     if isinstance(value, str):
         text = value
         for key, secret in os.environ.items():
-            if SECRET_KEY_RE.search(key) and secret and len(secret) >= 4:
+            if _is_secret_key(key) and secret and len(secret) >= 4:
                 text = text.replace(secret, f"<redacted:{key}>")
         return SECRET_VALUE_RE.sub("<redacted:secret>", text)
     return value
