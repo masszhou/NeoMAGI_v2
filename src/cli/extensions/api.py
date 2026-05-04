@@ -17,6 +17,7 @@ from .types import (
     ToolDefinition,
     ToolDefinitionAdapter,
 )
+from .ui import NoopExtensionUIContext
 
 
 class RuntimeNotInitializedError(RuntimeError):
@@ -101,6 +102,13 @@ class ExtensionAPIImpl:
     @property
     def events(self) -> ExtensionEventBus:
         return self._event_bus
+
+    @property
+    def ui(self) -> Any:
+        ui = self._runtime.actions.get("ui")
+        if ui is None:
+            return NoopExtensionUIContext()
+        return ui
 
     @property
     def cwd(self) -> str:

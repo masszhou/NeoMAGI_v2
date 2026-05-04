@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
+from cli.core.session_manager import SessionManager
 from cli.interactive.runtime import InteractiveAgentRuntime
 from policy.audit import InMemoryAuditSink
+from storage.in_memory_session_repository import InMemorySessionRepository
+
+
+def _drain_until_idle(runtime: InteractiveAgentRuntime, *, timeout: float = 3.0):
+    deadline = time.monotonic() + timeout
+    events = []
+    while time.monotonic() < deadline:
+        events.extend(runtime.drain_events())
+        if not runtime.state.is_running and any(getattr(event, "type", None) == "agent_end" for event in events):
+            events.extend(runtime.drain_events())
+            return events
+        time.sleep(0.01)
+    raise AssertionError("runtime did not become idle")
 
 
 def test_runtime_loads_extension_tool_through_governed_path(tmp_path) -> None:
@@ -160,6 +175,120 @@ def setup(api):
         runtime.shutdown()
 
     assert transformed == "base transformed"
+
+
+def test_runtime_extension_actions_append_custom_entries_and_messages(tmp_path) -> None:
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "custom.py").write_text(
+        """
+def setup(api):
+    def emit(_ctx):
+        api.append_entry("research_note", {"metric": 0.72})
+        api.send_message({"customType": "status_panel", "content": "hello", "display": True})
+    api.register_command("emit_custom", {"description": "emit", "handler": emit})
+""",
+        encoding="utf-8",
+    )
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    runtime = InteractiveAgentRuntime(cwd=tmp_path, session_manager=manager)
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+        runtime.run_extension_command("emit_custom", [], "/emit_custom")
+        events = runtime.drain_events()
+        entries = repo.list_entries(session_id)
+    finally:
+        runtime.shutdown()
+
+    assert [entry.payload.type for entry in entries] == ["custom", "custom_message"]
+    assert any(getattr(event, "type", None) == "message_start" for event in events)
+    assert manager.build_session_context(session_id).messages[0].custom_type == "status_panel"
+
+
+def test_runtime_extension_exec_uses_governed_bash_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "exec_ext.py").write_text(
+        """
+def setup(api):
+    async def run(_ctx):
+        result = await api.exec('printf "${SSH_AUTH_SOCK-unset}"', [], {"timeout": 1})
+        api.append_entry("exec_result", result)
+    api.register_command("exec_check", {"description": "exec", "handler": run})
+""",
+        encoding="utf-8",
+    )
+    audit = InMemoryAuditSink()
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    runtime = InteractiveAgentRuntime(cwd=tmp_path, audit_sink=audit, session_manager=manager)
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+        runtime.run_extension_command("exec_check", [], "/exec_check")
+        entries = repo.list_entries(session_id)
+    finally:
+        runtime.shutdown()
+
+    assert entries[-1].payload.type == "custom"
+    assert entries[-1].payload.data["output"] == "unset"
+    assert audit.records[-1].actor == "extension"
+    assert audit.records[-1].tool_name == "bash"
+    assert audit.records[-1].args["commandPreview"] == 'printf "${SSH_AUTH_SOCK-unset}"'
+
+
+def test_runtime_extension_before_agent_start_and_provider_hooks(tmp_path) -> None:
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "agent_hooks.py").write_text(
+        """
+def setup(api):
+    def before_agent(event):
+        return {
+            "message": {"customType": "preflight", "content": "ready", "display": True},
+            "systemPrompt": event.system_prompt + "\\nEXTENSION_SYSTEM",
+        }
+
+    def agent_start(_event):
+        api.append_entry("agent_start", True)
+
+    def before_payload(event):
+        api.append_entry("provider_system_prompt", event["payload"]["context"].system_prompt)
+
+    def after_response(event):
+        api.append_entry("provider_response", {"status": event["status"]})
+
+    api.on("before_agent_start", before_agent)
+    api.on("agent_start", agent_start)
+    api.on("before_provider_request", before_payload)
+    api.on("after_provider_response", after_response)
+""",
+        encoding="utf-8",
+    )
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    runtime = InteractiveAgentRuntime(cwd=tmp_path, session_manager=manager)
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+        runtime.submit("hello")
+        events = _drain_until_idle(runtime)
+        entries = repo.list_entries(session_id)
+    finally:
+        runtime.shutdown()
+
+    assert any(
+        getattr(event, "type", None) == "message_start"
+        and getattr(event.message, "custom_type", None) == "preflight"
+        for event in events
+    )
+    custom_entries = [entry.payload for entry in entries if entry.payload.type == "custom"]
+    assert [entry.custom_type for entry in custom_entries] == [
+        "agent_start",
+        "provider_response",
+        "provider_system_prompt",
+    ]
+    assert "EXTENSION_SYSTEM" in custom_entries[-1].data
 
 
 class _BeforeContext:

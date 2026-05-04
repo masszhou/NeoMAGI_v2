@@ -31,6 +31,7 @@ from cli.core.session_types import (
     AgentEndEvent,
     AgentSessionEvent,
     BashExecutionMessage,
+    CustomMessage,
     MessageEndEvent,
     MessageStartEvent,
     QueueUpdateEvent,
@@ -124,7 +125,6 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
         self._summary_generator = summary_generator
         self._last_tree_summary_notice: str | None = None
         self._user_bash_hook = user_bash_hook
-        self._initialize_extension_runtime()
 
         self._events: queue.Queue[AgentSessionEvent] = queue.Queue()
         self._lock = threading.RLock()
@@ -134,11 +134,13 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
         self._active_future: Future[Any] | None = None
         self._closed = False
         self._generation = 0
+        self._active_tool_names: set[str] | None = None
 
         self._runtime_session_id = self._mint_runtime_session_id()
         self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
         self._provider_cache_affinity_id = self._resolve_provider_cache_affinity_id()
         self._session_writer = self._build_session_writer()
+        self._initialize_extension_runtime()
         self._agent = self._build_agent(self._generation)
 
         self._loop = asyncio.new_event_loop()
@@ -374,6 +376,10 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
         with self._lock:
             if self._closed:
                 return
+        self._emit_extension_session_shutdown("quit")
+        with self._lock:
+            if self._closed:
+                return
             self._closed = True
             future = self._active_future if self._is_running_locked() else None
             if future is not None:
@@ -426,7 +432,24 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
             if prompt is None:
                 return
             await self._auto_compact_before_prompt(prompt, generation)
-            await self._agent.prompt(prompt)
+            before_messages, system_prompt = await self._before_agent_start_messages(prompt)
+            old_system_prompt = self._agent.state.system_prompt
+            self._agent.state.system_prompt = system_prompt
+            try:
+                prompt_messages = []
+                for message in before_messages:
+                    if isinstance(message, CustomMessage):
+                        self._emit_session_event(MessageStartEvent(message=message))
+                        self._emit_session_event(MessageEndEvent(message=message))
+                        self._agent.state.messages.append(message)
+                    else:
+                        prompt_messages.append(message)
+                if prompt_messages:
+                    await self._agent.prompt([*prompt_messages, self._user_message(prompt)])
+                else:
+                    await self._agent.prompt(prompt)
+            finally:
+                self._agent.state.system_prompt = old_system_prompt
         except Exception as exc:
             self._enqueue_error(str(exc), generation)
         finally:
@@ -468,15 +491,19 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
                 convert_to_llm=convert_coding_messages_to_llm,
                 transform_context=self._transform_context,
                 recover_assistant_response=self._recover_assistant_response,
+                on_payload=self._before_provider_request,
+                on_response=self._after_provider_response,
                 before_tool_call=self._before_tool_call,
                 after_tool_call=self._after_tool_call,
             )
         )
         agent_ref.append(agent)
 
-        def listener(event: Any, _signal: asyncio.Event) -> None:
+        async def listener(event: Any, _signal: asyncio.Event) -> None:
             if generation != self._generation:
                 return
+            if self._extension_runner is not None:
+                await self._extension_runner.emit(event)
             self._emit_session_event(agent_event_to_session_event(event))
 
         agent.subscribe(listener)
@@ -497,15 +524,24 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
                 audit_sink=self._audit_sink,
                 artifact_store=self._artifact_store,
             )
-            return [*tools, *self._build_extension_tools(run_id_provider=run_id_provider)]
+            return self._filter_active_tools(
+                [*tools, *self._build_extension_tools(run_id_provider=run_id_provider)]
+            )
         if self._tool_profile == "read_only":
-            return create_read_only_tools(
-                self._cwd,
-                runtime_session_id=self._runtime_session_id,
-                run_id_provider=run_id_provider,
-                audit_sink=self._audit_sink,
+            return self._filter_active_tools(
+                create_read_only_tools(
+                    self._cwd,
+                    runtime_session_id=self._runtime_session_id,
+                    run_id_provider=run_id_provider,
+                    audit_sink=self._audit_sink,
+                )
             )
         raise ValueError(f"unsupported tool profile: {self._tool_profile}")
+
+    def _filter_active_tools(self, tools):
+        if self._active_tool_names is None:
+            return tools
+        return [tool for tool in tools if tool.name in self._active_tool_names]
 
     async def _run_user_bash(
         self,
