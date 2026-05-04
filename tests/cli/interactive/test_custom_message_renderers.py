@@ -60,10 +60,11 @@ def setup(api):
         runtime.run_extension_command("emit_panel", [], "/emit_panel")
         _dispatch_drained(controller, runtime)
         rendered = "\n".join(controller.messages.render(80))
+        controller.messages.render(80)
         notifications = [note.text for note in controller.status._notifications]  # noqa: SLF001
     finally:
         runtime.shutdown()
 
     assert "custom: panel" in rendered
     assert "hello" in rendered
-    assert any("custom renderer panel failed: boom" in note for note in notifications)
+    assert sum("custom renderer panel failed: boom" in note for note in notifications) == 1

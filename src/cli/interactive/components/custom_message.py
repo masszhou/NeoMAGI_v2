@@ -36,6 +36,7 @@ class CustomMessageComponent(Component):
         self.message: CustomMessage = message
         self._renderer = renderer
         self._on_renderer_error = on_renderer_error
+        self._renderer_failed = False
 
     def render(self, width: int) -> list[str]:
         if not self.message.display:
@@ -46,7 +47,7 @@ class CustomMessageComponent(Component):
         return self._render_generic(width)
 
     def _render_extension(self, width: int) -> list[str] | None:
-        if self._renderer is None:
+        if self._renderer is None or self._renderer_failed:
             return None
         try:
             rendered = self._renderer(self.message, {"width": width})
@@ -56,6 +57,7 @@ class CustomMessageComponent(Component):
                 return [row(item, width) for item in rendered]
             raise TypeError(f"unsupported custom renderer result: {type(rendered).__name__}")
         except Exception as exc:
+            self._renderer_failed = True
             if self._on_renderer_error is not None:
                 self._on_renderer_error(self.message.custom_type, exc)
             return None
