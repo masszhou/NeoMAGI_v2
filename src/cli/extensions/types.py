@@ -198,8 +198,8 @@ class ProviderModelConfig(_PiModel):
     reasoning: bool
     input: list[Literal["text", "image"]]
     cost: dict[str, float]
-    context_window: int = Field(alias="contextWindow")
-    max_tokens: int = Field(alias="maxTokens")
+    context_window: int = Field(alias="contextWindow", gt=0)
+    max_tokens: int = Field(alias="maxTokens", gt=0)
     headers: dict[str, str] | None = None
 
 
