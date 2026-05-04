@@ -66,6 +66,7 @@ ALL_SCENES = (
     "extension_api_surface",
     "extension_custom_message",
     "extension_tool_event_mutation",
+    "extensions",
     "model_change",
     "openai_completions_prompt_cache",
     "openai_responses_prompt_cache",
@@ -81,11 +82,13 @@ ALL_SCENES = (
     "session_affinity_headers",
     "session_before_compact_extension_replace",
     "session_tree_branch",
+    "skills",
     "silent_overflow",
     "thinking_level_change",
     "tool_argument_validation",
     "tool_execution_error",
     "tool_execution_success",
+    "prompt_templates",
     "usage_cache_normalization",
 )
 
