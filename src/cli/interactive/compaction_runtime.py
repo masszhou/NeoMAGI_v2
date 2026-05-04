@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Literal
 
 from ai_provider.overflow import is_context_overflow
 from ai_provider.types import AssistantMessage, Context
-from cli.core.compaction.models import CompactionFailure
+from cli.core.compaction.models import BranchSummaryResult, CompactionFailure, CompactionResult
 from cli.core.compaction.service import (
+    BranchSwitchResult,
     CompactionAppendResult,
     CompactionService,
     ProviderSummaryGenerator,
@@ -23,6 +25,7 @@ from cli.core.session_types import (
     MessageEndEvent,
     MessageStartEvent,
 )
+from cli.extensions.event_types import SessionBeforeCompactResult, SessionBeforeTreeResult
 from storage.session_repository import SessionRecord
 
 
@@ -73,8 +76,7 @@ class CompactionRuntimeMixin:
     ) -> CompactionAppendResult:
         self._emit_session_event(CompactionStartEvent(reason="manual"))
         try:
-            result = await self._compaction_service().compact_session(
-                self._require_durable_session_id(),
+            result = await self._compact_session_with_extension_hook(
                 reason="manual",
                 custom_instructions=custom_instructions,
                 force=True,
@@ -84,6 +86,7 @@ class CompactionRuntimeMixin:
             raise
         self._refresh_agent_from_durable_session()
         self._emit_compaction_success("manual", result, will_retry=False)
+        await self._emit_session_compact(result)
         message = CompactionSummaryMessage(
             summary=result.result.summary,
             tokensBefore=result.result.tokens_before,
@@ -110,8 +113,7 @@ class CompactionRuntimeMixin:
             return
         self._emit_session_event(CompactionStartEvent(reason="threshold"))
         try:
-            result = await service.compact_session(
-                self._durable_session.id,
+            result = await self._compact_session_with_extension_hook(
                 reason="threshold",
                 target_budget=target_budget,
             )
@@ -120,6 +122,7 @@ class CompactionRuntimeMixin:
             raise
         self._refresh_agent_from_durable_session()
         self._emit_compaction_success("threshold", result, will_retry=False)
+        await self._emit_session_compact(result)
 
     async def _recover_assistant_response(
         self,
@@ -156,8 +159,7 @@ class CompactionRuntimeMixin:
         self._emit_session_event(CompactionStartEvent(reason="overflow"))
         try:
             service = self._compaction_service()
-            result = await service.compact_session(
-                self._require_durable_session_id(),
+            result = await self._compact_session_with_extension_hook(
                 reason="overflow",
                 target_budget=service.settings.target_budget(self._model.context_window),
                 force=True,
@@ -167,6 +169,7 @@ class CompactionRuntimeMixin:
             return None
         self._refresh_agent_from_durable_session()
         self._emit_compaction_success("overflow", result, will_retry=True)
+        await self._emit_session_compact(result)
         self._emit_session_event(
             AutoRetryStartEvent(
                 attempt=attempt + 1,
@@ -182,7 +185,8 @@ class CompactionRuntimeMixin:
         )
 
     async def _select_session_leaf_with_summary(self, entry_id: str) -> SessionRecord:
-        result = await self._compaction_service().summarize_branch_for_tree_switch(
+        hook_result = await self._branch_summary_with_extension_hook(entry_id)
+        result = hook_result or await self._compaction_service().summarize_branch_for_tree_switch(
             self._require_durable_session_id(),
             target_entry_id=entry_id,
         )
@@ -201,7 +205,137 @@ class CompactionRuntimeMixin:
             )
             self._emit_session_event(MessageStartEvent(message=message))
             self._emit_session_event(MessageEndEvent(message=message))
+        await self._emit_session_tree(result)
         return result.session
+
+    async def _compact_session_with_extension_hook(
+        self,
+        *,
+        reason: Literal["manual", "threshold", "overflow"],
+        custom_instructions: str | None = None,
+        target_budget: int | None = None,
+        force: bool = False,
+    ) -> CompactionAppendResult:
+        hook_result = await self._compaction_with_extension_hook(
+            reason=reason,
+            custom_instructions=custom_instructions,
+            target_budget=target_budget,
+            force=force,
+        )
+        if hook_result is not None:
+            return hook_result
+        return await self._compaction_service().compact_session(
+            self._require_durable_session_id(),
+            reason=reason,
+            custom_instructions=custom_instructions,
+            target_budget=target_budget,
+            force=force,
+        )
+
+    async def _compaction_with_extension_hook(
+        self,
+        *,
+        reason: Literal["manual", "threshold", "overflow"],
+        custom_instructions: str | None,
+        target_budget: int | None,
+        force: bool,
+    ) -> CompactionAppendResult | None:
+        if self._extension_runner is None or self._session_manager is None or self._durable_session is None:
+            return None
+        entries = self._session_manager.entry_path(self._durable_session.id)
+        event = {
+            "type": "session_before_compact",
+            "preparation": {
+                "reason": reason,
+                "targetBudget": target_budget,
+                "force": force,
+            },
+            "branchEntries": [_dump_entry(entry) for entry in entries],
+            "customInstructions": custom_instructions,
+            "signal": None,
+        }
+        for raw in await self._extension_runner.emit(event):
+            parsed = SessionBeforeCompactResult.model_validate(raw)
+            if parsed.cancel:
+                raise CompactionFailure("cancelled", "compaction cancelled by extension")
+            if parsed.compaction is not None:
+                result = CompactionResult.model_validate(parsed.compaction).model_copy(
+                    update={"reason": reason, "from_hook": True}
+                )
+                entry = self._session_manager.append_compaction(self._durable_session.id, result)
+                return CompactionAppendResult(entry=entry, result=result)
+        return None
+
+    async def _branch_summary_with_extension_hook(self, entry_id: str) -> BranchSwitchResult | None:
+        if self._extension_runner is None or self._session_manager is None or self._durable_session is None:
+            return None
+        session = self._durable_session
+        old_leaf_id = self._current_leaf_pi_id()
+        event = {
+            "type": "session_before_tree",
+            "preparation": {
+                "targetId": entry_id,
+                "oldLeafId": old_leaf_id,
+                "userWantsSummary": True,
+            },
+            "signal": None,
+        }
+        for raw in await self._extension_runner.emit(event):
+            parsed = SessionBeforeTreeResult.model_validate(raw)
+            if parsed.cancel:
+                raise CompactionFailure("cancelled", "tree navigation cancelled by extension")
+            if parsed.summary is not None:
+                payload = dict(parsed.summary)
+                payload.setdefault("fromId", old_leaf_id or entry_id)
+                result = BranchSummaryResult.model_validate(payload).model_copy(
+                    update={"from_hook": True}
+                )
+                entry = self._session_manager.append_branch_summary(
+                    session.id,
+                    target_entry_id=entry_id,
+                    result=result,
+                )
+                refreshed = self._session_manager.resume_session(session.id)
+                return BranchSwitchResult(session=refreshed, entry=entry, result=result)
+        return None
+
+    async def _emit_session_compact(self, result: CompactionAppendResult) -> None:
+        if self._extension_runner is None:
+            return
+        await self._extension_runner.emit(
+            {
+                "type": "session_compact",
+                "compactionEntry": _dump_entry(result.entry),
+                "fromExtension": result.result.from_hook,
+            }
+        )
+
+    async def _emit_session_tree(self, result: BranchSwitchResult) -> None:
+        if self._extension_runner is None:
+            return
+        await self._extension_runner.emit(
+            {
+                "type": "session_tree",
+                "newLeafId": self._current_leaf_pi_id(),
+                "oldLeafId": result.result.from_id if result.result is not None else None,
+                "summaryEntry": _dump_entry(result.entry) if result.entry is not None else None,
+                "fromExtension": bool(result.result and result.result.from_hook),
+            }
+        )
+
+    def _current_leaf_pi_id(self) -> str | None:
+        if self._session_manager is None or self._durable_session is None:
+            return None
+        refreshed = self._session_manager.repository.get_session(self._durable_session.id)
+        if refreshed is not None:
+            self._durable_session = refreshed
+        if self._durable_session.current_leaf_entry_id is None:
+            return None
+        entry = self._session_manager.repository.get_entry(
+            self._durable_session.id,
+            self._durable_session.current_leaf_entry_id,
+        )
+        return entry.pi_export_id if entry is not None else None
 
     def _refresh_agent_from_durable_session(self) -> None:
         if self._session_manager is None or self._durable_session is None:
@@ -252,3 +386,9 @@ class CompactionRuntimeMixin:
 
 
 __all__ = ["CompactionRuntimeMixin"]
+
+
+def _dump_entry(entry) -> dict:
+    if entry is None:
+        return {}
+    return entry.payload.model_dump(by_alias=True, exclude_none=True)
