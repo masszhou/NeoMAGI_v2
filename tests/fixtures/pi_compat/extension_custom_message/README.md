@@ -1,8 +1,8 @@
 # Fixture: `extension_custom_message`
 
-- Status: M0 placeholder (input + expected delivered with M3)
+- Status: P1-M8 covered by runtime/unit tests; README-only golden fixture placeholder remains.
 - Source: pi-mono `97a38bf6` `packages/coding-agent/src/core/extensions/types.ts:1126–1130` `sendMessage` + `messages.ts` `createCustomMessage`.
-- Owner milestone: M3 (extension API).
+- Owner milestone: P1-M8 (extension API). Machine-readable input/expected fixture deferred to the M9/M10 fixture refresh.
 
 ## Expected outline
 

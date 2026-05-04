@@ -1,8 +1,8 @@
 # Fixture: `extension_api_surface`
 
-- Status: M0 placeholder (input + expected delivered with M3)
+- Status: P1-M8 covered by runtime/unit tests; README-only golden fixture placeholder remains.
 - Source: pi-mono `97a38bf6` `packages/coding-agent/src/core/extensions/types.ts:1040–1259`.
-- Owner milestone: M3 (extension API).
+- Owner milestone: P1-M8 (extension API). Machine-readable input/expected fixture deferred to the M9/M10 fixture refresh.
 
 ## Expected outline
 
