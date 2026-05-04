@@ -1,0 +1,3 @@
+{"query":"auth config","lex":["auth config","authentication setup"],"vec":["configure authentication settings"],"hyde":"Authentication can be configured with local settings and secrets."}
+{"query":"memory search","lex":["memory search","retrieval"],"vec":["find relevant remembered facts"],"hyde":"A personal agent can retrieve scoped memories before answering."}
+{"query":"session resume","lex":["session resume","durable session"],"vec":["restore a previous agent run"],"hyde":"Durable session logs let a fresh process resume prior context."}

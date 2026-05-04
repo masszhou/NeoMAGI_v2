@@ -1,0 +1,6 @@
+{
+  "seed": 17,
+  "n_examples": 4,
+  "quality_bias": 0.0,
+  "evals_path": "evals/queries.jsonl"
+}

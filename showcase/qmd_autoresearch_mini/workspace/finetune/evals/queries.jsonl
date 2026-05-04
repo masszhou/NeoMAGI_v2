@@ -1,0 +1,6 @@
+{"query":"auth config","difficulty":3,"expected_prefix":"lex:"}
+{"query":"memory search","difficulty":5,"expected_prefix":"vec:"}
+{"query":"session resume","difficulty":4,"expected_prefix":"hyde:"}
+{"query":"prompt cache","difficulty":6,"expected_prefix":"lex:"}
+{"query":"tool audit","difficulty":2,"expected_prefix":"vec:"}
+{"query":"extension reload","difficulty":7,"expected_prefix":"hyde:"}
