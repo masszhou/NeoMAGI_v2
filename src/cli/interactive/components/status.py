@@ -35,6 +35,7 @@ class StatusComponent(Component):
         super().__init__()
         self.queue: QueueState = QueueState()
         self._notifications: list[Notification] = []
+        self.extension_status: dict[str, str] = {}
         self.compacting: bool = False
         self.auto_retry: tuple[int, int] | None = None
         self._schedule_wake: Callable[[float], None] | None = None
@@ -78,6 +79,13 @@ class StatusComponent(Component):
 
     def clear_auto_retry(self) -> None:
         self.auto_retry = None
+        self.request_render()
+
+    def set_extension_status(self, key: str, text: str | None) -> None:
+        if text:
+            self.extension_status[key] = text
+        else:
+            self.extension_status.pop(key, None)
         self.request_render()
 
     def _alive_notifications(self) -> list[Notification]:
@@ -136,6 +144,7 @@ class StatusComponent(Component):
         if self.auto_retry is not None:
             attempt, mx = self.auto_retry
             bits.append(f"auto-retry {attempt}/{mx}")
+        bits.extend(self.extension_status[key] for key in sorted(self.extension_status))
         return "  ·  ".join(bits)
 
 

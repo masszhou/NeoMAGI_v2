@@ -25,6 +25,7 @@ from tui.stdin_buffer import KeyEvent, MouseWheelEvent
 
 from .components import MessageListComponent, StatusComponent
 from .event_router import EventRouter
+from .extension_ui import InteractiveExtensionUIContext
 from .runtime import InteractiveAgentRuntime
 from .tool_renderer_registry import ToolRendererRegistry
 
@@ -266,6 +267,9 @@ class InteractiveController:
             self._action_handler = None
             return
         runtime.set_event_wake(self._schedule_runtime_drain)
+        runtime.bind_extension_ui_context(
+            InteractiveExtensionUIContext(status=self._status, editor=self._editor)
+        )
         self.set_submit_handler(self._handle_runtime_submit)
         self.set_action_handler(self._handle_runtime_action)
 
