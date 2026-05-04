@@ -25,12 +25,10 @@ from tui.stdin_buffer import KeyEvent, MouseWheelEvent
 
 from .components import MessageListComponent, StatusComponent
 from .event_router import EventRouter
+from .extension_bindings import custom_renderer_error, custom_renderer_lookup, slash_autocomplete_items
 from .extension_ui import InteractiveExtensionUIContext
 from .runtime import InteractiveAgentRuntime
 from .tool_renderer_registry import ToolRendererRegistry
-
-# Lazy import: the slash registry lives in ``cli.slash_commands``; importing
-# it eagerly would create a cycle (slash modules import from this file).
 
 _ACTION_NOTICES = {
     Action.AT_TRIGGER: "@-mention autocomplete not implemented in M1; tracked in M5",
@@ -62,6 +60,8 @@ class InteractiveController:
             message_list=self._messages,
             status=self._status,
             tool_registry=self._tool_registry,
+            custom_renderer_lookup=custom_renderer_lookup(lambda: self._runtime),
+            custom_renderer_error=custom_renderer_error(self._status),
         )
         self._editor = Editor(
             self._keymap,
@@ -578,9 +578,8 @@ class InteractiveController:
 
         if self._slash_registry is None:
             return
-        candidates = slash_completions(
-            query or "/", self._slash_registry.autocomplete_items()
-        )
+        command_items = slash_autocomplete_items(self._slash_registry, self._runtime)
+        candidates = slash_completions(query or "/", command_items)
         if not candidates:
             self._close_slash_overlay()
             return

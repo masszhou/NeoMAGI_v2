@@ -154,6 +154,26 @@ class ExtensionRunner:
                 commands.setdefault(name, options)
         return commands
 
+    def diagnose_command_collisions(self, *, reserved: set[str] | None = None) -> None:
+        reserved = reserved or set()
+        seen: dict[str, str] = {}
+        for extension in self.runtime.extensions:
+            for name in extension.commands:
+                if name in reserved:
+                    self._add_diagnostic(
+                        extension,
+                        f"extension command /{name} conflicts with builtin slash command; keeping builtin",
+                    )
+                    continue
+                owner = seen.get(name)
+                if owner is not None:
+                    self._add_diagnostic(
+                        extension,
+                        f"duplicate extension command /{name}; keeping first from {owner}",
+                    )
+                    continue
+                seen[name] = extension.name
+
     def get_command(self, name: str) -> dict[str, Any] | None:
         return self.get_registered_commands().get(name)
 
@@ -201,6 +221,16 @@ class ExtensionRunner:
             self.diagnostics.append(diagnostic)
             extension.diagnostics.append(diagnostic)
             return None
+
+    def _add_diagnostic(self, extension: LoadedExtension, message: str) -> None:
+        diagnostic = ExtensionDiagnostic(
+            severity="warning",
+            message=message,
+            extension=extension.name,
+            path=str(extension.path) if extension.path else None,
+        )
+        self.diagnostics.append(diagnostic)
+        extension.diagnostics.append(diagnostic)
 
 
 def _event_type(event: Any) -> str:

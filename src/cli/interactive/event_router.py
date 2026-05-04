@@ -106,11 +106,15 @@ class EventRouter:
         status: StatusComponent,
         tool_registry: ToolRendererRegistry,
         clock: Callable[[], float] = time.monotonic,
+        custom_renderer_lookup: Callable[[str], Callable[..., Any] | None] | None = None,
+        custom_renderer_error: Callable[[str, Exception], None] | None = None,
     ) -> None:
         self._messages = message_list
         self._status = status
         self._tool_registry = tool_registry
         self._clock = clock
+        self._custom_renderer_lookup = custom_renderer_lookup
+        self._custom_renderer_error = custom_renderer_error
         self._run_started_at: float | None = None
         self._active_assistant: AssistantMessageComponent | None = None
         self._tool_components: dict[str, ToolExecutionComponent] = {}
@@ -252,7 +256,16 @@ class EventRouter:
         elif isinstance(message, BashExecutionMessage):
             comp = BashExecutionComponent(message)
         elif isinstance(message, CustomMessage):
-            comp = CustomMessageComponent(message)
+            renderer = (
+                self._custom_renderer_lookup(message.custom_type)
+                if self._custom_renderer_lookup is not None
+                else None
+            )
+            comp = CustomMessageComponent(
+                message,
+                renderer=renderer,
+                on_renderer_error=self._custom_renderer_error,
+            )
         elif isinstance(message, BranchSummaryMessage):
             comp = BranchSummaryComponent(message)
         elif isinstance(message, CompactionSummaryMessage):

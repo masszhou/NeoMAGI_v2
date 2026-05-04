@@ -19,6 +19,7 @@ from cli.extensions.loader import load_extensions
 from cli.extensions.runner import ExtensionRunner
 from cli.extensions.tools import create_extension_tools
 from cli.extensions.ui import NoopExtensionUIContext
+from cli.slash_commands.registry import PI_BUILTIN_COMMANDS
 from cli.tools.bash import create_bash_tool_definition
 from cli.tools.wrapper import ToolRuntime, wrap_tool_definition
 from cli.resources import (
@@ -76,6 +77,23 @@ class ExtensionRuntimeMixin:
         if self._extension_runner is None:
             return {}
         return self._extension_runner.get_registered_commands()
+
+    def get_custom_message_renderer(self, custom_type: str):
+        if self._extension_runner is None:
+            return None
+        return self._extension_runner.get_message_renderer(custom_type)
+
+    def resource_command_items(self) -> list[tuple[str, str | None]]:
+        snapshot = self._resource_loader.snapshot
+        items: list[tuple[str, str | None]] = []
+        for prompt in snapshot.prompts:
+            detail = prompt.description or "Prompt template"
+            if prompt.argument_hint:
+                detail = f"{detail} {prompt.argument_hint}"
+            items.append((f"/{prompt.name}", detail))
+        for skill in snapshot.skills:
+            items.append((f"/skill:{skill.name}", skill.description))
+        return items
 
     def run_extension_command(self, name: str, args: list[str], raw: str) -> None:
         if self._extension_runner is None:
@@ -243,6 +261,9 @@ class ExtensionRuntimeMixin:
             ui=self._extension_ui_context,
         )
         runner.set_ui_context(self._extension_ui_context)
+        runner.diagnose_command_collisions(
+            reserved={name for name, _description, _milestone in PI_BUILTIN_COMMANDS}
+        )
         contributed = await runner.emit_resources_discover(str(self._cwd), reason)
         if contributed.skills or contributed.prompts or contributed.themes:
             self._resource_loader.extend_resources(contributed)

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from concurrent.futures import Future
 
 from cli.core.session_manager import SessionManager
+from cli.interactive.app import InteractiveController
 from cli.interactive.runtime import InteractiveAgentRuntime
 from policy.audit import InMemoryAuditSink
 from storage.in_memory_session_repository import InMemorySessionRepository
+from tui.app import TUIApp
 
 
 def _drain_until_idle(runtime: InteractiveAgentRuntime, *, timeout: float = 3.0):
@@ -137,6 +140,55 @@ def test_runtime_reload_refreshes_extension_commands(tmp_path) -> None:
         runtime.shutdown()
 
     assert "extensions=1" in summary
+
+
+def test_runtime_reports_extension_command_collisions(tmp_path) -> None:
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "a_first.py").write_text(
+        "def setup(api):\n    api.register_command('hello', {'description': 'first', 'handler': lambda ctx: None})\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".pi" / "extensions" / "b_second.py").write_text(
+        "def setup(api):\n    api.register_command('hello', {'description': 'second', 'handler': lambda ctx: None})\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".pi" / "extensions" / "c_builtin.py").write_text(
+        "def setup(api):\n    api.register_command('reload', {'description': 'shadow', 'handler': lambda ctx: None})\n",
+        encoding="utf-8",
+    )
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        commands = runtime.extension_commands()
+        diagnostics = runtime._extension_diagnostics  # noqa: SLF001
+        footer = runtime.footer_summary
+    finally:
+        runtime.shutdown()
+
+    assert commands["hello"]["description"] == "first"
+    assert "diagnostics=2" in footer
+    assert any("duplicate extension command /hello" in message for message in diagnostics)
+    assert any("extension command /reload conflicts with builtin" in message for message in diagnostics)
+
+
+def test_reload_command_rejects_while_streaming(tmp_path) -> None:
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    controller = InteractiveController(tui_app=TUIApp(), runtime=runtime)
+    pending: Future[None] = Future()
+    try:
+        controller.bootstrap()
+        runtime._active_future = pending  # noqa: SLF001
+        assert controller._slash_registry is not None  # noqa: SLF001
+
+        handled = controller._slash_registry.parse_and_dispatch("/reload", controller)  # noqa: SLF001
+
+        assert handled is True
+        assert any(
+            "streaming or tools are running" in note.text
+            for note in controller.status._notifications  # noqa: SLF001
+        )
+    finally:
+        runtime._active_future = None  # noqa: SLF001
+        runtime.shutdown()
 
 
 def test_runtime_expands_skill_and_prompt_template_commands(tmp_path) -> None:
