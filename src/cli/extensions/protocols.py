@@ -83,6 +83,12 @@ class EventBus(Protocol):
 class ExtensionUIContext(Protocol):
     """22 UI primitives mirrored from `extensions/types.ts:88–268`.
 
+    M8 live-binds the first minimal interactive surface only: select / confirm /
+    input / notify / set_status / set_working_message / set_widget / editor,
+    plus editor text helpers in the interactive adapter. Other primitives remain
+    metadata-compatible no-ops that emit diagnostics until the M9 UI/keybinding
+    polish pass.
+
     Async slots (Pi: ``Promise<X>``): ``select`` / ``confirm`` / ``input`` /
     ``custom`` / ``editor`` — all dialog-style methods that wait for user
     response. Implementations MUST use ``async def`` per ADR-0014.
@@ -228,6 +234,9 @@ class ExtensionAPI(Protocol):
     contract surface."""
     def register_command(self, name: str, options: dict[str, Any]) -> None: ...
     def register_shortcut(self, key_id: KeyId, options: dict[str, Any]) -> None: ...
+    """M8 records shortcut metadata and refuses core key collisions, but does not
+    install live extension keybindings into the TUI keymap. Full binding is M9 UI
+    scope."""
     def register_flag(self, name: str, options: dict[str, Any]) -> None: ...
     def get_flag(self, name: str) -> bool | str | None: ...
 

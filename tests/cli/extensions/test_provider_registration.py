@@ -75,3 +75,16 @@ def test_provider_unregister_removes_extension_owned_record(tmp_path) -> None:
 
     assert extension.providers == {}
     assert any("unregister is recorded" in diagnostic.message for diagnostic in extension.diagnostics)
+
+
+def test_shortcut_registration_refuses_core_key_in_m8(tmp_path) -> None:
+    def setup(api) -> None:
+        api.register_shortcut("Enter", {"description": "submit override"})
+        api.register_shortcut("Ctrl+X", {"description": "custom"})
+
+    runtime = create_extension_runtime()
+    extension = asyncio.run(load_extension_from_factory(setup, name="shortcut-ext", cwd=tmp_path, runtime=runtime))
+
+    assert "Enter" not in extension.shortcuts
+    assert extension.shortcuts["Ctrl+X"].description == "custom"
+    assert any("core key" in diagnostic.message for diagnostic in extension.diagnostics)

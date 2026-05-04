@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from pydantic import ValidationError
+from tui.keymap import CORE_KEYS
 
 from .diagnostics import ExtensionDiagnostic
 from .event_bus import ExtensionEventBus
@@ -59,6 +60,16 @@ class ExtensionAPIImpl:
         self._extension.commands[name] = dict(options)
 
     def register_shortcut(self, key_id: str, options: dict[str, Any]) -> None:
+        if key_id in CORE_KEYS:
+            self._extension.diagnostics.append(
+                ExtensionDiagnostic(
+                    severity="warning",
+                    message=f"shortcut {key_id!r} is a core key and cannot be rebound in M8",
+                    extension=self._extension.name,
+                    path=str(self._extension.path) if self._extension.path else None,
+                )
+            )
+            return
         self._extension.shortcuts[key_id] = RegisteredShortcut(keyId=key_id, **options)
 
     def register_flag(self, name: str, options: dict[str, Any]) -> None:
