@@ -23,6 +23,24 @@ def test_resource_settings_merge_project_overrides_arrays_and_merges_extras() ->
     assert merged.extras == {"nested": {"a": 1, "b": 2}, "global": True}
 
 
+def test_resource_settings_global_skill_command_disable_survives_project_defaults() -> None:
+    global_settings = ResourceSettings(enable_skill_commands=False)
+    project_settings = ResourceSettings(prompts=("project-prompts",))
+
+    merged = merge_settings(global_settings, project_settings)
+
+    assert merged.enable_skill_commands is False
+
+
+def test_resource_settings_project_skill_command_override_wins() -> None:
+    global_settings = ResourceSettings(enable_skill_commands=False)
+    project_settings = ResourceSettings(enable_skill_commands=True)
+
+    merged = merge_settings(global_settings, project_settings)
+
+    assert merged.enable_skill_commands is True
+
+
 def test_system_prompt_includes_context_skills_date_and_cwd_only_when_read_active(tmp_path) -> None:
     skill_path = tmp_path / "skill" / "SKILL.md"
     skill_path.parent.mkdir()

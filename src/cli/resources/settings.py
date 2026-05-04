@@ -18,7 +18,7 @@ class ResourceSettings:
     skills: tuple[str, ...] = ()
     prompts: tuple[str, ...] = ()
     themes: tuple[str, ...] = ()
-    enable_skill_commands: bool = True
+    enable_skill_commands: bool | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -46,13 +46,18 @@ def load_resource_settings(
 
 def merge_settings(global_settings: ResourceSettings, project_settings: ResourceSettings) -> ResourceSettings:
     extras = _deep_merge(global_settings.extras, project_settings.extras)
+    enable_skill_commands = (
+        project_settings.enable_skill_commands
+        if project_settings.enable_skill_commands is not None
+        else global_settings.enable_skill_commands
+    )
     return ResourceSettings(
         packages=project_settings.packages or global_settings.packages,
         extensions=project_settings.extensions or global_settings.extensions,
         skills=project_settings.skills or global_settings.skills,
         prompts=project_settings.prompts or global_settings.prompts,
         themes=project_settings.themes or global_settings.themes,
-        enable_skill_commands=project_settings.enable_skill_commands,
+        enable_skill_commands=True if enable_skill_commands is None else enable_skill_commands,
         extras=extras,
     )
 
@@ -100,8 +105,8 @@ def _settings_from_dict(data: dict[str, Any]) -> ResourceSettings:
         skills=tuple(_string_list(data.get("skills"))),
         prompts=tuple(_string_list(data.get("prompts"))),
         themes=tuple(_string_list(data.get("themes"))),
-        enable_skill_commands=bool(
-            data.get("enableSkillCommands", data.get("enable_skill_commands", True))
+        enable_skill_commands=_bool_or_none(
+            data.get("enableSkillCommands", data.get("enable_skill_commands"))
         ),
         extras={key: value for key, value in data.items() if key not in known},
     )
@@ -115,6 +120,14 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
     return []
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return bool(value)
 
 
 def _deep_merge(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:

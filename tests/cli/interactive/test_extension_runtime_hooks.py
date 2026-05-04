@@ -211,6 +211,32 @@ def test_runtime_expands_skill_and_prompt_template_commands(tmp_path) -> None:
     assert prompt == "Question: topic"
 
 
+def test_runtime_respects_disabled_skill_commands_for_expand_and_autocomplete(tmp_path) -> None:
+    (tmp_path / ".pi" / "skills" / "reviewer").mkdir(parents=True)
+    (tmp_path / ".pi" / "prompts").mkdir(parents=True)
+    (tmp_path / ".pi" / "settings.json").write_text(
+        '{"enableSkillCommands": false}',
+        encoding="utf-8",
+    )
+    (tmp_path / ".pi" / "skills" / "reviewer" / "SKILL.md").write_text(
+        "---\nname: reviewer\ndescription: Review files.\n---\nRead carefully.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".pi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        skill = runtime.expand_resource_command("/skill:reviewer target.py")
+        prompt = runtime.expand_resource_command("/ask topic")
+        items = runtime.resource_command_items()
+    finally:
+        runtime.shutdown()
+
+    assert skill is None
+    assert prompt == "Question: topic"
+    assert ("/skill:reviewer", "Review files.") not in items
+    assert any(item[0] == "/ask" for item in items)
+
+
 def test_runtime_input_event_can_transform_or_handle(tmp_path) -> None:
     (tmp_path / ".pi" / "extensions").mkdir(parents=True)
     (tmp_path / ".pi" / "extensions" / "input_ext.py").write_text(

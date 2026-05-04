@@ -91,8 +91,9 @@ class ExtensionRuntimeMixin:
             if prompt.argument_hint:
                 detail = f"{detail} {prompt.argument_hint}"
             items.append((f"/{prompt.name}", detail))
-        for skill in snapshot.skills:
-            items.append((f"/skill:{skill.name}", skill.description))
+        if self._resource_loader.settings.enable_skill_commands:
+            for skill in snapshot.skills:
+                items.append((f"/skill:{skill.name}", skill.description))
         return items
 
     def extension_command_name(self, text: str) -> str | None:
@@ -160,9 +161,10 @@ class ExtensionRuntimeMixin:
 
     def expand_resource_command(self, text: str) -> str | None:
         snapshot = self._resource_loader.snapshot
-        skill = expand_skill_command(text, list(snapshot.skills))
-        if skill is not None:
-            return skill
+        if self._resource_loader.settings.enable_skill_commands:
+            skill = expand_skill_command(text, list(snapshot.skills))
+            if skill is not None:
+                return skill
         return expand_prompt_template(text, list(snapshot.prompts))
 
     async def _apply_input_event(self, text: str) -> str | None:

@@ -61,6 +61,10 @@ class ResourceLoader:
     def snapshot(self) -> ResourceSnapshot:
         return self._snapshot
 
+    @property
+    def settings(self) -> ResourceSettings:
+        return self._settings
+
     def get_extensions(self) -> tuple[ResourceInfo, ...]:
         return self._snapshot.extensions
 
