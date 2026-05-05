@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -287,16 +288,42 @@ def _deep_merge(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
     return merged
 
 
-_SECRET_KEY_PARTS = (
-    "apikey",
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+_SECRET_EXACT_KEYS = {
+    "access_token",
     "api_key",
+    "apikey",
     "authorization",
     "cookie",
+    "id_token",
     "password",
     "refresh",
-    "secret",
+    "refresh_token",
     "token",
+    "secret",
+}
+
+_SECRET_SUFFIXES = (
+    "_access_token",
+    "_api_key",
+    "_apikey",
+    "_authorization",
+    "_cookie",
+    "_id_token",
+    "_password",
+    "_refresh_token",
+    "_secret",
+    "_token",
 )
+
+_NON_SECRET_REFERENCE_KEYS = {
+    "api_key_header",
+    "apikey_header",
+    "auth_header",
+}
+
+_SECRET_POLICY_CONTAINER_KEYS = {"refresh"}
 
 
 def _strip_project_secrets(
@@ -310,7 +337,7 @@ def _strip_project_secrets(
         cleaned: dict[str, Any] = {}
         for key, child in value.items():
             child_path = f"{dotted}.{key}" if dotted else str(key)
-            if _looks_secret_key(str(key)):
+            if _should_strip_project_secret_field(str(key), child):
                 diagnostics.append(
                     SettingsDiagnostic(
                         severity="warning",
@@ -336,11 +363,25 @@ def _strip_project_secrets(
     return value
 
 
-def _looks_secret_key(key: str) -> bool:
-    normalized = key.replace("-", "_").lower()
-    if normalized == "auth_header":
+def _should_strip_project_secret_field(key: str, value: Any) -> bool:
+    normalized = _normalize_secret_key(key)
+    if _is_non_secret_reference_key(normalized):
         return False
-    return any(part in normalized for part in _SECRET_KEY_PARTS)
+    if normalized in _SECRET_POLICY_CONTAINER_KEYS and isinstance(value, dict | list):
+        return False
+    return _looks_secret_key(normalized)
+
+
+def _normalize_secret_key(key: str) -> str:
+    return _CAMEL_BOUNDARY_RE.sub("_", key.replace("-", "_")).lower()
+
+
+def _is_non_secret_reference_key(normalized: str) -> bool:
+    return normalized in _NON_SECRET_REFERENCE_KEYS or normalized.endswith("_env")
+
+
+def _looks_secret_key(key: str) -> bool:
+    return key in _SECRET_EXACT_KEYS or key.endswith(_SECRET_SUFFIXES)
 
 
 def _set_dotted(raw: dict[str, Any], dotted_path: str, value: Any) -> None:

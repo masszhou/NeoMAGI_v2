@@ -59,10 +59,16 @@ def test_project_secret_like_settings_are_diagnostic_only(tmp_path: Path) -> Non
             {
                 "providers": {
                     "local": {
+                        "compat": {
+                            "apiKeyEnv": "LOCAL_AI_KEY",
+                            "apiKeyHeader": "X-API-Key",
+                        },
                         "headers": {"Authorization": "Bearer secret"},
                         "models": [],
                     }
-                }
+                },
+                "compaction": {"refreshOnInput": True},
+                "retry": {"refresh": {"maxRetries": 2}},
             }
         ),
         encoding="utf-8",
@@ -71,8 +77,15 @@ def test_project_secret_like_settings_are_diagnostic_only(tmp_path: Path) -> Non
     loaded = SettingsManager(cwd=cwd, agent_dir=agent_dir).load()
 
     assert "local" in loaded.settings.providers
+    assert loaded.settings.providers["local"].compat == {
+        "apiKeyEnv": "LOCAL_AI_KEY",
+        "apiKeyHeader": "X-API-Key",
+    }
     assert loaded.settings.providers["local"].headers == {}
+    assert loaded.settings.compaction == {"refreshOnInput": True}
+    assert loaded.settings.retry == {"refresh": {"maxRetries": 2}}
     assert any(diagnostic.field.endswith("Authorization") for diagnostic in loaded.diagnostics)
+    assert not any(diagnostic.field.endswith("apiKeyEnv") for diagnostic in loaded.diagnostics)
 
 
 def test_resource_settings_project_through_product_schema(tmp_path: Path) -> None:
@@ -91,3 +104,41 @@ def test_resource_settings_project_through_product_schema(tmp_path: Path) -> Non
 
     assert loaded.settings.enable_skill_commands is False
     assert loaded.settings.prompts == ("./prompts",)
+
+
+def test_resource_settings_use_product_merge_semantics(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    (cwd / ".pi").mkdir(parents=True)
+    agent_dir.mkdir()
+    (agent_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "extensions": ["global.py"],
+                    "prompts": ["global-prompts"],
+                    "enableSkillCommands": False,
+                    "nested": {"a": 1},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (cwd / ".pi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "prompts": ["project-prompts"],
+                    "nested": {"b": 2},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_resource_settings(cwd, agent_dir=agent_dir)
+
+    assert loaded.settings.extensions == ("global.py",)
+    assert loaded.settings.prompts == ("project-prompts",)
+    assert loaded.settings.enable_skill_commands is False
+    assert loaded.settings.extras == {"nested": {"a": 1, "b": 2}}
