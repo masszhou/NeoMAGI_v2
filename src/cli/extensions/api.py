@@ -90,25 +90,9 @@ class ExtensionAPIImpl:
             config=parsed,
             owner=self._extension.name,
         )
-        self._extension.diagnostics.append(
-            ExtensionDiagnostic(
-                severity="warning",
-                message="provider registration is accepted but not applied in M8",
-                extension=self._extension.name,
-                path=str(self._extension.path) if self._extension.path else None,
-            )
-        )
 
     def unregister_provider(self, name: str) -> None:
         self._extension.providers.pop(name, None)
-        self._extension.diagnostics.append(
-            ExtensionDiagnostic(
-                severity="warning",
-                message="provider unregister is recorded but live registries are unchanged in M8",
-                extension=self._extension.name,
-                path=str(self._extension.path) if self._extension.path else None,
-            )
-        )
 
     @property
     def events(self) -> ExtensionEventBus:

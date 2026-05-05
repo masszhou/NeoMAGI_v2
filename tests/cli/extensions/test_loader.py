@@ -21,7 +21,7 @@ def test_load_extension_from_factory_registers_surface(tmp_path) -> None:
     assert extension.flag_values["enabled"] is True
     assert "demo" in extension.providers
     assert len(extension.handlers["context"]) == 1
-    assert any("not applied in M8" in diagnostic.message for diagnostic in extension.diagnostics)
+    assert not any("not applied in M8" in diagnostic.message for diagnostic in extension.diagnostics)
 
 
 def test_live_actions_fail_during_setup(tmp_path) -> None:

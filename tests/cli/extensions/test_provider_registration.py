@@ -5,11 +5,13 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
+from ai_provider.model_registry import resolve_model, unregister_models_by_source
+from cli.interactive.runtime import InteractiveAgentRuntime
 from cli.extensions.loader import load_extension_from_factory
 from cli.extensions.runtime import create_extension_runtime
 
 
-def test_provider_registration_stub_records_owner_and_diagnostic(tmp_path) -> None:
+def test_provider_registration_records_owner_without_m8_stub_diagnostic(tmp_path) -> None:
     def setup(api) -> None:
         api.register_provider(
             "local-openai",
@@ -36,7 +38,7 @@ def test_provider_registration_stub_records_owner_and_diagnostic(tmp_path) -> No
     assert registered.owner == "provider-ext"
     assert registered.config.models is not None
     assert registered.config.models[0].context_window == 8192
-    assert any("not applied in M8" in diagnostic.message for diagnostic in extension.diagnostics)
+    assert not any("not applied in M8" in diagnostic.message for diagnostic in extension.diagnostics)
 
 
 def test_provider_registration_rejects_invalid_model_limits(tmp_path) -> None:
@@ -74,7 +76,43 @@ def test_provider_unregister_removes_extension_owned_record(tmp_path) -> None:
     extension = asyncio.run(load_extension_from_factory(setup, name="provider-ext", cwd=tmp_path, runtime=runtime))
 
     assert extension.providers == {}
-    assert any("unregister is recorded" in diagnostic.message for diagnostic in extension.diagnostics)
+    assert not any("unregister is recorded" in diagnostic.message for diagnostic in extension.diagnostics)
+
+
+def test_extension_provider_registration_applies_to_live_model_registry(tmp_path) -> None:
+    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".pi" / "extensions" / "provider.py").write_text(
+        """
+def setup(api):
+    api.register_provider(
+        "local-openai",
+        {
+            "baseUrl": "http://127.0.0.1:11434/v1",
+            "api": "openai-responses",
+            "models": [
+                {
+                    "id": "local-1",
+                    "name": "Local 1",
+                    "reasoning": False,
+                    "input": ["text"],
+                    "cost": {"input": 0, "output": 0},
+                    "contextWindow": 8192,
+                    "maxTokens": 2048,
+                }
+            ],
+        },
+    )
+""",
+        encoding="utf-8",
+    )
+    runtime = InteractiveAgentRuntime(cwd=tmp_path, tool_profile="none")
+    try:
+        model = resolve_model("local-openai/local-1")
+        assert model.base_url == "http://127.0.0.1:11434/v1"
+        assert model.api == "openai-responses"
+    finally:
+        runtime.shutdown()
+        unregister_models_by_source("extension")
 
 
 def test_shortcut_registration_refuses_core_key_in_m8(tmp_path) -> None:

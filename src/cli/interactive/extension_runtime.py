@@ -20,6 +20,7 @@ from cli.extensions.loader import load_extensions
 from cli.extensions.runner import ExtensionRunner
 from cli.extensions.tools import create_extension_tools
 from cli.extensions.ui import NoopExtensionUIContext
+from cli.core.model_settings import apply_extension_providers, apply_settings_models
 from cli.slash_commands.registry import PI_BUILTIN_COMMANDS
 from cli.tools.bash import create_bash_tool_definition
 from cli.tools.wrapper import ToolRuntime, wrap_tool_definition
@@ -41,7 +42,10 @@ def _now_ms() -> int:
 class ExtensionRuntimeMixin:
     def _initialize_extension_runtime(self) -> None:
         self._extension_ui_context = NoopExtensionUIContext()
-        self._resource_loader = ResourceLoader(cwd=self._cwd)
+        self._resource_loader = ResourceLoader(
+            cwd=self._cwd,
+            settings_manager=self._settings_manager,
+        )
         self._extension_runner: ExtensionRunner | None = None
         self._extension_diagnostics: list[str] = []
         asyncio.run(self._reload_resources("startup"))
@@ -261,6 +265,7 @@ class ExtensionRuntimeMixin:
         )
 
     async def _reload_resources(self, reason: str) -> None:
+        apply_settings_models(self._settings_manager.load().settings)
         await self._resource_loader.reload()
         loaded = await load_extensions(
             [info.path for info in self._resource_loader.get_extensions()],
@@ -281,6 +286,7 @@ class ExtensionRuntimeMixin:
             exec=self._extension_exec,
             get_thinking_level=lambda: self._thinking_level,
             set_thinking_level=self._extension_set_thinking_level,
+            set_model=self._extension_set_model,
             ui=self._extension_ui_context,
         )
         runner.set_ui_context(self._extension_ui_context)
@@ -291,11 +297,12 @@ class ExtensionRuntimeMixin:
         if contributed.skills or contributed.prompts or contributed.themes:
             self._resource_loader.extend_resources(contributed)
             await self._resource_loader.reload()
+        provider_diagnostics = apply_extension_providers(runner.runtime.extensions)
         self._extension_runner = runner
         self._extension_diagnostics = [
             diagnostic.message
             for diagnostic in [*loaded.diagnostics, *runner.diagnostics]
-        ]
+        ] + provider_diagnostics
         await runner.emit({"type": "session_start", "reason": reason, "previousSessionFile": None})
 
     def _emit_extension_session_shutdown(self, reason: str) -> None:
@@ -423,13 +430,16 @@ class ExtensionRuntimeMixin:
         self._notify_wake()
 
     def _extension_set_thinking_level(self, level: str) -> None:
-        self._thinking_level = validate_thinking_level_for_model(self._model, level)
-        with self._lock:
-            if getattr(self, "_agent", None) is not None:
-                if self._agent.active_run_id is None:
-                    self._agent.state.thinking_level = self._thinking_level
-                self._enqueue_queue_update_locked()
+        self.set_thinking_level(validate_thinking_level_for_model(self._model, level))
         self._notify_wake()
+
+    def _extension_set_model(self, model: Model) -> bool:
+        try:
+            self.set_model_ref(f"{model.provider}/{model.id}")
+        except Exception:
+            return False
+        self._notify_wake()
+        return True
 
     def _refresh_agent_tool_state(self) -> None:
         self._agent.tools = self._build_tools()
