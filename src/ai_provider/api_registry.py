@@ -36,6 +36,12 @@ def unregister_api(api_name: str) -> None:
     _apis.pop(api_name, None)
 
 
+def unregister_apis_by_prefix(prefix: str) -> None:
+    for api_name in list(_apis):
+        if api_name.startswith(prefix):
+            unregister_api(api_name)
+
+
 def get_api(api_name: str) -> ApiRegistration:
     _ensure_builtin_apis()
     try:
@@ -98,4 +104,5 @@ __all__ = [
     "stream",
     "stream_simple",
     "unregister_api",
+    "unregister_apis_by_prefix",
 ]

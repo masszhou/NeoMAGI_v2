@@ -1,13 +1,36 @@
-"""In-memory model registry keyed by provider and model id."""
+"""Source-aware in-memory model registry keyed by provider and model id."""
 
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 from .models import supports_xhigh
 from .types import Model, ModelCost, ThinkingLevel
 
-_models: dict[str, dict[str, Model]] = defaultdict(dict)
+BUILTIN_SOURCE = "builtin"
+SETTINGS_SOURCE = "settings"
+EXTENSION_SOURCE = "extension"
+RUNTIME_SOURCE = "runtime"
+
+SOURCE_PRIORITIES: dict[str, int] = {
+    BUILTIN_SOURCE: 0,
+    f"{SETTINGS_SOURCE}:global": 10,
+    f"{SETTINGS_SOURCE}:project": 20,
+    EXTENSION_SOURCE: 30,
+    RUNTIME_SOURCE: 40,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRegistryEntry:
+    model: Model
+    source: str
+    owner: str | None = None
+    priority: int = 0
+
+
+_models: dict[tuple[str, str], list[ModelRegistryEntry]] = defaultdict(list)
 
 
 def _make_model(
@@ -159,25 +182,67 @@ BUILTIN_MODELS: tuple[Model, ...] = (
 )
 
 
-def register_model(model: Model) -> None:
+def register_model(
+    model: Model,
+    *,
+    source: str = RUNTIME_SOURCE,
+    owner: str | None = None,
+    priority: int | None = None,
+) -> None:
     if model.context_window <= 0:
         raise ValueError("model.contextWindow must be greater than 0")
     if model.max_tokens <= 0:
         raise ValueError("model.maxTokens must be greater than 0")
-    _models[model.provider][model.id] = model
+    key = (model.provider, model.id)
+    resolved_priority = SOURCE_PRIORITIES.get(source, 100 if priority is None else priority)
+    if priority is not None:
+        resolved_priority = priority
+    _models[key] = [
+        entry
+        for entry in _models[key]
+        if not (entry.source == source and entry.owner == owner)
+    ]
+    _models[key].append(
+        ModelRegistryEntry(
+            model=model,
+            source=source,
+            owner=owner,
+            priority=resolved_priority,
+        )
+    )
 
 
 def get_model(provider: str, model_id: str) -> Model:
-    try:
-        return _models[provider][model_id]
-    except KeyError as exc:
-        raise KeyError(f"unknown model {provider}/{model_id}") from exc
+    entry = get_model_entry(provider, model_id)
+    if entry is None:
+        raise KeyError(f"unknown model {provider}/{model_id}")
+    return entry.model
+
+
+def get_model_entry(provider: str, model_id: str) -> ModelRegistryEntry | None:
+    entries = _models.get((provider, model_id), [])
+    if not entries:
+        return None
+    return max(enumerate(entries), key=lambda item: (item[1].priority, item[0]))[1]
 
 
 def list_models(provider: str | None = None) -> list[Model]:
-    if provider is not None:
-        return list(_models.get(provider, {}).values())
-    return [model for provider_models in _models.values() for model in provider_models.values()]
+    return [entry.model for entry in list_model_entries(provider)]
+
+
+def list_model_entries(provider: str | None = None) -> list[ModelRegistryEntry]:
+    entries: list[ModelRegistryEntry] = []
+    for (entry_provider, _model_id), layers in _models.items():
+        if provider is not None and entry_provider != provider:
+            continue
+        if layers:
+            entries.append(
+                max(
+                    enumerate(layers),
+                    key=lambda item: (item[1].priority, item[0]),
+                )[1]
+            )
+    return sorted(entries, key=lambda entry: (entry.model.provider, entry.model.id))
 
 
 def resolve_model(model_ref: str) -> Model:
@@ -201,16 +266,43 @@ def clear_models_for_tests() -> None:
     _models.clear()
 
 
+def unregister_models_by_source(
+    source: str,
+    *,
+    owner: str | None = None,
+    provider: str | None = None,
+) -> None:
+    for key in list(_models):
+        key_provider, _model_id = key
+        if provider is not None and key_provider != provider:
+            continue
+        _models[key] = [
+            entry
+            for entry in _models[key]
+            if not (entry.source == source and (owner is None or entry.owner == owner))
+        ]
+        if not _models[key]:
+            del _models[key]
+
+
 for _model in BUILTIN_MODELS:
-    register_model(_model)
+    register_model(_model, source=BUILTIN_SOURCE, priority=0)
 
 
 __all__ = [
     "BUILTIN_MODELS",
+    "BUILTIN_SOURCE",
+    "EXTENSION_SOURCE",
+    "ModelRegistryEntry",
+    "RUNTIME_SOURCE",
+    "SETTINGS_SOURCE",
     "clear_models_for_tests",
     "get_model",
+    "get_model_entry",
+    "list_model_entries",
     "list_models",
     "register_model",
     "resolve_model",
+    "unregister_models_by_source",
     "validate_thinking_level_for_model",
 ]
