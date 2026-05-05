@@ -10,7 +10,7 @@ from .prompt_templates import (
     parse_command_args,
     substitute_args,
 )
-from .settings import ResourceSettings, load_resource_settings, merge_settings
+from .settings import ResourceSettings, load_resource_settings
 from .skills import Skill, expand_skill_command, format_skills_for_prompt, load_skills
 from .source_info import ResourceInfo, SourceInfo
 from .system_prompt import SystemPromptParts, build_system_prompt
@@ -35,7 +35,6 @@ __all__ = [
     "load_prompt_templates",
     "load_resource_settings",
     "load_skills",
-    "merge_settings",
     "parse_command_args",
     "substitute_args",
 ]

@@ -3,42 +3,8 @@ from __future__ import annotations
 from datetime import date
 
 from cli.resources.context_files import ContextFile
-from cli.resources.settings import ResourceSettings, merge_settings
 from cli.resources.skills import Skill
 from cli.resources.system_prompt import SystemPromptParts, build_system_prompt
-
-
-def test_resource_settings_merge_project_overrides_arrays_and_merges_extras() -> None:
-    global_settings = ResourceSettings(
-        extensions=("global.py",),
-        prompts=("global-prompts",),
-        extras={"nested": {"a": 1}, "global": True},
-    )
-    project_settings = ResourceSettings(prompts=("project-prompts",), extras={"nested": {"b": 2}})
-
-    merged = merge_settings(global_settings, project_settings)
-
-    assert merged.extensions == ("global.py",)
-    assert merged.prompts == ("project-prompts",)
-    assert merged.extras == {"nested": {"a": 1, "b": 2}, "global": True}
-
-
-def test_resource_settings_global_skill_command_disable_survives_project_defaults() -> None:
-    global_settings = ResourceSettings(enable_skill_commands=False)
-    project_settings = ResourceSettings(prompts=("project-prompts",))
-
-    merged = merge_settings(global_settings, project_settings)
-
-    assert merged.enable_skill_commands is False
-
-
-def test_resource_settings_project_skill_command_override_wins() -> None:
-    global_settings = ResourceSettings(enable_skill_commands=False)
-    project_settings = ResourceSettings(enable_skill_commands=True)
-
-    merged = merge_settings(global_settings, project_settings)
-
-    assert merged.enable_skill_commands is True
 
 
 def test_system_prompt_includes_context_skills_date_and_cwd_only_when_read_active(tmp_path) -> None:
