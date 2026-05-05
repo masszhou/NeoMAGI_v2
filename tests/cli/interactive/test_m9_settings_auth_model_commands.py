@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ai_provider.auth_storage import AUTH_PATH_ENV, load_auth_storage
+from ai_provider.auth_storage import AUTH_PATH_ENV, load_auth_storage, save_api_key
 from cli.core.session_manager import SessionManager
 from cli.interactive.app import InteractiveController
 from cli.interactive.runtime import InteractiveAgentRuntime
+from cli.slash_commands.auth import _auth_status_lines
 from cli.slash_commands.registry import SlashCommandRegistry, register_builtin_commands
 from storage.in_memory_session_repository import InMemorySessionRepository
 from tui.app import TUIApp
@@ -104,3 +105,16 @@ def test_login_api_key_status_and_logout_are_redacted(
         assert load_auth_storage() == {}
     finally:
         runtime.shutdown()
+
+
+def test_auth_status_lines_redacts_stored_credentials(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv(AUTH_PATH_ENV, str(tmp_path / "auth.json"))
+    save_api_key("openai", "sk-test-secret")
+
+    rendered = _auth_status_lines()
+
+    assert "sk-test-secret" not in rendered
+    assert "sk-t...cret" in rendered
