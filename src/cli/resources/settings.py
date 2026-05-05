@@ -1,4 +1,9 @@
-"""Resource settings loading and merging."""
+"""Resource settings loading and merging.
+
+M9 keeps this module as a compatibility adapter. The product settings schema in
+``cli.core.settings`` is the authoritative source; resource loading projects
+``effective_settings.resources`` into the older ``ResourceSettings`` shape.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +12,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from cli.core.settings import SettingsManager
+
 from .diagnostics import ResourceDiagnostic
-from .paths import default_agent_dir, resolve_resource_path
+from .paths import resolve_resource_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,14 +39,23 @@ def load_resource_settings(
     cwd: str | Path,
     *,
     agent_dir: str | Path | None = None,
+    settings_manager: SettingsManager | None = None,
 ) -> LoadedResourceSettings:
     cwd_path = Path(cwd).resolve()
-    global_dir = Path(agent_dir).expanduser().resolve() if agent_dir is not None else default_agent_dir()
-    diagnostics: list[ResourceDiagnostic] = []
-    global_settings = _read_settings(global_dir / "settings.json", diagnostics)
-    project_settings = _read_settings(cwd_path / ".pi" / "settings.json", diagnostics)
+    manager = settings_manager or SettingsManager(cwd=cwd_path, agent_dir=agent_dir)
+    loaded = manager.load()
+    diagnostics = [
+        ResourceDiagnostic(
+            type=diagnostic.severity,
+            message=diagnostic.message,
+            path=diagnostic.path,
+            resource_type="settings",
+            name=diagnostic.field,
+        )
+        for diagnostic in loaded.diagnostics
+    ]
     return LoadedResourceSettings(
-        settings=merge_settings(global_settings, project_settings),
+        settings=_settings_from_product(loaded.settings.resources),
         diagnostics=tuple(diagnostics),
     )
 
@@ -109,6 +125,27 @@ def _settings_from_dict(data: dict[str, Any]) -> ResourceSettings:
             data.get("enableSkillCommands", data.get("enable_skill_commands"))
         ),
         extras={key: value for key, value in data.items() if key not in known},
+    )
+
+
+def _settings_from_product(resources: Any) -> ResourceSettings:
+    dumped = resources.model_dump(by_alias=True, exclude_none=True)
+    known = {
+        "packages",
+        "extensions",
+        "skills",
+        "prompts",
+        "themes",
+        "enableSkillCommands",
+    }
+    return ResourceSettings(
+        packages=tuple(resources.packages),
+        extensions=tuple(resources.extensions),
+        skills=tuple(resources.skills),
+        prompts=tuple(resources.prompts),
+        themes=tuple(resources.themes),
+        enable_skill_commands=resources.enable_skill_commands,
+        extras={key: value for key, value in dumped.items() if key not in known},
     )
 
 

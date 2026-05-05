@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cli.core.settings import SettingsManager
+
 from .context_files import ContextFile, load_context_files
 from .diagnostics import ResourceDiagnostic
 from .paths import default_agent_dir, resolve_resource_path
@@ -44,6 +46,7 @@ class ResourceLoader:
     explicit_skills: tuple[Path, ...] = ()
     explicit_prompts: tuple[Path, ...] = ()
     explicit_themes: tuple[Path, ...] = ()
+    settings_manager: SettingsManager | None = None
 
     _settings: ResourceSettings = field(default_factory=ResourceSettings, init=False)
     _snapshot: ResourceSnapshot = field(default_factory=ResourceSnapshot, init=False)
@@ -95,7 +98,11 @@ class ResourceLoader:
         )
 
     async def reload(self) -> None:
-        loaded_settings = load_resource_settings(self.cwd, agent_dir=self.agent_dir)
+        loaded_settings = load_resource_settings(
+            self.cwd,
+            agent_dir=self.agent_dir,
+            settings_manager=self.settings_manager,
+        )
         self._settings = loaded_settings.settings
         diagnostics = list(loaded_settings.diagnostics)
         extensions = self._discover_extensions(diagnostics)
