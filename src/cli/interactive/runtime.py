@@ -17,7 +17,6 @@ from typing import Any
 from agent_core import Agent, AgentOptions
 from agent_core.cache_affinity import derive_provider_cache_affinity_id
 from ai_provider.credentials import resolve_api_key
-from ai_provider.model_registry import resolve_model, validate_thinking_level_for_model
 from ai_provider.types import (
     AssistantMessage,
     CacheRetention,
@@ -53,6 +52,7 @@ from storage.session_repository import SessionRecord
 
 from .compaction_runtime import CompactionRuntimeMixin
 from .extension_runtime import ExtensionRuntimeMixin
+from .model_runtime import ModelRuntimeMixin
 from .runtime_events import agent_event_to_session_event
 from .session_writer import DurableSessionEventWriter
 
@@ -84,7 +84,11 @@ def _empty_usage() -> Usage:
     )
 
 
-class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
+class InteractiveAgentRuntime(
+    CompactionRuntimeMixin,
+    ExtensionRuntimeMixin,
+    ModelRuntimeMixin,
+):
     """Owns one ``Agent`` plus a background asyncio loop.
 
     The runtime never mutates TUI components directly. Agent listeners adapt
@@ -108,20 +112,17 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
         ]
         | None = None,
     ) -> None:
-        self._model_ref = model_ref
-        self._model = resolve_model(model_ref)
-        self._thinking_level = validate_thinking_level_for_model(
-            self._model,
-            thinking_level,
-        )
+        self._cwd = Path(cwd or Path.cwd()).resolve()
+        self._initialize_model_settings(model_ref, thinking_level)
         self._cache_retention = cache_retention
         self._agent_factory = agent_factory
-        self._cwd = Path(cwd or Path.cwd()).resolve()
         self._tool_profile = tool_profile
         self._audit_sink = audit_sink or InMemoryAuditSink()
         self._session_manager = session_manager
         self._durable_session = self._start_durable_session()
-        self._session_context_messages = self._load_session_context_messages()
+        session_context = self._load_session_context()
+        self._apply_session_control_state(session_context)
+        self._session_context_messages = self._context_messages(session_context)
         self._summary_generator = summary_generator
         self._last_tree_summary_notice: str | None = None
         self._user_bash_hook = user_bash_hook
@@ -701,12 +702,6 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
             run_id_provider=self._active_run_id,
         )
 
-    def _load_session_context_messages(self) -> list[Any]:
-        if self._session_manager is None or self._durable_session is None:
-            return []
-        context = self._session_manager.build_session_context(self._durable_session.id)
-        return convert_coding_messages_to_llm(list(context.messages))
-
     def _resolve_provider_cache_affinity_id(self) -> str | None:
         if self._durable_session is not None:
             return self._durable_session.provider_cache_affinity_id
@@ -733,7 +728,9 @@ class InteractiveAgentRuntime(CompactionRuntimeMixin, ExtensionRuntimeMixin):
             self._runtime_session_id = self._mint_runtime_session_id()
             self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
             self._durable_session = session
-            self._session_context_messages = self._load_session_context_messages()
+            context = self._load_session_context()
+            self._apply_session_control_state(context)
+            self._session_context_messages = self._context_messages(context)
             self._provider_cache_affinity_id = self._resolve_provider_cache_affinity_id()
             self._queued_steering.clear()
             self._queued_follow_up.clear()

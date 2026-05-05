@@ -28,6 +28,7 @@ class Action(str, Enum):
     AUTOCOMPLETE = "autocomplete"
     HISTORY_PREV = "history_prev"
     HISTORY_NEXT = "history_next"
+    MODEL_CYCLE = "model_cycle"
     CURSOR_LEFT = "cursor_left"
     CURSOR_RIGHT = "cursor_right"
     CURSOR_HOME = "cursor_home"
@@ -80,7 +81,7 @@ def default_bindings() -> list[KeyBinding]:
         KeyBinding("Tab", Action.AUTOCOMPLETE, core=True),
         KeyBinding("Ctrl+C", Action.QUIT, core=True),
         KeyBinding("Ctrl+L", Action.CLEAR_SCREEN, core=True),
-        KeyBinding("Ctrl+P", Action.HISTORY_PREV, core=True),
+        KeyBinding("Ctrl+P", Action.MODEL_CYCLE, core=True),
         KeyBinding("Up", Action.HISTORY_PREV),
         KeyBinding("Down", Action.HISTORY_NEXT),
         KeyBinding("Left", Action.CURSOR_LEFT),

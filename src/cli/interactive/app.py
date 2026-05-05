@@ -1,12 +1,4 @@
-"""``InteractiveController`` — agent-aware wrapper around generic ``TUIApp``.
-
-Plan §W4 makes this the single owner of the event plane
-(``dispatch_event``) and the control plane (``handle_abort`` /
-``inject_user_input`` / ``simulate_resize`` / ``exit``). The playback
-harness and (M3+) the real :class:`Agent` go through these methods only;
-nobody else may touch :class:`EventRouter` / components / ``TUIApp``
-internals.
-"""
+"""Agent-aware wrapper around generic ``TUIApp``."""
 
 from __future__ import annotations
 
@@ -27,6 +19,7 @@ from .components import MessageListComponent, StatusComponent
 from .event_router import EventRouter
 from .extension_bindings import custom_renderer_error, custom_renderer_lookup, reject_queued_extension_command, slash_autocomplete_items
 from .extension_ui import InteractiveExtensionUIContext
+from .model_actions import cycle_model
 from .runtime import InteractiveAgentRuntime
 from .tool_renderer_registry import ToolRendererRegistry
 
@@ -515,6 +508,9 @@ class InteractiveController:
         self._app.request_render()
 
     def _handle_runtime_action(self, action: Action) -> None:
+        if action == Action.MODEL_CYCLE:
+            cycle_model(self)
+            return
         if action != Action.QUEUE_FOLLOWUP or self._runtime is None:
             return
         if self._editor.state == EditorState.ABORTING:

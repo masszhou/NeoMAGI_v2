@@ -75,12 +75,17 @@ LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
         "fork",
         "hotkeys",
         "import",
+        "login",
+        "logout",
+        "model",
         "name",
         "new",
         "quit",
         "reload",
         "resume",
+        "scoped-models",
         "session",
+        "settings",
         "tree",
     }
 )
@@ -186,16 +191,19 @@ def register_builtin_commands(
 
 
 def _live_builtin_handlers() -> dict[str, CommandHandler]:
+    from .auth import handle_login, handle_logout
     from .clone import handle_clone
     from .compact import handle_compact
     from .export_import import handle_export, handle_import
     from .fork import handle_fork
     from .hotkeys import handle_hotkeys
+    from .model import handle_model, handle_scoped_models
     from .new import handle_new
     from .quit import handle_quit
     from .reload import handle_reload
     from .resume import handle_resume
     from .session import handle_name, handle_session
+    from .settings import handle_settings
     from .tree import handle_tree
 
     return {
@@ -204,13 +212,18 @@ def _live_builtin_handlers() -> dict[str, CommandHandler]:
         "export": handle_export,
         "fork": handle_fork,
         "import": handle_import,
+        "login": handle_login,
+        "logout": handle_logout,
+        "model": handle_model,
         "name": handle_name,
         "new": handle_new,
         "hotkeys": handle_hotkeys,
         "quit": handle_quit,
         "reload": handle_reload,
         "resume": handle_resume,
+        "scoped-models": handle_scoped_models,
         "session": handle_session,
+        "settings": handle_settings,
         "tree": handle_tree,
     }
 

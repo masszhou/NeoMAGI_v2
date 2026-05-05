@@ -267,6 +267,35 @@ class SessionManager:
         CustomMessageEntry.model_validate(payload)
         return self.repository.append_entry(session.id, payload)
 
+    def append_model_change(
+        self,
+        session_id: str,
+        *,
+        provider: str,
+        model_id: str,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        payload = self._entry_payload(
+            session.id,
+            "model_change",
+            {"provider": provider, "modelId": model_id},
+        )
+        return self.repository.append_entry(session.id, payload)
+
+    def append_thinking_level_change(
+        self,
+        session_id: str,
+        *,
+        thinking_level: str,
+    ) -> EntryRecord:
+        session = self.resume_session(session_id)
+        payload = self._entry_payload(
+            session.id,
+            "thinking_level_change",
+            {"thinkingLevel": thinking_level},
+        )
+        return self.repository.append_entry(session.id, payload)
+
     def append_compaction(
         self,
         session_id: str,
