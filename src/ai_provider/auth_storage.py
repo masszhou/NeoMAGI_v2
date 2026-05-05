@@ -77,6 +77,56 @@ def save_api_key(
     _mutate_auth_storage(mutate, path)
 
 
+def delete_credential(
+    provider: str,
+    path: str | os.PathLike[str] | None = None,
+) -> bool:
+    deleted = False
+
+    def mutate(storage: dict[str, dict[str, Any]]) -> None:
+        nonlocal deleted
+        deleted = provider in storage
+        storage.pop(provider, None)
+
+    _mutate_auth_storage(mutate, path)
+    return deleted
+
+
+def list_credentials(
+    path: str | os.PathLike[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    storage = load_auth_storage(path)
+    return {provider: redact_credential_entry(entry) for provider, entry in storage.items()}
+
+
+def credential_status(
+    provider: str,
+    path: str | os.PathLike[str] | None = None,
+) -> dict[str, Any] | None:
+    entry = load_auth_storage(path).get(provider)
+    if entry is None:
+        return None
+    return redact_credential_entry(entry)
+
+
+def redact_credential_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    entry_type = entry.get("type")
+    redacted: dict[str, Any] = {"type": entry_type}
+    if entry_type == "api_key":
+        redacted["key"] = _redact_secret(entry.get("key"))
+    elif entry_type == "oauth":
+        redacted["access"] = _redact_secret(entry.get("access"))
+        redacted["refresh"] = _redact_secret(entry.get("refresh"))
+        if "expires" in entry:
+            redacted["expires"] = entry["expires"]
+        account_id = entry.get("accountId") or entry.get("account_id")
+        if account_id:
+            redacted["accountId"] = account_id
+    else:
+        redacted.update({"status": "unknown"})
+    return redacted
+
+
 def resolve_stored_api_key(
     provider: str,
     path: str | os.PathLike[str] | None = None,
@@ -208,11 +258,23 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _redact_secret(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
+
+
 __all__ = [
     "AUTH_PATH_ENV",
     "AuthStorageError",
     "DEFAULT_AUTH_PATH",
+    "credential_status",
+    "delete_credential",
+    "list_credentials",
     "load_auth_storage",
+    "redact_credential_entry",
     "resolve_auth_path",
     "resolve_stored_api_key",
     "save_api_key",

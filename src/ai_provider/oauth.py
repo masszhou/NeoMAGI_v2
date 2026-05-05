@@ -103,6 +103,13 @@ class OAuthApiKeyResult:
     new_credentials: OAuthCredentials
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAIOAuthLoginStart:
+    authorization_url: str
+    verifier: str
+    state: str
+
+
 OnAuthCallback = Callable[[OAuthAuthInfo], Awaitable[None] | None]
 OnPromptCallback = Callable[[OAuthPrompt], Awaitable[str] | str]
 OnProgressCallback = Callable[[str], Awaitable[None] | None]
@@ -266,6 +273,53 @@ def build_openai_authorization_url(*, challenge: str, state: str, originator: st
         }
     )
     return f"{OPENAI_CODEX_AUTHORIZE_URL}?{query}"
+
+
+def start_openai_oauth_login(
+    *,
+    originator: str = OPENAI_CODEX_ORIGINATOR,
+) -> OpenAIOAuthLoginStart:
+    verifier, challenge = generate_pkce()
+    state = secrets.token_hex(16)
+    return OpenAIOAuthLoginStart(
+        authorization_url=build_openai_authorization_url(
+            challenge=challenge,
+            state=state,
+            originator=originator,
+        ),
+        verifier=verifier,
+        state=state,
+    )
+
+
+async def exchange_openai_authorization_code(
+    code: str,
+    verifier: str,
+    *,
+    token_post: TokenPost | None = None,
+    now_ms: Callable[[], int] | None = None,
+) -> OAuthCredentials:
+    post = token_post or _default_post_form_json
+    response = post(
+        OPENAI_CODEX_TOKEN_URL,
+        {
+            "grant_type": "authorization_code",
+            "client_id": OPENAI_CODEX_CLIENT_ID,
+            "code": code,
+            "code_verifier": verifier,
+            "redirect_uri": OPENAI_CODEX_REDIRECT_URI,
+        },
+    )
+    token_data = await response if inspect.isawaitable(response) else response
+    return _openai_credentials_from_token_response(token_data, now_ms or _now_ms)
+
+
+def start_openai_oauth_callback_server(state: str) -> OAuthCallbackServer:
+    return _LocalOAuthCallbackServer.start(
+        host=DEFAULT_CALLBACK_HOST,
+        port=DEFAULT_CALLBACK_PORT,
+        expected_state=state,
+    )
 
 
 def refresh_openai_oauth_credentials_sync(
@@ -647,8 +701,10 @@ __all__ = [
     "OAuthLoginCallbacks",
     "OAuthPrompt",
     "OAuthProvider",
+    "OpenAIOAuthLoginStart",
     "OpenAIOAuthProvider",
     "build_openai_authorization_url",
+    "exchange_openai_authorization_code",
     "extract_openai_account_id",
     "generate_pkce",
     "get_oauth_api_key",
@@ -659,5 +715,7 @@ __all__ = [
     "register_oauth_provider",
     "refresh_openai_oauth_credentials_sync",
     "reset_oauth_providers_for_tests",
+    "start_openai_oauth_callback_server",
+    "start_openai_oauth_login",
     "unregister_oauth_provider",
 ]
