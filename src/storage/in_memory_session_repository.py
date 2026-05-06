@@ -152,6 +152,9 @@ class InMemorySessionRepository(SessionRepository):
             if record.session_id == session_id
         ]
 
+    def list_audit_events(self, _session_id: str):
+        return []
+
     def record_tool_execution_start(
         self,
         *,
@@ -242,6 +245,9 @@ class InMemorySessionRepository(SessionRepository):
             is_error=is_error,
             ended_at=utc_now_iso(),
             duration_ms=duration_ms,
+            truncation=details.get("truncation"),
+            policy_decision=details.get("policyDecision"),
+            sandbox=details.get("sandbox"),
             run_id=record.run_id or details.get("runId"),
             runtime_session_id=record.runtime_session_id or details.get("runtimeSessionId"),
         )
@@ -272,6 +278,9 @@ class InMemorySessionRepository(SessionRepository):
             started_at=utc_now_iso(),
             ended_at=utc_now_iso(),
             duration_ms=duration_ms,
+            truncation=details.get("truncation"),
+            policy_decision=details.get("policyDecision"),
+            sandbox=details.get("sandbox"),
             run_id=details.get("runId"),
             runtime_session_id=details.get("runtimeSessionId"),
         )

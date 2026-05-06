@@ -80,6 +80,7 @@ ALL_SCENES = (
     "rpc_prompt_flow",
     "rpc_sync_response",
     "session_affinity_headers",
+    "session_export_full_demo",
     "session_before_compact_extension_replace",
     "session_tree_branch",
     "skills",

@@ -1,0 +1,27 @@
+{
+  "type": "neomagi.session_export",
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-06T00:00:03+00:00",
+  "requiredEntryTypes": [
+    "message",
+    "model_change",
+    "thinking_level_change",
+    "compaction",
+    "branch_summary"
+  ],
+  "requiredMessageRoles": [
+    "user",
+    "assistant",
+    "toolResult",
+    "bashExecution"
+  ],
+  "requiredDiagnosticRuleIds": [
+    "redaction_applied",
+    "tool_execution_metadata_partial"
+  ],
+  "toolExecution": {
+    "toolCallId": "call-read",
+    "toolName": "read",
+    "durationMs": 7
+  }
+}

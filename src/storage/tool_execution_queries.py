@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .session_repository import ToolExecutionRecord
 from .session_utils import iso as _iso
+from .tool_execution_records import ToolExecutionRecord
 
 
 def list_tool_executions(conn, schema: str, session_id: str) -> list[ToolExecutionRecord]:
@@ -14,7 +14,8 @@ def list_tool_executions(conn, schema: str, session_id: str) -> list[ToolExecuti
             f"""
             SELECT id, session_id, tool_call_id, tool_name, args,
                    result_content, result_details, is_error, started_at,
-                   ended_at, duration_ms, runtime_session_id, run_id
+                   ended_at, duration_ms, truncation, policy_decision,
+                   sandbox, runtime_session_id, run_id
             FROM {schema}.agent_tool_executions
             WHERE session_id = %s
             ORDER BY started_at ASC, id ASC
@@ -37,8 +38,11 @@ def _tool_execution_from_row(row: Any) -> ToolExecutionRecord:
         started_at=_iso(row[8]),
         ended_at=_iso(row[9]) if row[9] is not None else None,
         duration_ms=row[10],
-        runtime_session_id=row[11],
-        run_id=row[12],
+        truncation=row[11],
+        policy_decision=row[12],
+        sandbox=row[13],
+        runtime_session_id=row[14],
+        run_id=row[15],
     )
 
 

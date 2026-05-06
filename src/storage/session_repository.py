@@ -15,11 +15,14 @@ from cli.core.session_types import (
 
 from .config import DatabaseConfig
 from .ids import is_db_uuid, new_db_uuid, provider_cache_affinity_for_session
+from .audit_queries import SessionAuditEventRecord
 from .schema import _quote_identifier
 from .session_utils import (
     allocate_entry_payload,
     context_participates as _context_participates,
+    dump_entry_payload_json as _dump_entry_payload_json,
     dump_json as _dump_json,
+    dump_message_payload_json as _dump_message_payload_json,
     duration_from_details as _duration_from_details,
     iso as _iso,
     jsonb as _jsonb,
@@ -27,6 +30,7 @@ from .session_utils import (
     utc_now_iso,
     validate_entry as _validate_entry,
 )
+from .tool_execution_records import ToolExecutionRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,23 +71,6 @@ class EntryRecord:
     created_at: str
     parent_entry_id: str | None = None
     context_participates: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class ToolExecutionRecord:
-    id: str
-    session_id: str
-    tool_call_id: str
-    tool_name: str
-    args: Any
-    result_content: Any = None
-    result_details: Any = None
-    is_error: bool | None = None
-    started_at: str | None = None
-    ended_at: str | None = None
-    duration_ms: int | None = None
-    runtime_session_id: str | None = None
-    run_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +148,9 @@ class SessionRepository(Protocol):
         ...
 
     def list_tool_executions(self, session_id: str) -> list[ToolExecutionRecord]:
+        ...
+
+    def list_audit_events(self, session_id: str) -> list[SessionAuditEventRecord]:
         ...
 
     def record_tool_execution_start(
@@ -369,6 +359,11 @@ class PostgresSessionRepository:
         from .tool_execution_queries import list_tool_executions as _list_tool_executions
         return _list_tool_executions(self._conn, self._schema, session_id)
 
+    def list_audit_events(self, session_id: str) -> list[SessionAuditEventRecord]:
+        from .audit_queries import list_audit_events as _list_audit_events
+
+        return _list_audit_events(self._conn, self._schema, session_id)
+
     def record_tool_execution_start(
         self,
         *,
@@ -455,7 +450,7 @@ class PostgresSessionRepository:
         entry_id: str,
         entry: SessionEntry,
     ):
-        payload_json = entry.model_dump(by_alias=True, exclude_none=True)
+        payload_json = _dump_entry_payload_json(entry)
         cur.execute(
             f"""
             INSERT INTO {self._schema}.agent_session_entries(
@@ -554,6 +549,9 @@ class PostgresSessionRepository:
             started_at=base.started_at,
             ended_at=now,
             duration_ms=request.resolved_duration_ms,
+            truncation=request.details.get("truncation"),
+            policy_decision=request.details.get("policyDecision"),
+            sandbox=request.details.get("sandbox"),
             runtime_session_id=base.runtime_session_id,
             run_id=base.run_id,
         )
@@ -704,7 +702,7 @@ class PostgresSessionRepository:
 
     def _insert_message(self, cur, session_id: str, entry_id: str, entry: MessageEntry) -> None:
         message = entry.message
-        payload = message.model_dump(by_alias=True, exclude_none=True)
+        payload = _dump_message_payload_json(message)
         cur.execute(
             f"""
             INSERT INTO {self._schema}.agent_messages(
@@ -790,6 +788,7 @@ def _entry_from_row(row: Any) -> EntryRecord:
 __all__ = [
     "EntryRecord",
     "PostgresSessionRepository",
+    "SessionAuditEventRecord",
     "SessionRecord",
     "SessionRepository",
     "ToolExecutionRecord",

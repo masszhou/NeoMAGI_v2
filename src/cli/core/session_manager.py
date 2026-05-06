@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from ai_provider.types import TextContent
+from ai_provider.types import AssistantMessage, TextContent
 from cli.core.session_types import (
     BranchSummaryMessage,
     CompactionSummaryMessage,
@@ -27,6 +27,12 @@ from cli.core.session_types import (
 )
 from cli.core.compaction.models import BranchSummaryResult, CompactionResult
 from cli.core.compaction.models import retained_fragments_from_details
+from cli.core.session_export import (
+    build_session_export_envelope,
+    export_session_html,
+    export_session_pi_jsonl,
+    export_session_structured_json,
+)
 from storage.session_jsonl import export_session_jsonl, import_session_jsonl
 from storage.session_repository import (
     EntryRecord,
@@ -545,6 +551,14 @@ class SessionManager:
         self.resume_session(session_id)
         return self.repository.list_tool_executions(session_id)
 
+    def build_export_envelope(self, session_id: str, *, clock=None):
+        self.resume_session(session_id)
+        return build_session_export_envelope(
+            self.repository,
+            session_id,
+            clock=clock,
+        )
+
     def export_jsonl(
         self,
         session_id: str,
@@ -555,6 +569,57 @@ class SessionManager:
         self.resume_session(session_id)
         return export_session_jsonl(self.repository, session_id, path, allowed_root=allowed_root)
 
+    def export_pi_jsonl(
+        self,
+        session_id: str,
+        path: str | Path,
+        *,
+        allowed_root: str | Path | None = None,
+        clock=None,
+    ) -> Path:
+        self.resume_session(session_id)
+        return export_session_pi_jsonl(
+            self.repository,
+            session_id,
+            path,
+            allowed_root=allowed_root,
+            clock=clock,
+        )
+
+    def export_structured_json(
+        self,
+        session_id: str,
+        path: str | Path,
+        *,
+        allowed_root: str | Path | None = None,
+        clock=None,
+    ) -> Path:
+        self.resume_session(session_id)
+        return export_session_structured_json(
+            self.repository,
+            session_id,
+            path,
+            allowed_root=allowed_root,
+            clock=clock,
+        )
+
+    def export_html(
+        self,
+        session_id: str,
+        path: str | Path,
+        *,
+        allowed_root: str | Path | None = None,
+        clock=None,
+    ) -> Path:
+        self.resume_session(session_id)
+        return export_session_html(
+            self.repository,
+            session_id,
+            path,
+            allowed_root=allowed_root,
+            clock=clock,
+        )
+
     def import_jsonl(
         self,
         path: str | Path,
@@ -562,6 +627,22 @@ class SessionManager:
         allowed_root: str | Path | None = None,
     ) -> SessionRecord:
         return import_session_jsonl(self.repository, path, allowed_root=allowed_root)
+
+    def last_assistant_text(self, session_id: str) -> str | None:
+        context = self.build_session_context(session_id)
+        for message in reversed(context.messages):
+            if not isinstance(message, AssistantMessage):
+                continue
+            if message.stop_reason == "aborted" and not message.content:
+                continue
+            text = "".join(
+                block.text
+                for block in message.content
+                if isinstance(block, TextContent)
+            ).strip()
+            if text:
+                return text
+        return None
 
     def _entry_payload(
         self,
@@ -668,6 +749,11 @@ def datetime_from_iso(value: str):
 
 
 def _dump(value: Any) -> Any:
+    if isinstance(value, AssistantMessage):
+        raw = value.model_dump(by_alias=True, exclude_none=True)
+        if "cost" not in getattr(value.usage, "model_fields_set", set()):
+            raw.get("usage", {}).pop("cost", None)
+        return raw
     if hasattr(value, "model_dump"):
         return value.model_dump(by_alias=True, exclude_none=True)
     if isinstance(value, list):
