@@ -52,6 +52,7 @@ from storage.session_repository import SessionRecord
 
 from .compaction_runtime import CompactionRuntimeMixin
 from .extension_runtime import ExtensionRuntimeMixin
+from .export_runtime import SessionExportRuntimeMixin
 from .model_runtime import ModelRuntimeMixin
 from .runtime_events import agent_event_to_session_event
 from .session_writer import DurableSessionEventWriter
@@ -87,6 +88,7 @@ def _empty_usage() -> Usage:
 class InteractiveAgentRuntime(
     CompactionRuntimeMixin,
     ExtensionRuntimeMixin,
+    SessionExportRuntimeMixin,
     ModelRuntimeMixin,
 ):
     """Owns one ``Agent`` plus a background asyncio loop.
@@ -349,23 +351,6 @@ class InteractiveAgentRuntime(
         if self._session_manager is None or self._durable_session is None:
             return []
         return self._session_manager.session_tree(self._durable_session.id)
-
-    def export_jsonl(self, path: str | Path, *, allowed_root: str | Path | None = None) -> Path:
-        if self._session_manager is None or self._durable_session is None:
-            raise RuntimeError("durable session manager is not available")
-        return self._session_manager.export_jsonl(
-            self._durable_session.id,
-            path,
-            allowed_root=allowed_root,
-        )
-
-    def import_jsonl(self, path: str | Path, *, allowed_root: str | Path | None = None) -> SessionRecord:
-        self._ensure_idle_for_session_switch()
-        if self._session_manager is None:
-            raise RuntimeError("durable session manager is not available")
-        session = self._session_manager.import_jsonl(path, allowed_root=allowed_root)
-        self._activate_durable_session(session)
-        return session
 
     def drain_events(self) -> list[AgentSessionEvent]:
         events: list[AgentSessionEvent] = []
@@ -717,9 +702,12 @@ class InteractiveAgentRuntime(
         return agent.active_run_id if agent is not None else None
 
     def _ensure_idle_for_session_switch(self) -> None:
+        self._ensure_idle_for_runtime_action("session switch is not available while streaming")
+
+    def _ensure_idle_for_runtime_action(self, message: str) -> None:
         with self._lock:
             if self._is_running_locked():
-                raise RuntimeError("session switch is not available while streaming")
+                raise RuntimeError(message)
 
     def _activate_durable_session(self, session: SessionRecord) -> None:
         with self._lock:

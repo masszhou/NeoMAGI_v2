@@ -45,11 +45,11 @@ PI_BUILTIN_COMMANDS: tuple[tuple[str, str, str | None], ...] = (
     ("scoped-models", "Configure Ctrl+P model rotation", "M9"),
     ("export", "Export session as HTML / JSONL", None),
     ("import", "Import JSONL into current session", None),
-    ("share", "Share session as a GitHub gist", "M10"),
-    ("copy", "Copy last assistant message", "M10"),
+    ("share", "Prepare local export for external sharing", None),
+    ("copy", "Copy last assistant message", None),
     ("name", "Rename current session", None),
     ("session", "Show session statistics", None),
-    ("changelog", "Show NeoMAGI changelog", "M10"),
+    ("changelog", "Show NeoMAGI changelog", "P1-optional"),
     ("hotkeys", "Show keybinding table", None),
     ("fork", "Fork session from a historic user message", None),
     ("clone", "Clone current branch as a new session", None),
@@ -71,6 +71,7 @@ LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
     {
         "clone",
         "compact",
+        "copy",
         "export",
         "fork",
         "hotkeys",
@@ -86,6 +87,7 @@ LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
         "scoped-models",
         "session",
         "settings",
+        "share",
         "tree",
     }
 )
@@ -194,6 +196,7 @@ def _live_builtin_handlers() -> dict[str, CommandHandler]:
     from .auth import handle_login, handle_logout
     from .clone import handle_clone
     from .compact import handle_compact
+    from .copy import handle_copy
     from .export_import import handle_export, handle_import
     from .fork import handle_fork
     from .hotkeys import handle_hotkeys
@@ -204,11 +207,13 @@ def _live_builtin_handlers() -> dict[str, CommandHandler]:
     from .resume import handle_resume
     from .session import handle_name, handle_session
     from .settings import handle_settings
+    from .share import handle_share
     from .tree import handle_tree
 
     return {
         "clone": handle_clone,
         "compact": handle_compact,
+        "copy": handle_copy,
         "export": handle_export,
         "fork": handle_fork,
         "import": handle_import,
@@ -224,6 +229,7 @@ def _live_builtin_handlers() -> dict[str, CommandHandler]:
         "scoped-models": handle_scoped_models,
         "session": handle_session,
         "settings": handle_settings,
+        "share": handle_share,
         "tree": handle_tree,
     }
 
