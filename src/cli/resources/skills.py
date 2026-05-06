@@ -95,10 +95,11 @@ def expand_skill_command(text: str, skills: list[Skill]) -> str | None:
         return None
     metadata, body = split_frontmatter(skill.path.read_text(encoding="utf-8"))
     del metadata
+    body = body.strip().replace("{baseDir}", str(skill.base_dir))
     expanded = (
         f'<skill name="{html.escape(skill.name)}" location="{html.escape(str(skill.base_dir))}">\n'
         f"References are relative to {skill.base_dir}.\n\n"
-        f"{body.strip()}\n"
+        f"{body}\n"
         "</skill>"
     )
     return f"{expanded}\n\nUser arguments: {args}" if args else expanded

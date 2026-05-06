@@ -57,6 +57,27 @@ def test_skill_prompt_and_expansion(tmp_path) -> None:
     assert "User arguments: args" in (expand_skill_command("/skill:visible args", list(loaded.skills)) or "")
 
 
+def test_skill_expansion_replaces_base_dir_in_body_only(tmp_path) -> None:
+    skill_dir = tmp_path / "helper-backed"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-backed\n"
+        "description: Use {baseDir} only when expanded.\n"
+        "---\n"
+        "Run {baseDir}/script.js\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_skills([tmp_path])
+    prompt = format_skills_for_prompt(list(loaded.skills))
+    expanded = expand_skill_command("/skill:helper-backed", list(loaded.skills)) or ""
+
+    assert "Use {baseDir} only when expanded." in prompt
+    assert f"Run {skill_dir.resolve()}/script.js" in expanded
+    assert "{baseDir}" not in expanded
+
+
 def test_agents_root_markdown_is_ignored_but_pi_root_markdown_loads(tmp_path) -> None:
     (tmp_path / "root.md").write_text("---\nname: root\ndescription: Root skill.\n---\nRoot\n", encoding="utf-8")
 
