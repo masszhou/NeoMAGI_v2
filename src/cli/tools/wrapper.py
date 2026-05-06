@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -14,6 +13,10 @@ from agent_core.runtime_types import AbortSignal, RuntimeAgentTool, ToolUpdateCa
 from agent_core.types import AgentToolResult
 from policy.audit import AuditRecord, AuditSink, InMemoryAuditSink
 from policy.path_policy import decide_path_access
+from policy.redaction import (
+    redact_secret_keys as _redact_secrets,
+    redacted_command_preview as _redacted_command_preview,
+)
 from policy.shell_policy import decide_shell_access
 from policy.types import PolicyActor, PolicyDecision, PolicyRequest
 
@@ -314,12 +317,6 @@ def _affected_paths(details: dict[str, Any], decision: PolicyDecision) -> list[s
     return paths
 
 
-_SECRET_KEY_RE = re.compile(r"token|secret|password|api[_-]?key|authorization|cookie", re.IGNORECASE)
-_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_/+\-]{24,}")
-_ENV_REF_RE = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)")
-_BASH_PREVIEW_LIMIT = 512
-
-
 def _audit_args(tool_name: str, args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], str]:
     if tool_name == "bash":
         return _bash_audit_args(args, cwd)
@@ -351,30 +348,6 @@ def _bash_audit_args(args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], st
     if "timeout" in args:
         result["timeout"] = args["timeout"]
     return result, "applied" if applied else "not_required"
-
-
-def _redacted_command_preview(command: str) -> tuple[str, bool]:
-    env_refs: list[str] = []
-
-    def protect_env_ref(match: re.Match[str]) -> str:
-        env_refs.append(match.group(0))
-        return f"\x00ENV{len(env_refs) - 1}\x00"
-
-    protected = _ENV_REF_RE.sub(protect_env_ref, command)
-    applied = False
-
-    def redact_long_token(match: re.Match[str]) -> str:
-        nonlocal applied
-        applied = True
-        return f"<redacted:{len(match.group(0))}>"
-
-    redacted = _LONG_TOKEN_RE.sub(redact_long_token, protected)
-    for index, value in enumerate(env_refs):
-        redacted = redacted.replace(f"\x00ENV{index}\x00", value)
-    if len(redacted) > _BASH_PREVIEW_LIMIT:
-        applied = True
-        redacted = redacted[:_BASH_PREVIEW_LIMIT]
-    return redacted, applied
 
 
 def _read_audit_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -427,29 +400,6 @@ def _edit_audit_args(args: dict[str, Any]) -> dict[str, Any]:
 
 def _select_args(args: dict[str, Any], *keys: str) -> dict[str, Any]:
     return {key: args[key] for key in keys if key in args}
-
-
-def _redact_secrets(value: Any) -> tuple[Any, bool]:
-    if isinstance(value, dict):
-        result: dict[str, Any] = {}
-        applied = False
-        for key, item in value.items():
-            if _SECRET_KEY_RE.search(str(key)):
-                result[key] = "[redacted]"
-                applied = True
-                continue
-            result[key], item_applied = _redact_secrets(item)
-            applied = applied or item_applied
-        return result, applied
-    if isinstance(value, list):
-        items = []
-        applied = False
-        for item in value:
-            redacted, item_applied = _redact_secrets(item)
-            items.append(redacted)
-            applied = applied or item_applied
-        return items, applied
-    return value, False
 
 
 def _ensure_dict(value: Any) -> dict[str, Any]:
