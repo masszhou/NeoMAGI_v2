@@ -3,7 +3,7 @@
 Composes :class:`TerminalSession`, :class:`StdinBuffer`, :class:`Renderer`
 and a focus stack of :class:`Component` instances. Knows nothing about
 agent / message / tool semantics — those live in
-``src/cli/interactive/app.py`` (per ADR-0015 + plan acceptance §9).
+``cli/interactive/app.py`` (per ADR-0015 + plan acceptance §9).
 """
 
 from __future__ import annotations

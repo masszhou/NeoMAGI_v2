@@ -1,4 +1,4 @@
-"""Line-diff renderer (ADR-0015 §影响 `src/tui/renderer.py`).
+"""Line-diff renderer (ADR-0015 §影响 `packages/neomagi_pi/src/tui/renderer.py`).
 
 The substrate's ANSI line model is the single source of truth. Components
 produce ``list[str]`` per frame; canvas rendering writes only the rows that
@@ -169,7 +169,7 @@ class Renderer:
     ) -> None:
         """Render ``frame`` and place the hardware cursor.
 
-        Single-entry contract (ADR-0015 §影响 `src/tui/renderer.py`):
+        Single-entry contract (ADR-0015 §影响 `packages/neomagi_pi/src/tui/renderer.py`):
         business code MUST go through this method; raw escape writes
         forbidden anywhere outside the substrate.
         """

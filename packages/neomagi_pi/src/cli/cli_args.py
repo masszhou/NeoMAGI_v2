@@ -1,4 +1,4 @@
-"""argv → typed options for the ``neomagi`` CLI."""
+"""argv → typed options for the NeoMAGI Pi-compatible CLI."""
 
 from __future__ import annotations
 
@@ -38,9 +38,9 @@ class CliOptions:
     tui_render_mode: Literal["command", "canvas"] | None
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, prog: str = "magipi") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="neomagi",
+        prog=prog,
         description=(
             "NeoMAGI v2 — local-first personal agent CLI. "
             "Run with no arguments to enter the interactive TUI."
@@ -100,9 +100,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def parse_args(argv: list[str] | None = None) -> CliOptions:
+def parse_args(argv: list[str] | None = None, *, prog: str = "magipi") -> CliOptions:
     raw_argv = list(argv) if argv is not None else None
-    parser = build_parser()
+    parser = build_parser(prog=prog)
     args = parser.parse_args(raw_argv)
     print_only = args.print_message is not None
     explicit_runtime_flags = _RUNTIME_FLAGS & {

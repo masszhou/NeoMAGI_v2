@@ -156,12 +156,13 @@ def test_unknown_event_type_raises_runtime_error() -> None:
 
 
 # -------------------------------------------------------------------- #
-# Static guards (plan §完成标准 #9): ``src/tui`` and                   #
-# ``src/cli/interactive`` must NOT define pydantic message / event     #
-# models, and ``src/tui`` must NOT import protocol types.              #
+# Static guards (plan §完成标准 #9): package ``tui`` and               #
+# ``cli/interactive`` must NOT define pydantic message / event models, #
+# and package ``tui`` must NOT import protocol types.                  #
 # -------------------------------------------------------------------- #
 
 REPO = Path(__file__).resolve().parents[3]
+PACKAGE_SRC = REPO / "packages" / "neomagi_pi" / "src"
 FORBIDDEN_PROTOCOL_MODULES = ("agent_core", "cli.core", "cli.tools", "policy", "ai_provider")
 
 
@@ -188,12 +189,12 @@ def _top_import_keys(module: str) -> tuple[str, str]:
 
 def test_src_tui_does_not_import_protocol_modules() -> None:
     bad: list[tuple[Path, str]] = []
-    for path in _walk_py(REPO / "src" / "tui"):
+    for path in _walk_py(PACKAGE_SRC / "tui"):
         for module in _imported_module_names(path):
             top, second = _top_import_keys(module)
             if top in FORBIDDEN_PROTOCOL_MODULES or second in FORBIDDEN_PROTOCOL_MODULES:
                 bad.append((path, module))
-    assert not bad, f"src/tui imports protocol modules: {bad}"
+    assert not bad, f"packages/neomagi_pi/src/tui imports protocol modules: {bad}"
 
 
 def _pydantic_base_names(node: ast.ClassDef) -> set[str]:
@@ -208,10 +209,10 @@ def _pydantic_base_names(node: ast.ClassDef) -> set[str]:
 
 def test_neither_tui_nor_interactive_define_pydantic_models() -> None:
     """Substring scan: rg-style. No ``BaseModel`` or ``_PiModel`` subclassing
-    in ``src/tui`` or ``src/cli/interactive``."""
+    in package ``tui`` or ``cli/interactive``."""
 
     bad: list[Path] = []
-    for root in (REPO / "src" / "tui", REPO / "src" / "cli" / "interactive"):
+    for root in (PACKAGE_SRC / "tui", PACKAGE_SRC / "cli" / "interactive"):
         for path in _walk_py(root):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):

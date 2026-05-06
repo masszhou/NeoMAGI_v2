@@ -49,16 +49,16 @@ doc_id_assigned_at: 2026-04-25T23:12:00+02:00
 
 ## 影响
 
-- `src/tui/terminal.py` 必须集中管理 raw mode、bracketed paste、cursor hide/show、resize handler、stdin drain 与退出恢复。业务代码不得直接操作这些 terminal lifecycle 状态。
+- `packages/neomagi_pi/src/tui/terminal.py` 必须集中管理 raw mode、bracketed paste、cursor hide/show、resize handler、stdin drain 与退出恢复。业务代码不得直接操作这些 terminal lifecycle 状态。
 - `TerminalSession.query_cursor_row()` 是低层 TTY helper：发 `\x1b[6n` DSR 查询并返回 `CursorQueryResult(row, leftover, attempted, fallback_allowed)`；非 TTY no-op 且 `fallback_allowed=False`，不写 stdout；不拥有 fallback anchor 计算、不接触 `Renderer` / `StdinBuffer`。
-- `src/tui/stdin_buffer.py` 必须处理 partial ESC / CSI / OSC / APC sequence 与 bracketed paste；不能把半个 escape sequence 当普通输入转发。
-- `src/tui/stdin_buffer.py` 必须丢弃 `CSI <digits>;<digits> R` cursor position report；这是 terminal response，不是用户输入，即使作为 late DSR response 进入 normal input path，也不能产生事件。
-- `src/tui/renderer.py` 必须以 ANSI line model 为权威，并按 render mode 提供受控入口：`present()` 负责 anchored canvas frame，`present_live()` / `commit_lines()` / `clear_live_region()` 负责 command-mode live region 与 append-oriented scrollback。canvas first render 使用 `\x1b[<anchor>;1H` + `\x1b[J`，只清锚点以下；command mode 不做全屏 anchor，不清已提交 scrollback。所有 renderer 入口必须在行写入后 reset SGR；live/canvas frame rewrite 必须使用 synchronized output；cursor positioning 必须与对应 frame/live-region 更新在同一次 renderer 调用内完成。
-- `src/tui/app.py` 的 `TUIApp._prepare_anchor()` 是 anchored renderer owner：在 `terminal.enter()` 后、第一次 render 前调用 DSR helper，把 leftover bytes 回灌 `self._stdin.feed()`，计算 bottom-reserved fallback，调用 `renderer.set_anchor()`，并用同一 anchor 计算 compose height。SIGWINCH 回调只标记 `_anchor_dirty`，下一次普通 loop tick 才重新 DSR。
-- `src/tui/lifecycle.py` 退出路径在 termios 还原前调用 `Renderer.last_bottom_row()`；返回 `None` 时只做 terminal restore，未到屏底则移动到下一行 col=1，已到屏底则写 `\r\n` 滚动一行，保证 shell 新 prompt 起干净行。
-- `src/tui/overlay.py` 中 spinner 帧推进与字符串来源归 `tui.components.spinner.Spinner`；overlay 只负责定位和焦点，不得自存 spinner 帧字符或推进逻辑。`tui.components.spinner.PI_FRAMES` 是 substrate 唯一 braille spinner 帧来源。
-- `src/tui/components/` 是 substrate UI primitive 公开层，对应 pi-mono `packages/tui/src/components/` 分层；新增 substrate primitive 必须放这里，业务装配 / agent-aware 逻辑禁止下沉。该目录下文件只允许 import stdlib 和 `tui.*` 内部模块，不允许 `agent_core` / `cli.core` / `ai_provider`。
-- `src/tui/width.py` 必须基于 `wcwidth` 提供 `visible_width`、`slice_by_columns`、`truncate_to_width`、ANSI-aware wrap 等能力。所有 `Component.render(width)` 输出必须经过 width guard；不得用 `len()` / `textwrap` 作为终端宽度真相。
+- `packages/neomagi_pi/src/tui/stdin_buffer.py` 必须处理 partial ESC / CSI / OSC / APC sequence 与 bracketed paste；不能把半个 escape sequence 当普通输入转发。
+- `packages/neomagi_pi/src/tui/stdin_buffer.py` 必须丢弃 `CSI <digits>;<digits> R` cursor position report；这是 terminal response，不是用户输入，即使作为 late DSR response 进入 normal input path，也不能产生事件。
+- `packages/neomagi_pi/src/tui/renderer.py` 必须以 ANSI line model 为权威，并按 render mode 提供受控入口：`present()` 负责 anchored canvas frame，`present_live()` / `commit_lines()` / `clear_live_region()` 负责 command-mode live region 与 append-oriented scrollback。canvas first render 使用 `\x1b[<anchor>;1H` + `\x1b[J`，只清锚点以下；command mode 不做全屏 anchor，不清已提交 scrollback。所有 renderer 入口必须在行写入后 reset SGR；live/canvas frame rewrite 必须使用 synchronized output；cursor positioning 必须与对应 frame/live-region 更新在同一次 renderer 调用内完成。
+- `packages/neomagi_pi/src/tui/app.py` 的 `TUIApp._prepare_anchor()` 是 anchored renderer owner：在 `terminal.enter()` 后、第一次 render 前调用 DSR helper，把 leftover bytes 回灌 `self._stdin.feed()`，计算 bottom-reserved fallback，调用 `renderer.set_anchor()`，并用同一 anchor 计算 compose height。SIGWINCH 回调只标记 `_anchor_dirty`，下一次普通 loop tick 才重新 DSR。
+- `packages/neomagi_pi/src/tui/lifecycle.py` 退出路径在 termios 还原前调用 `Renderer.last_bottom_row()`；返回 `None` 时只做 terminal restore，未到屏底则移动到下一行 col=1，已到屏底则写 `\r\n` 滚动一行，保证 shell 新 prompt 起干净行。
+- `packages/neomagi_pi/src/tui/overlay.py` 中 spinner 帧推进与字符串来源归 `tui.components.spinner.Spinner`；overlay 只负责定位和焦点，不得自存 spinner 帧字符或推进逻辑。`tui.components.spinner.PI_FRAMES` 是 substrate 唯一 braille spinner 帧来源。
+- `packages/neomagi_pi/src/tui/components/` 是 substrate UI primitive 公开层，对应 pi-mono `packages/tui/src/components/` 分层；新增 substrate primitive 必须放这里，业务装配 / agent-aware 逻辑禁止下沉。该目录下文件只允许 import stdlib 和 `tui.*` 内部模块，不允许 `agent_core` / `cli.core` / `ai_provider`。
+- `packages/neomagi_pi/src/tui/width.py` 必须基于 `wcwidth` 提供 `visible_width`、`slice_by_columns`、`truncate_to_width`、ANSI-aware wrap 等能力。所有 `Component.render(width)` 输出必须经过 width guard；不得用 `len()` / `textwrap` 作为终端宽度真相。
 - `event_router` 边界不变：W4 输入仍是 M0 的 pydantic union，不允许 terminal input event 或 formatter event 穿透为 UI-only agent protocol。
 - M1 只接受 macOS / Ubuntu 终端兼容性；Windows 支持必须另起决策。
 - 后续若要引入 `rich`、完整 inline image 协议、或替换 renderer，必须说明为什么 M1 native ANSI substrate 不够，并通过新 ADR 或 amend 记录取舍。

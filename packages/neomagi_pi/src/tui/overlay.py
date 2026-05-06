@@ -2,7 +2,7 @@
 
 Substrate-only. Business code (session selector, model selector, /quit
 confirm, streaming loader) instantiates these from
-``src/cli/interactive/`` — overlays here don't import any agent / message
+``cli/interactive/`` — overlays here don't import any agent / message
 types.
 """
 

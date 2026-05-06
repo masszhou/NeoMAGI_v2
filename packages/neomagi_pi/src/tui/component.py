@@ -1,7 +1,7 @@
-"""``Component`` abstraction (ADR-0015 §影响 `src/tui/component.py`).
+"""``Component`` abstraction.
 
 The substrate-level base class for any TUI element. Business code in
-``src/cli/interactive/components/`` subclasses this; substrate widgets
+``cli/interactive/components/`` subclasses this; substrate widgets
 (overlay, editor, status bar) too. Knows about width / focus / cursor /
 request_render — knows nothing about agent / message / tool semantics.
 """

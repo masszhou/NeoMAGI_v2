@@ -23,12 +23,12 @@ from cli.__main__ import _resolve_render_mode
 from cli.cli_args import CliOptions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = REPO_ROOT / "src"
+PACKAGE_SRC_ROOT = REPO_ROOT / "packages" / "neomagi_pi" / "src"
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "pi_compat"
 
 
 def _run_cli(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
-    """Invoke ``python -m cli`` with the project's ``src`` layout on PYTHONPATH.
+    """Invoke ``python -m cli`` with the package source layout on PYTHONPATH.
 
     We deliberately avoid ``uv run`` here so the smoke is closer to what an
     installed wheel would look like — fewer moving parts, fewer reasons to
@@ -36,12 +36,26 @@ def _run_cli(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess[s
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
-        [str(SRC_ROOT), env.get("PYTHONPATH", "")]
+        [str(PACKAGE_SRC_ROOT), env.get("PYTHONPATH", "")]
     ).rstrip(os.pathsep)
     return subprocess.run(  # noqa: S603 — args are constants, not user input
         [sys.executable, "-m", "cli", *args],
         cwd=str(REPO_ROOT),
         env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+def _run_console(
+    *args: str,
+    timeout: float = 15.0,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 — args are constants, not user input
+        ["magipi", *args],
+        cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -77,6 +91,13 @@ def test_help_lists_runtime_and_fixture_flags() -> None:
     assert "--cache-retention" in out
     assert "--tui-render-mode" in out
     assert "--help" in out
+
+
+def test_magipi_help_lists_runtime_and_fixture_flags() -> None:
+    result = _run_console("--help")
+    assert result.returncode == 0
+    assert "--playback" in result.stdout
+    assert "--model" in result.stdout
 
 
 def test_default_tui_render_mode_is_command_for_runtime() -> None:
@@ -136,6 +157,16 @@ def test_playback_assistant_text_delta_exits_within_timeout() -> None:
         pytest.fail(
             "neomagi --playback did not exit within 8s — playback hang regressed"
         )
+    assert result.returncode == 0
+
+
+def test_magipi_playback_assistant_text_delta_exits_within_timeout() -> None:
+    fixture = FIXTURE_ROOT / "assistant_text_delta"
+    assert (fixture / "events.jsonl").is_file()
+    try:
+        result = _run_console("--playback", str(fixture), timeout=8.0)
+    except subprocess.TimeoutExpired:
+        pytest.fail("magipi --playback did not exit within 8s")
     assert result.returncode == 0
 
 

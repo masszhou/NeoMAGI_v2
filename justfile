@@ -1,6 +1,6 @@
 # Run linter checks 做门禁检查，只拦“新增或恶化”的 block 问题
 lint:
-    uv run ruff check src/
+    uv run ruff check packages/neomagi_pi/src tests scripts
     uv run python -m infra.complexity_guard check
 
 # Show current complexity snapshot 看当前全仓快照

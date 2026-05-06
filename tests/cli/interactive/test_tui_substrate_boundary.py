@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
+PACKAGE_SRC = REPO / "packages" / "neomagi_pi" / "src"
 FORBIDDEN_PROTOCOL_MODULES = (
     "agent_core",
     "cli.core",
@@ -35,7 +36,7 @@ def _is_forbidden_protocol_import(module: str) -> bool:
 
 def test_src_tui_does_not_import_agent_or_provider_protocol_modules() -> None:
     bad: list[tuple[Path, str]] = []
-    for path in _walk_py(REPO / "src" / "tui"):
+    for path in _walk_py(PACKAGE_SRC / "tui"):
         tree = ast.parse(path.read_text())
         bad.extend(
             (path, module)
@@ -43,4 +44,4 @@ def test_src_tui_does_not_import_agent_or_provider_protocol_modules() -> None:
             for module in _imported_modules(node)
             if _is_forbidden_protocol_import(module)
         )
-    assert not bad, f"src/tui imports protocol modules: {bad}"
+    assert not bad, f"packages/neomagi_pi/src/tui imports protocol modules: {bad}"

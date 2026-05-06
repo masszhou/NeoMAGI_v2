@@ -4,11 +4,11 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-SRC = ROOT / "src"
+PACKAGE_SRC = ROOT / "packages" / "neomagi_pi" / "src"
 ALLOWED_SDK_IMPORTERS = {
-    "src/ai_provider/providers/anthropic.py",
-    "src/ai_provider/providers/openai_responses.py",
-    "src/ai_provider/providers/openai_completions.py",
+    "packages/neomagi_pi/src/ai_provider/providers/anthropic.py",
+    "packages/neomagi_pi/src/ai_provider/providers/openai_responses.py",
+    "packages/neomagi_pi/src/ai_provider/providers/openai_completions.py",
 }
 
 
@@ -28,11 +28,10 @@ def _sdk_imports(path: Path) -> set[str]:
 
 def test_sdk_imports_stay_inside_provider_adapters() -> None:
     violations: list[str] = []
-    for path in SRC.rglob("*.py"):
+    for path in PACKAGE_SRC.rglob("*.py"):
         relative = path.relative_to(ROOT).as_posix()
         imports = _sdk_imports(path)
         if imports and relative not in ALLOWED_SDK_IMPORTERS:
             violations.append(f"{relative}: {sorted(imports)}")
 
     assert violations == []
-

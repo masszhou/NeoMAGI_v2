@@ -2,6 +2,12 @@ version = 1
 revision = 2
 requires-python = ">=3.14"
 
+[manifest]
+members = [
+    "neomagi-pi",
+    "neomagi-v2",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -217,9 +223,9 @@ wheels = [
 ]
 
 [[package]]
-name = "neomagi-v2"
+name = "neomagi-pi"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "packages/neomagi_pi" }
 dependencies = [
     { name = "anthropic" },
     { name = "jsonschema" },
@@ -227,13 +233,6 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "wcwidth" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "hypothesis" },
-    { name = "pytest" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -245,6 +244,24 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "wcwidth", specifier = ">=0.2.13" },
 ]
+
+[[package]]
+name = "neomagi-v2"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "neomagi-pi" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "hypothesis" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "neomagi-pi", editable = "packages/neomagi_pi" }]
 
 [package.metadata.requires-dev]
 dev = [

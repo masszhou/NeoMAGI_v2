@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neomagi-pi"
+version = "0.1.0"
+description = "NeoMAGI Pi-compatible local agent shell"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic>=0.69.0",
+    "jsonschema>=4,<5",
+    "openai>=2.0.0",
+    "psycopg[binary]>=3,<4",
+    "pydantic>=2,<3",
+    "wcwidth>=0.2.13",
+]
+
+[project.scripts]
+magipi = "cli.__main__:main"
+neomagi = "cli.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/ai_provider",
+    "src/agent_core",
+    "src/cli",
+    "src/tui",
+    "src/storage",
+    "src/policy",
+    "src/infra",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "README.md",
+    "pyproject.toml",
+    "src",
+]

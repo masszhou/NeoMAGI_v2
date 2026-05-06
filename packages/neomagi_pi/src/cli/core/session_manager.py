@@ -2,7 +2,7 @@
 
 This module owns session semantics above storage: new/resume/fork/clone/tree,
 context hydration, labels, names, and JSONL projection. It deliberately does
-not contain SQL; repository implementations live in `src/storage`.
+not contain SQL; repository implementations live in `storage`.
 """
 
 from __future__ import annotations

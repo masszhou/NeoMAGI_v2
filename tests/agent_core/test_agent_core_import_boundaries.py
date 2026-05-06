@@ -22,7 +22,9 @@ def _import_roots(node: ast.AST) -> list[str]:
 
 
 def test_agent_core_does_not_import_product_storage_policy_or_provider_sdks() -> None:
-    source_root = Path(__file__).parents[2] / "src" / "agent_core"
+    source_root = (
+        Path(__file__).parents[2] / "packages" / "neomagi_pi" / "src" / "agent_core"
+    )
     offenders: list[str] = []
 
     for path in sorted(source_root.rglob("*.py")):

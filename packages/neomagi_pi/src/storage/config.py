@@ -110,7 +110,14 @@ def _resolve_dotenv_path(
 
 
 def _app_root_dotenv_path() -> Path:
-    return Path(__file__).resolve().parents[2] / ".env"
+    module_path = Path(__file__).resolve()
+    for parent in module_path.parents:
+        if (
+            (parent / ".env_template").is_file()
+            and (parent / "packages" / "neomagi_pi").is_dir()
+        ):
+            return parent / ".env"
+    return module_path.parent / ".env"
 
 
 def _read_dotenv(path: Path, *, required: bool = False) -> dict[str, str]:

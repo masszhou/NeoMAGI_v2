@@ -43,7 +43,7 @@ One row per audit event.
 
 ## References
 
-- `src/storage/schema.py`
+- `packages/neomagi_pi/src/storage/schema.py`
 - `design_docs/architecture/pi_behavior_matrix.md` § NeoMAGI strengthened behavior
 - `design_docs/decisions/0007-database-hard-dependency-fail-fast.md`
 - `design_docs/decisions/0008-memory-truth-closure-postgres-with-workspace-projection.md`

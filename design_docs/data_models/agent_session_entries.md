@@ -43,7 +43,7 @@ One row per Pi-compatible session entry.
 
 ## References
 
-- `src/storage/schema.py`
+- `packages/neomagi_pi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Pi-Compatible Entry Schema
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § NeoMAGI Postgres Schema
 - `design_docs/decisions/0009-pi-cli-product-equivalence-contract.md`

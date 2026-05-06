@@ -9,7 +9,8 @@ from tui.components.spinner import PI_FRAMES, Spinner
 from tui.width import strip_ansi, visible_width
 
 REPO = Path(__file__).resolve().parents[2]
-SPINNER_PATH = REPO / "src" / "tui" / "components" / "spinner.py"
+PACKAGE_SRC = REPO / "packages" / "neomagi_pi" / "src"
+SPINNER_PATH = PACKAGE_SRC / "tui" / "components" / "spinner.py"
 
 
 def test_default_frames_advance_and_wrap() -> None:
@@ -130,17 +131,17 @@ def test_spinner_with_tui_app_callback_advances_frame(monkeypatch) -> None:
         assert spinner._frame == expected  # noqa: SLF001
 
 
-def test_pi_frames_are_the_only_braille_spinner_source_in_src() -> None:
+def test_pi_frames_are_the_only_braille_spinner_source_in_package_src() -> None:
     offenders: list[Path] = []
-    for path in (REPO / "src").rglob("*.py"):
+    for path in PACKAGE_SRC.rglob("*.py"):
         if "⠋" in path.read_text():
             offenders.append(path)
     assert offenders == [SPINNER_PATH]
 
 
-def test_no_other_module_level_braille_frame_literals_in_src() -> None:
+def test_no_other_module_level_braille_frame_literals_in_package_src() -> None:
     bad: list[tuple[Path, str]] = []
-    for path in (REPO / "src").rglob("*.py"):
+    for path in PACKAGE_SRC.rglob("*.py"):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assign | ast.AnnAssign):

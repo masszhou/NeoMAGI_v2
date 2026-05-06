@@ -1,4 +1,4 @@
-"""Terminal lifecycle (ADR-0015 §影响 `src/tui/terminal.py`).
+"""Terminal lifecycle (ADR-0015 §影响 `packages/neomagi_pi/src/tui/terminal.py`).
 
 Owns raw mode, bracketed paste, cursor visibility, alt screen, SIGWINCH and
 keyboard-protocol negotiation. Business code never touches ``termios`` /

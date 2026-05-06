@@ -1,4 +1,4 @@
-"""ANSI-aware terminal width primitives (ADR-0015 §影响 `src/tui/width.py`).
+"""ANSI-aware terminal width primitives (ADR-0015 §影响 `packages/neomagi_pi/src/tui/width.py`).
 
 `Component.render(width)` 输出必须经此模块校验；业务代码不得用 `len()` /
 `textwrap` 当列宽真相。CJK / emoji / combining mark / ANSI SGR / tab 全部

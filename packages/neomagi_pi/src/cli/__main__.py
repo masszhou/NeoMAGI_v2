@@ -1,4 +1,4 @@
-"""``python -m cli`` entry point + the ``neomagi`` console script.
+"""``python -m cli`` entry point plus ``magipi`` / ``neomagi`` scripts.
 
 Routes argv to either:
 
@@ -14,12 +14,13 @@ process exit code routing.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from .cli_args import CliOptions, parse_args
 
 
 def main(argv: list[str] | None = None) -> int:
-    opts = parse_args(argv if argv is not None else sys.argv[1:])
+    opts = parse_args(argv if argv is not None else sys.argv[1:], prog=_program_name())
 
     if opts.print_only:
         return _run_print(opts)
@@ -93,6 +94,13 @@ def _resolve_render_mode(opts: CliOptions) -> str:
     if opts.tui_render_mode is not None:
         return opts.tui_render_mode
     return "canvas" if opts.playback is not None else "command"
+
+
+def _program_name() -> str:
+    name = Path(sys.argv[0]).name
+    if name == "__main__.py":
+        return "python -m cli"
+    return name or "magipi"
 
 
 if __name__ == "__main__":

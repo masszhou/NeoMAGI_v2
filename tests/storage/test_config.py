@@ -155,6 +155,30 @@ def test_load_database_config_uses_app_root_dotenv_from_workspace_cwd(
     assert config.port == 5432
 
 
+def test_app_root_dotenv_path_finds_workspace_root_after_package_move(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    module_dir = repo / "packages" / "neomagi_pi" / "src" / "storage"
+    module_dir.mkdir(parents=True)
+    (repo / ".env_template").write_text("DATABASE_HOST=\n", encoding="utf-8")
+    monkeypatch.setattr(config_module, "__file__", str(module_dir / "config.py"))
+
+    assert config_module._app_root_dotenv_path() == repo / ".env"
+
+
+def test_app_root_dotenv_path_falls_back_to_package_dir_outside_repo(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    package_dir = tmp_path / "venv" / "site-packages" / "storage"
+    package_dir.mkdir(parents=True)
+    monkeypatch.setattr(config_module, "__file__", str(package_dir / "config.py"))
+
+    assert config_module._app_root_dotenv_path() == package_dir / ".env"
+
+
 def test_load_database_config_does_not_read_workspace_dotenv(
     tmp_path,
     monkeypatch,

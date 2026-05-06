@@ -98,7 +98,9 @@ def test_truncated_text_handles_cjk_boundary() -> None:
 def test_tui_components_do_not_import_protocol_modules() -> None:
     forbidden = ("agent_core", "cli.core", "ai_provider")
     bad: list[tuple[Path, str]] = []
-    for path in (REPO / "src" / "tui" / "components").rglob("*.py"):
+    for path in (
+        REPO / "packages" / "neomagi_pi" / "src" / "tui" / "components"
+    ).rglob("*.py"):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             modules: list[str] = []

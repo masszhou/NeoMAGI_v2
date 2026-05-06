@@ -61,6 +61,11 @@ flowchart TB
 
 Recommended Python package layout:
 
+Current P1 implementation lives in `packages/neomagi_pi/src/` as the
+`neomagi-pi` package. The first package migration keeps the existing top-level
+Python import names below while moving the distribution/product boundary under
+`packages/neomagi_pi/`.
+
 | Package | Responsibility |
 | --- | --- |
 | `ai_provider` | Pi-compatible message/content/tool/model/provider/stream types, provider adapters, faux provider, credential resolution boundary |
