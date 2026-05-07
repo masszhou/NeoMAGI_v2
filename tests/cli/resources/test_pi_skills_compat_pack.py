@@ -6,6 +6,8 @@ from pathlib import Path
 from cli.resources.frontmatter import split_frontmatter
 from cli.resources.loader import ResourceLoader
 from cli.resources.skills import expand_skill_command
+from policy.shell_policy import decide_shell_access
+from policy.types import PolicyRequest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SHOWCASE_ROOT = REPO_ROOT / "showcase" / "pi_skills_compat"
@@ -107,8 +109,26 @@ def test_generated_setup_checks_do_not_leak_secret_values() -> None:
 
     assert "echo $BRAVE_API_KEY" not in brave
     assert "echo $GROQ_API_KEY" not in transcribe
+    assert ">/dev/null" not in brave
+    assert ">/dev/null" not in transcribe
     assert 'test -n "${BRAVE_API_KEY:-}"' in brave
     assert 'test -n "${GROQ_API_KEY:-}"' in transcribe
+    assert "resources.skillEnv.brave-search" in brave
+    assert "resources.skillEnv.transcribe" in transcribe
+
+
+def test_generated_setup_checks_are_shell_policy_compatible(tmp_path) -> None:
+    for name in EXPECTED_SKILLS:
+        for command in _setup_check_commands(name):
+            decision = decide_shell_access(
+                PolicyRequest(
+                    toolName="bash",
+                    args={"command": command},
+                    cwd=str(tmp_path),
+                    actor="model",
+                )
+            )
+            assert decision.effect == "allow", (name, command, decision.reason)
 
 
 def _section(skill_name: str, heading: str) -> str:
@@ -117,3 +137,10 @@ def _section(skill_name: str, heading: str) -> str:
     start = text.index(marker) + len(marker)
     end = text.find("\n## ", start)
     return text[start:] if end == -1 else text[start:end]
+
+
+def _setup_check_commands(skill_name: str) -> list[str]:
+    section = _section(skill_name, "Setup check")
+    start = section.index("```bash") + len("```bash")
+    end = section.index("```", start)
+    return [line.strip() for line in section[start:end].splitlines() if line.strip()]

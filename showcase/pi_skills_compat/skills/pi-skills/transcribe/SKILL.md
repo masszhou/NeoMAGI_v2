@@ -11,14 +11,14 @@ Run every command from this skill through NeoMAGI's governed `bash` tool so shel
 ## Setup check
 
 ```bash
-command -v curl >/dev/null && echo "curl found" || echo "curl missing"
+curl --version && echo "curl found" || echo "curl missing"
 test -x "{baseDir}/transcribe.sh" && echo "transcribe.sh executable" || echo "transcribe.sh missing"
 test -n "${GROQ_API_KEY:-}" && echo "GROQ_API_KEY is set" || echo "GROQ_API_KEY is not set"
 ```
 
 ## Credentials
 
-Requires `GROQ_API_KEY`. Check only whether it is set; never echo the value.
+Requires `GROQ_API_KEY`. Check only whether it is set; never echo the value. NeoMAGI may inject it through `resources.skillEnv.transcribe` when configured.
 
 ## Sensitive operations
 

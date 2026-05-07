@@ -32,6 +32,7 @@ def test_rewrite_inserts_neomagi_sections_and_redacts_env_checks() -> None:
     assert "transcribe.sh <audio-file>" in rewritten
     assert "echo $GROQ_API_KEY" not in rewritten
     assert 'test -n "${GROQ_API_KEY:-}"' in rewritten
+    assert ">/dev/null" not in rewritten
 
 
 def test_copy_filter_allows_helper_files_and_blocks_runtime_artifacts() -> None:
@@ -80,3 +81,14 @@ def test_build_compat_pack_copies_allowed_files_and_rewrites_skill(tmp_path) -> 
     assert not (generated_skill.parent / "credentials.json").exists()
     assert not (generated_skill.parent / "node_modules").exists()
     assert "## Credentials" in generated_skill.read_text(encoding="utf-8")
+
+
+def test_rewrite_policy_compatible_setup_check_mentions_skill_env_settings() -> None:
+    rewritten = rewrite_skill_markdown(
+        "brave-search",
+        "---\nname: brave-search\ndescription: Search.\n---\n# Brave\n",
+    )
+
+    assert ">/dev/null" not in rewritten
+    assert 'test -n "${BRAVE_API_KEY:-}"' in rewritten
+    assert "resources.skillEnv.brave-search" in rewritten

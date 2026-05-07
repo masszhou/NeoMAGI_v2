@@ -11,7 +11,7 @@ Run every command from this skill through NeoMAGI's governed `bash` tool so shel
 ## Setup check
 
 ```bash
-command -v node >/dev/null && echo "node found" || echo "node missing"
+node --version && echo "node found" || echo "node missing"
 test -f "{baseDir}/package.json" && echo "package.json found" || echo "package.json missing"
 test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run npm install in {baseDir}"
 test -n "${BRAVE_API_KEY:-}" && echo "BRAVE_API_KEY is set" || echo "BRAVE_API_KEY is not set"
@@ -19,7 +19,7 @@ test -n "${BRAVE_API_KEY:-}" && echo "BRAVE_API_KEY is set" || echo "BRAVE_API_K
 
 ## Credentials
 
-Requires `BRAVE_API_KEY`. Check only whether it is set; never echo the value.
+Requires `BRAVE_API_KEY`. Check only whether it is set; never echo the value. NeoMAGI may inject it through `resources.skillEnv.brave-search` when configured.
 
 ## Sensitive operations
 

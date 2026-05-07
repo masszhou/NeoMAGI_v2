@@ -11,9 +11,9 @@ Run every command from this skill through NeoMAGI's governed `bash` tool so shel
 ## Setup check
 
 ```bash
-command -v node >/dev/null && echo "node found" || echo "node missing"
+node --version && echo "node found" || echo "node missing"
 test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run npm install in {baseDir}"
-command -v google-chrome >/dev/null || command -v chromium >/dev/null || test -d "/Applications/Google Chrome.app"
+command -v google-chrome || command -v chromium || test -d "/Applications/Google Chrome.app"
 ```
 
 ## Credentials

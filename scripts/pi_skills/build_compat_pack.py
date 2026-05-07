@@ -149,6 +149,7 @@ def _patch_upstream_body(skill_name: str, body: str) -> str:
         )
     if skill_name == "vscode":
         body = body.replace("/tmp/old", ".tmp/vscode-diff/old")
+        body = body.replace("/tmp/staged", ".tmp/vscode-diff/staged")
     return body
 
 
@@ -179,39 +180,39 @@ def _neomagi_sections(skill_name: str) -> str:
 def _setup_check(skill_name: str) -> str:
     checks = {
         "brave-search": """```bash
-command -v node >/dev/null && echo "node found" || echo "node missing"
+node --version && echo "node found" || echo "node missing"
 test -f "{baseDir}/package.json" && echo "package.json found" || echo "package.json missing"
 test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run npm install in {baseDir}"
 test -n "${BRAVE_API_KEY:-}" && echo "BRAVE_API_KEY is set" || echo "BRAVE_API_KEY is not set"
 ```""",
         "browser-tools": """```bash
-command -v node >/dev/null && echo "node found" || echo "node missing"
+node --version && echo "node found" || echo "node missing"
 test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run npm install in {baseDir}"
-command -v google-chrome >/dev/null || command -v chromium >/dev/null || test -d "/Applications/Google Chrome.app"
+command -v google-chrome || command -v chromium || test -d "/Applications/Google Chrome.app"
 ```""",
         "gccli": """```bash
-command -v gccli >/dev/null && echo "gccli found" || echo "gccli missing"
+command -v gccli && echo "gccli found" || echo "gccli missing"
 gccli accounts list
 ```""",
         "gdcli": """```bash
-command -v gdcli >/dev/null && echo "gdcli found" || echo "gdcli missing"
+command -v gdcli && echo "gdcli found" || echo "gdcli missing"
 gdcli accounts list
 ```""",
         "gmcli": """```bash
-command -v gmcli >/dev/null && echo "gmcli found" || echo "gmcli missing"
+command -v gmcli && echo "gmcli found" || echo "gmcli missing"
 gmcli accounts list
 ```""",
         "transcribe": """```bash
-command -v curl >/dev/null && echo "curl found" || echo "curl missing"
+curl --version && echo "curl found" || echo "curl missing"
 test -x "{baseDir}/transcribe.sh" && echo "transcribe.sh executable" || echo "transcribe.sh missing"
 test -n "${GROQ_API_KEY:-}" && echo "GROQ_API_KEY is set" || echo "GROQ_API_KEY is not set"
 ```""",
         "vscode": """```bash
-command -v code >/dev/null && echo "code CLI found" || echo "code CLI missing"
+command -v code && echo "code CLI found" || echo "code CLI missing"
 mkdir -p .tmp/vscode-diff
 ```""",
         "youtube-transcript": """```bash
-command -v node >/dev/null && echo "node found" || echo "node missing"
+node --version && echo "node found" || echo "node missing"
 test -f "{baseDir}/package.json" && echo "package.json found" || echo "package.json missing"
 test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run npm install in {baseDir}"
 ```""",
@@ -221,12 +222,18 @@ test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run n
 
 def _credentials(skill_name: str) -> str:
     credentials = {
-        "brave-search": "Requires `BRAVE_API_KEY`. Check only whether it is set; never echo the value.",
+        "brave-search": (
+            "Requires `BRAVE_API_KEY`. Check only whether it is set; never echo the value. "
+            "NeoMAGI may inject it through `resources.skillEnv.brave-search` when configured."
+        ),
         "browser-tools": "Does not require API credentials. Browser profile data and cookies are credentials for safety purposes.",
         "gccli": "Uses OAuth files under `~/.gccli/`. Do not print or copy those files.",
         "gdcli": "Uses OAuth files under `~/.gdcli/`. Do not print or copy those files.",
         "gmcli": "Uses OAuth files under `~/.gmcli/`. Do not print or copy those files.",
-        "transcribe": "Requires `GROQ_API_KEY`. Check only whether it is set; never echo the value.",
+        "transcribe": (
+            "Requires `GROQ_API_KEY`. Check only whether it is set; never echo the value. "
+            "NeoMAGI may inject it through `resources.skillEnv.transcribe` when configured."
+        ),
         "vscode": "No external credential is required.",
         "youtube-transcript": "No credential is required for public videos with available transcripts.",
     }

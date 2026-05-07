@@ -11,7 +11,7 @@ Run every command from this skill through NeoMAGI's governed `bash` tool so shel
 ## Setup check
 
 ```bash
-command -v gccli >/dev/null && echo "gccli found" || echo "gccli missing"
+command -v gccli && echo "gccli found" || echo "gccli missing"
 gccli accounts list
 ```
 

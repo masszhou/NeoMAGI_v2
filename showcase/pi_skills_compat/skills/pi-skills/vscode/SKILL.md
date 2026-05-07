@@ -11,7 +11,7 @@ Run every command from this skill through NeoMAGI's governed `bash` tool so shel
 ## Setup check
 
 ```bash
-command -v code >/dev/null && echo "code CLI found" || echo "code CLI missing"
+command -v code && echo "code CLI found" || echo "code CLI missing"
 mkdir -p .tmp/vscode-diff
 ```
 
@@ -61,7 +61,7 @@ git show HEAD~1:path/to/file > .tmp/vscode-diff/old && code -d .tmp/vscode-diff/
 git show abc123:path/to/file > .tmp/vscode-diff/old && code -d .tmp/vscode-diff/old path/to/file
 
 # Compare staged version with working tree
-git show :path/to/file > /tmp/staged && code -d /tmp/staged path/to/file
+git show :path/to/file > .tmp/vscode-diff/staged && code -d .tmp/vscode-diff/staged path/to/file
 ```
 
 ### Gotchas
