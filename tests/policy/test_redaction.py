@@ -4,6 +4,7 @@ from policy.redaction import (
     REDACTED_PATH,
     REDACTED_VALUE,
     redact_for_export,
+    redact_literal_values,
     redact_secret_keys,
     redacted_command_preview,
 )
@@ -71,3 +72,14 @@ def test_command_preview_redacts_long_tokens_but_preserves_env_refs() -> None:
     assert applied is True
     assert secret not in preview
     assert "$OPENAI_API_KEY" in preview
+
+
+def test_literal_value_redaction_masks_known_runtime_secret_values() -> None:
+    redacted, applied = redact_literal_values(
+        "before FAKE_BRAVE_SECRET_VALUE after",
+        ("FAKE_BRAVE_SECRET_VALUE",),
+    )
+
+    assert applied is True
+    assert "FAKE_BRAVE_SECRET_VALUE" not in redacted
+    assert REDACTED_VALUE in redacted

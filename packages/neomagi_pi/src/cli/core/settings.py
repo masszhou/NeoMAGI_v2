@@ -55,10 +55,27 @@ class ResourceProductSettings(BaseModel):
     prompts: list[str] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     enable_skill_commands: bool = Field(default=True, alias="enableSkillCommands")
+    skill_env: dict[str, "SkillEnvSettings"] = Field(default_factory=dict, alias="skillEnv")
 
     @field_validator("packages", "extensions", "skills", "prompts", "themes", mode="before")
     @classmethod
     def _coerce_string_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
+
+
+class SkillEnvSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    env_file: str = Field(alias="envFile")
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("allow", mode="before")
+    @classmethod
+    def _coerce_allow(cls, value: Any) -> Any:
         if value is None:
             return []
         if isinstance(value, str):
@@ -261,6 +278,8 @@ _RESOURCE_KEYS = {
     "themes",
     "enableSkillCommands",
     "enable_skill_commands",
+    "skillEnv",
+    "skill_env",
 }
 
 
@@ -271,6 +290,8 @@ def _normalize_legacy_resource_keys(raw: dict[str, Any]) -> dict[str, Any]:
     for key in _RESOURCE_KEYS:
         if key in normalized:
             target_key = "enableSkillCommands" if key == "enable_skill_commands" else key
+            if key == "skill_env":
+                target_key = "skillEnv"
             resources.setdefault(target_key, normalized[key])
             changed = True
     if changed:
@@ -408,4 +429,5 @@ __all__ = [
     "SettingsDiagnostic",
     "SettingsManager",
     "SettingsScope",
+    "SkillEnvSettings",
 ]

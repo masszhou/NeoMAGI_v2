@@ -244,7 +244,50 @@ def test_followup_action_expands_prompt_template(tmp_path: Path) -> None:
         controller._handle_runtime_action(Action.QUEUE_FOLLOWUP)  # noqa: SLF001
         controller._drain_runtime_events()  # noqa: SLF001
 
-        assert runtime.state.queued_follow_up == ("Question: topic",)
+        assert runtime.state.queued_follow_up == ("/ask topic",)
+        controller.handle_abort()
+        _drain_controller(controller, runtime)
+    finally:
+        runtime.shutdown()
+
+
+def test_idle_skill_submit_renders_compact_but_sends_expanded_prompt(tmp_path: Path) -> None:
+    _write_reviewer_skill(tmp_path)
+    _app, controller, runtime = _controller_with_runtime(cwd=tmp_path)
+    try:
+        controller._on_editor_submit(  # noqa: SLF001
+            EditorSubmission("/skill:reviewer target.py", EditorState.IDLE)
+        )
+        _drain_controller(controller, runtime)
+    finally:
+        runtime.shutdown()
+
+    rendered = "\n".join(
+        "\n".join(child.render(100))
+        for child in controller.messages.children
+        if isinstance(child, UserMessageComponent)
+    )
+    user_message = next(message for message in runtime._agent.state.messages if message.role == "user")  # noqa: SLF001
+    assert "/skill:reviewer target.py" in rendered
+    assert "Review carefully." not in rendered
+    assert "Review carefully." in user_message.content[0].text
+    assert user_message.resourceCommand["display"] == "/skill:reviewer target.py"
+
+
+def test_streaming_queued_skill_uses_compact_queue_display(tmp_path: Path) -> None:
+    _write_reviewer_skill(tmp_path)
+    _app, controller, runtime = _controller_with_runtime(cwd=tmp_path)
+    try:
+        controller._handle_runtime_submit(  # noqa: SLF001
+            EditorSubmission("hello", EditorState.IDLE)
+        )
+        controller._on_editor_submit(  # noqa: SLF001
+            EditorSubmission("/skill:reviewer target.py", EditorState.STREAMING)
+        )
+        controller._drain_runtime_events()  # noqa: SLF001
+
+        assert controller.status.queue.steering == ["/skill:reviewer target.py"]
+        assert runtime.state.queued_steering == ("/skill:reviewer target.py",)
         controller.handle_abort()
         _drain_controller(controller, runtime)
     finally:
@@ -334,5 +377,13 @@ def setup(api):
 
     api.register_command("extcmd", {"description": "test", "handler": run})
 """,
+        encoding="utf-8",
+    )
+
+
+def _write_reviewer_skill(tmp_path: Path) -> None:
+    (tmp_path / ".pi" / "skills" / "reviewer").mkdir(parents=True)
+    (tmp_path / ".pi" / "skills" / "reviewer" / "SKILL.md").write_text(
+        "---\nname: reviewer\ndescription: Review files.\n---\nReview carefully.\n",
         encoding="utf-8",
     )

@@ -62,6 +62,24 @@ def test_openai_completions_direct_prompt_cache() -> None:
     assert headers == {}
 
 
+def test_openai_completions_ignores_user_message_display_metadata() -> None:
+    context = Context(
+        messages=[
+            UserMessage(
+                content="expanded prompt",
+                timestamp=1,
+                resourceCommand={"display": "/skill:reviewer target.py"},
+            )
+        ]
+    )
+    model = get_model("openai", "gpt-4o-mini-chat-completions")
+
+    payload, _headers = build_openai_completions_params(model, context, StreamOptions())
+
+    assert payload["messages"] == [{"role": "user", "content": "expanded prompt"}]
+    assert "resourceCommand" not in json.dumps(payload)
+
+
 def test_openai_completions_tool_strict_defaults_to_false_when_supported() -> None:
     model = get_model("openai", "gpt-4o-mini-chat-completions")
     payload, _ = build_openai_completions_params(model, _context([_read_tool()]), StreamOptions())

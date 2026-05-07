@@ -1,17 +1,19 @@
 """Resource discovery and prompt-resource helpers for the CLI product layer."""
 
+from .commands import ResourceCommandExpansion
 from .context_files import ContextFile, load_context_files
 from .diagnostics import ResourceDiagnostic
 from .loader import ResourceExtensionPaths, ResourceLoader, ResourceSnapshot
 from .prompt_templates import (
     PromptTemplate,
     expand_prompt_template,
+    expand_prompt_template_detail,
     load_prompt_templates,
     parse_command_args,
     substitute_args,
 )
 from .settings import ResourceSettings, load_resource_settings
-from .skills import Skill, expand_skill_command, format_skills_for_prompt, load_skills
+from .skills import Skill, expand_skill_command, expand_skill_command_detail, format_skills_for_prompt, load_skills
 from .source_info import ResourceInfo, SourceInfo
 from .system_prompt import SystemPromptParts, build_system_prompt
 
@@ -19,6 +21,7 @@ __all__ = [
     "ContextFile",
     "PromptTemplate",
     "ResourceDiagnostic",
+    "ResourceCommandExpansion",
     "ResourceExtensionPaths",
     "ResourceInfo",
     "ResourceLoader",
@@ -29,7 +32,9 @@ __all__ = [
     "SystemPromptParts",
     "build_system_prompt",
     "expand_prompt_template",
+    "expand_prompt_template_detail",
     "expand_skill_command",
+    "expand_skill_command_detail",
     "format_skills_for_prompt",
     "load_context_files",
     "load_prompt_templates",

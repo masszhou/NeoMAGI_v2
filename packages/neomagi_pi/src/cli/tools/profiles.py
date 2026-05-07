@@ -10,7 +10,7 @@ from agent_core.runtime_types import RuntimeAgentTool
 from policy.audit import AuditSink
 
 from .bash import create_bash_tool_definition
-from .definitions import ToolDefinition, ToolName
+from .definitions import SkillEnvGrant, ToolDefinition, ToolName
 from .edit import create_edit_tool_definition
 from .find import create_find_tool_definition
 from .grep import create_grep_tool_definition
@@ -66,6 +66,7 @@ def create_coding_tools(
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
     artifact_store: RuntimeArtifactStore | None = None,
+    skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
 ) -> list[RuntimeAgentTool]:
     return _wrap_definitions(
         create_coding_tool_definitions(cwd, {"artifact_store": artifact_store}),
@@ -75,6 +76,7 @@ def create_coding_tools(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        skill_env_grant_provider=skill_env_grant_provider,
     )
 
 
@@ -107,6 +109,7 @@ def create_all_tools(
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
     artifact_store: RuntimeArtifactStore | None = None,
+    skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
 ) -> dict[ToolName, RuntimeAgentTool]:
     definitions = create_all_tool_definitions(cwd, {"artifact_store": artifact_store})
     runtime = ToolRuntime(
@@ -116,6 +119,7 @@ def create_all_tools(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        skill_env_grant_provider=skill_env_grant_provider,
     )
     return {name: wrap_tool_definition(definition, runtime) for name, definition in definitions.items()}
 
@@ -129,6 +133,7 @@ def _wrap_definitions(
     run_id_provider: Callable[[], str | None] | None,
     audit_sink: AuditSink | None,
     policy_decider: PolicyDecider | None,
+    skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
 ) -> list[RuntimeAgentTool]:
     runtime = ToolRuntime(
         cwd=str(cwd),
@@ -137,6 +142,7 @@ def _wrap_definitions(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        skill_env_grant_provider=skill_env_grant_provider,
     )
     return [wrap_tool_definition(definition, runtime) for definition in definitions]
 

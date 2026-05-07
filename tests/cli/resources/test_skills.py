@@ -3,6 +3,7 @@ from __future__ import annotations
 from cli.resources.skills import (
     SkillSearchRoot,
     expand_skill_command,
+    expand_skill_command_detail,
     format_skills_for_prompt,
     load_skills,
 )
@@ -55,6 +56,14 @@ def test_skill_prompt_and_expansion(tmp_path) -> None:
     assert 'name="hidden"' not in prompt
     assert "Visible body" in (expand_skill_command("/skill:visible args", list(loaded.skills)) or "")
     assert "User arguments: args" in (expand_skill_command("/skill:visible args", list(loaded.skills)) or "")
+
+    detail = expand_skill_command_detail("/skill:visible args", list(loaded.skills))
+    assert detail is not None
+    assert detail.original == "/skill:visible args"
+    assert detail.display == "/skill:visible args"
+    assert detail.resource_type == "skill"
+    assert detail.name == "visible"
+    assert "Visible body" in detail.expanded
 
 
 def test_skill_expansion_replaces_base_dir_in_body_only(tmp_path) -> None:

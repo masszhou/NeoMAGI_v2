@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from concurrent.futures import Future
 
@@ -209,6 +210,76 @@ def test_runtime_expands_skill_and_prompt_template_commands(tmp_path) -> None:
     assert skill is not None and "Read carefully." in skill
     assert "User arguments: target.py" in skill
     assert prompt == "Question: topic"
+
+
+def test_runtime_prepares_resource_command_display_metadata_and_skill_env(tmp_path) -> None:
+    (tmp_path / ".pi" / "skills" / "brave-search").mkdir(parents=True)
+    (tmp_path / ".pi" / "skills" / "brave-search" / "SKILL.md").write_text(
+        "---\nname: brave-search\ndescription: Search the web.\n---\nRun search.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".pi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.brave",
+                            "allow": ["BRAVE_API_KEY"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env.brave").write_text('BRAVE_API_KEY="FAKE_BRAVE_SECRET_VALUE"\n', encoding="utf-8")
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        prepared = runtime.prepare_prompt_submission("/skill:brave-search today")
+        message = runtime._user_message(prepared)  # noqa: SLF001
+    finally:
+        runtime.shutdown()
+
+    assert prepared.display_text == "/skill:brave-search today"
+    assert "Run search." in prepared.provider_text
+    assert prepared.skill_env_grant is not None
+    assert prepared.skill_env_grant.names == ("BRAVE_API_KEY",)
+    assert prepared.skill_env_grant.env["BRAVE_API_KEY"] == "FAKE_BRAVE_SECRET_VALUE"
+    assert message.resourceCommand["display"] == "/skill:brave-search today"
+    assert message.content[0].text == prepared.provider_text
+
+
+def test_runtime_skill_env_missing_file_reports_non_secret_setup_error(tmp_path) -> None:
+    (tmp_path / ".pi" / "skills" / "brave-search").mkdir(parents=True)
+    (tmp_path / ".pi" / "skills" / "brave-search" / "SKILL.md").write_text(
+        "---\nname: brave-search\ndescription: Search the web.\n---\nRun search.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".pi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.brave",
+                            "allow": ["BRAVE_API_KEY"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        prepared = runtime.prepare_prompt_submission("/skill:brave-search today")
+    finally:
+        runtime.shutdown()
+
+    assert prepared.setup_error is not None
+    assert "BRAVE_API_KEY" not in prepared.setup_error
+    assert "missing envFile '.env.brave'" in prepared.setup_error
 
 
 def test_runtime_respects_disabled_skill_commands_for_expand_and_autocomplete(tmp_path) -> None:

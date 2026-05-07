@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,12 +17,28 @@ BUILTIN_TOOL_NAMES: frozenset[ToolName] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class SkillEnvGrant:
+    skill_name: str
+    env: Mapping[str, str]
+    source: str | None = None
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(self.env.keys())
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        return tuple(value for value in self.env.values() if value)
+
+
+@dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
     tool_call_id: str
     cwd: str
     policy_decision: PolicyDecision
     runtime_session_id: str | None = None
     run_id: str | None = None
+    skill_env_grant: SkillEnvGrant | None = None
 
 
 ToolExecute = Callable[
@@ -59,6 +75,7 @@ def object_schema(
 
 __all__ = [
     "BUILTIN_TOOL_NAMES",
+    "SkillEnvGrant",
     "ToolDefinition",
     "ToolExecutionContext",
     "ToolExecute",

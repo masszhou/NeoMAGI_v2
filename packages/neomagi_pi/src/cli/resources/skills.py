@@ -6,6 +6,7 @@ import html
 from dataclasses import dataclass
 from pathlib import Path
 
+from .commands import ResourceCommandExpansion
 from .diagnostics import ResourceDiagnostic
 from .frontmatter import split_frontmatter
 from .source_info import SourceInfo
@@ -86,6 +87,11 @@ def format_skills_for_prompt(skills: list[Skill]) -> str:
 
 
 def expand_skill_command(text: str, skills: list[Skill]) -> str | None:
+    detail = expand_skill_command_detail(text, skills)
+    return detail.expanded if detail is not None else None
+
+
+def expand_skill_command_detail(text: str, skills: list[Skill]) -> ResourceCommandExpansion | None:
     if not text.startswith("/skill:"):
         return None
     head, _, args = text.partition(" ")
@@ -102,7 +108,14 @@ def expand_skill_command(text: str, skills: list[Skill]) -> str | None:
         f"{body}\n"
         "</skill>"
     )
-    return f"{expanded}\n\nUser arguments: {args}" if args else expanded
+    expanded = f"{expanded}\n\nUser arguments: {args}" if args else expanded
+    return ResourceCommandExpansion(
+        original=text,
+        expanded=expanded,
+        display=text.strip(),
+        resource_type="skill",
+        name=skill.name,
+    )
 
 
 def _discover_skill_files(root: Path, allow_root_markdown: bool) -> list[Path]:
@@ -195,6 +208,7 @@ __all__ = [
     "Skill",
     "SkillSearchRoot",
     "expand_skill_command",
+    "expand_skill_command_detail",
     "format_skills_for_prompt",
     "load_skills",
 ]

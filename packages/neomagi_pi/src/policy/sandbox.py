@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal as signal_module
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,8 +42,9 @@ async def run_shell_command(
     timeout: float,
     signal: asyncio.Event | None = None,
     on_data: Callable[[bytes], None] | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> SandboxResult:
-    process = await _spawn_shell(command, cwd)
+    process = await _spawn_shell(command, cwd, extra_env=extra_env)
     chunks: list[bytes] = []
     output_task = asyncio.create_task(_read_output(process, chunks, on_data))
     wait_task, timeout_task, abort_task, tasks = _wait_tasks(process, timeout, signal)
@@ -61,24 +62,31 @@ async def run_shell_command(
     )
 
 
-async def _spawn_shell(command: str, cwd: Path) -> asyncio.subprocess.Process:
+async def _spawn_shell(
+    command: str,
+    cwd: Path,
+    *,
+    extra_env: Mapping[str, str] | None = None,
+) -> asyncio.subprocess.Process:
     return await asyncio.create_subprocess_shell(
         command,
         cwd=str(cwd),
-        env=sandbox_environment(cwd),
+        env=sandbox_environment(cwd, extra_env=extra_env),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
 
 
-def sandbox_environment(cwd: Path) -> dict[str, str]:
+def sandbox_environment(cwd: Path, *, extra_env: Mapping[str, str] | None = None) -> dict[str, str]:
     env = {
         key: value
         for key in _SUBPROCESS_ENV_ALLOWLIST
         if isinstance((value := os.environ.get(key)), str)
     }
     env.setdefault("PATH", _DEFAULT_PATH)
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
     env["PWD"] = str(cwd)
     return env
 

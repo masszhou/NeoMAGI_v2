@@ -14,13 +14,14 @@ from agent_core.types import AgentToolResult
 from policy.audit import AuditRecord, AuditSink, InMemoryAuditSink
 from policy.path_policy import decide_path_access
 from policy.redaction import (
+    redact_literal_values as _redact_literal_values,
     redact_secret_keys as _redact_secrets,
     redacted_command_preview as _redacted_command_preview,
 )
 from policy.shell_policy import decide_shell_access
 from policy.types import PolicyActor, PolicyDecision, PolicyRequest
 
-from .definitions import ToolDefinition, ToolExecutionContext
+from .definitions import SkillEnvGrant, ToolDefinition, ToolExecutionContext
 
 PolicyDecider = Callable[[PolicyRequest], PolicyDecision | Awaitable[PolicyDecision]]
 
@@ -36,6 +37,7 @@ class ToolRuntime:
         actor: PolicyActor = "model",
         audit_sink: AuditSink | None = None,
         policy_decider: PolicyDecider | None = None,
+        skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
     ) -> None:
         self.cwd = cwd
         self.runtime_session_id = runtime_session_id
@@ -44,12 +46,19 @@ class ToolRuntime:
         self.actor = actor
         self.audit_sink = audit_sink or InMemoryAuditSink()
         self.policy_decider = policy_decider or default_policy_decider
+        self.skill_env_grant_provider = skill_env_grant_provider
 
     @property
     def current_run_id(self) -> str | None:
         if self.run_id_provider is not None:
             return self.run_id_provider() or self.run_id
         return self.run_id
+
+    @property
+    def current_skill_env_grant(self) -> SkillEnvGrant | None:
+        if self.skill_env_grant_provider is None:
+            return None
+        return self.skill_env_grant_provider()
 
 
 def wrap_tool_definition(definition: ToolDefinition, runtime: ToolRuntime) -> RuntimeAgentTool:
@@ -184,6 +193,11 @@ async def _run_or_block_tool(
         policy_decision=decision,
         runtime_session_id=runtime.runtime_session_id,
         run_id=run_id,
+        skill_env_grant=(
+            runtime.current_skill_env_grant
+            if runtime.actor == "model" and definition.name == "bash"
+            else None
+        ),
     )
     effective_args = args if decision.normalized_args is None else decision.normalized_args
     result = await maybe_await(definition.execute(effective_args, context, signal, on_update))
@@ -260,7 +274,16 @@ async def _audit(
     ended = details.get("endedAt") if isinstance(details.get("endedAt"), str) else _now_iso()
     duration = details.get("durationMs")
     try:
-        audit_args, redaction_status = _audit_args(definition.name, args, runtime.cwd)
+        audit_args, redaction_status = _audit_args(
+            definition.name,
+            args,
+            runtime.cwd,
+            skill_env_grant=(
+                runtime.current_skill_env_grant
+                if runtime.actor == "model" and definition.name == "bash"
+                else None
+            ),
+        )
     except Exception:
         audit_args = {"redactionError": "audit argument redaction failed"}
         redaction_status = "failed"
@@ -317,9 +340,15 @@ def _affected_paths(details: dict[str, Any], decision: PolicyDecision) -> list[s
     return paths
 
 
-def _audit_args(tool_name: str, args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], str]:
+def _audit_args(
+    tool_name: str,
+    args: dict[str, Any],
+    cwd: str,
+    *,
+    skill_env_grant: SkillEnvGrant | None = None,
+) -> tuple[dict[str, Any], str]:
     if tool_name == "bash":
-        return _bash_audit_args(args, cwd)
+        return _bash_audit_args(args, cwd, skill_env_grant=skill_env_grant)
     if tool_name == "read":
         return _read_audit_args(args), "not_required"
     if tool_name == "grep":
@@ -336,10 +365,18 @@ def _audit_args(tool_name: str, args: dict[str, Any], cwd: str) -> tuple[dict[st
     return _ensure_dict(redacted), "applied" if applied else "not_required"
 
 
-def _bash_audit_args(args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], str]:
+def _bash_audit_args(
+    args: dict[str, Any],
+    cwd: str,
+    *,
+    skill_env_grant: SkillEnvGrant | None = None,
+) -> tuple[dict[str, Any], str]:
     command = args.get("command")
     command_text = command if isinstance(command, str) else ""
     preview, applied = _redacted_command_preview(command_text)
+    if skill_env_grant is not None:
+        preview, literal_applied = _redact_literal_values(preview, skill_env_grant.values)
+        applied = applied or literal_applied
     result: dict[str, Any] = {
         "commandPreview": preview,
         "commandLength": len(command_text),
@@ -347,6 +384,10 @@ def _bash_audit_args(args: dict[str, Any], cwd: str) -> tuple[dict[str, Any], st
     }
     if "timeout" in args:
         result["timeout"] = args["timeout"]
+    if skill_env_grant is not None:
+        result["skillEnvNames"] = list(skill_env_grant.names)
+        if skill_env_grant.source is not None:
+            result["skillEnvSource"] = skill_env_grant.source
     return result, "applied" if applied else "not_required"
 
 

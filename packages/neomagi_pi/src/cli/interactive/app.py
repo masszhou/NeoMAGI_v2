@@ -401,9 +401,13 @@ class InteractiveController:
             if name and self._slash_registry.get(name) is not None:
                 self._slash_registry.parse_and_dispatch(text, self)
                 return
-            expanded = self._runtime.expand_resource_command(text) if self._runtime is not None else None
-            if expanded is not None:
-                text = expanded
+            resource = (
+                self._runtime.expand_resource_command_detail(text)
+                if self._runtime is not None
+                else None
+            )
+            if resource is not None:
+                text = resource.original
             else:
                 handled = self._slash_registry.parse_and_dispatch(text, self)
                 if handled:

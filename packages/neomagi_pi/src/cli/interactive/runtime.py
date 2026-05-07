@@ -51,7 +51,7 @@ from storage.ids import short_session_id
 from storage.session_repository import SessionRecord
 
 from .compaction_runtime import CompactionRuntimeMixin
-from .extension_runtime import ExtensionRuntimeMixin
+from .extension_runtime import ExtensionRuntimeMixin, PreparedPrompt
 from .export_runtime import SessionExportRuntimeMixin
 from .model_runtime import ModelRuntimeMixin
 from .runtime_events import agent_event_to_session_event
@@ -138,6 +138,7 @@ class InteractiveAgentRuntime(
         self._closed = False
         self._generation = 0
         self._active_tool_names: set[str] | None = None
+        self._active_skill_env_grant = None
 
         self._runtime_session_id = self._mint_runtime_session_id()
         self._artifact_store = RuntimeArtifactStore(self._runtime_session_id)
@@ -232,8 +233,9 @@ class InteractiveAgentRuntime(
             self._queued_steering.clear()
             self._queued_follow_up.clear()
             self._enqueue_queue_update_locked()
+            prepared = self.prepare_prompt_submission(prompt)
             self._active_future = asyncio.run_coroutine_threadsafe(
-                self._run_prompt(prompt, self._generation),
+                self._run_prompt(prepared, self._generation),
                 self._loop,
             )
 
@@ -245,9 +247,13 @@ class InteractiveAgentRuntime(
             if not self._is_running_locked():
                 self.submit(prompt)
                 return
-            prompt = self.prepare_queued_prompt(prompt)
-            self._queued_steering.append(prompt)
-            self._loop.call_soon_threadsafe(self._agent.steer, self._user_message(prompt))
+            prepared = self.prepare_queued_prompt(prompt)
+            if prepared.setup_error is not None:
+                raise RuntimeError(prepared.setup_error)
+            if prepared.skill_env_grant is not None:
+                self._active_skill_env_grant = prepared.skill_env_grant
+            self._queued_steering.append(prepared.display_text)
+            self._loop.call_soon_threadsafe(self._agent.steer, self._user_message(prepared))
             self._enqueue_queue_update_locked()
 
     def follow_up(self, text: str) -> None:
@@ -258,9 +264,13 @@ class InteractiveAgentRuntime(
             if not self._is_running_locked():
                 self.submit(prompt)
                 return
-            prompt = self.prepare_queued_prompt(prompt)
-            self._queued_follow_up.append(prompt)
-            self._loop.call_soon_threadsafe(self._agent.follow_up, self._user_message(prompt))
+            prepared = self.prepare_queued_prompt(prompt)
+            if prepared.setup_error is not None:
+                raise RuntimeError(prepared.setup_error)
+            if prepared.skill_env_grant is not None:
+                self._active_skill_env_grant = prepared.skill_env_grant
+            self._queued_follow_up.append(prepared.display_text)
+            self._loop.call_soon_threadsafe(self._agent.follow_up, self._user_message(prepared))
             self._enqueue_queue_update_locked()
 
     def abort(self) -> bool:
@@ -298,6 +308,7 @@ class InteractiveAgentRuntime(
             self._provider_cache_affinity_id = self._resolve_provider_cache_affinity_id()
             self._queued_steering.clear()
             self._queued_follow_up.clear()
+            self._active_skill_env_grant = None
             self._clear_event_queue_locked()
             self._agent = self._build_agent(self._generation)
             self._active_future = None
@@ -414,9 +425,13 @@ class InteractiveAgentRuntime(
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    async def _run_prompt(self, text: str, generation: int) -> None:
+    async def _run_prompt(self, prepared: PreparedPrompt, generation: int) -> None:
         try:
-            prompt = await self._apply_input_event(text)
+            if prepared.skill_env_grant is not None:
+                self._active_skill_env_grant = prepared.skill_env_grant
+            if prepared.setup_error is not None:
+                raise RuntimeError(prepared.setup_error)
+            prompt = await self._apply_input_event(prepared.provider_text)
             if prompt is None:
                 return
             await self._auto_compact_before_prompt(prompt, generation)
@@ -433,9 +448,11 @@ class InteractiveAgentRuntime(
                     else:
                         prompt_messages.append(message)
                 if prompt_messages:
-                    await self._agent.prompt([*prompt_messages, self._user_message(prompt)])
+                    await self._agent.prompt(
+                        [*prompt_messages, self._user_message(prepared, provider_text=prompt)]
+                    )
                 else:
-                    await self._agent.prompt(prompt)
+                    await self._agent.prompt(self._user_message(prepared, provider_text=prompt))
             finally:
                 self._agent.state.system_prompt = old_system_prompt
         except Exception as exc:
@@ -445,6 +462,7 @@ class InteractiveAgentRuntime(
                 if generation == self._generation:
                     self._queued_steering.clear()
                     self._queued_follow_up.clear()
+                    self._active_skill_env_grant = None
                     self._enqueue_queue_update_locked()
                     self._active_future = None
 
@@ -511,6 +529,7 @@ class InteractiveAgentRuntime(
                 run_id_provider=run_id_provider,
                 audit_sink=self._audit_sink,
                 artifact_store=self._artifact_store,
+                skill_env_grant_provider=lambda: self._active_skill_env_grant,
             )
             return self._filter_active_tools(
                 [*tools, *self._build_extension_tools(run_id_provider=run_id_provider)]
@@ -735,8 +754,21 @@ class InteractiveAgentRuntime(
     def _mint_run_id() -> str:
         return f"run-{uuid.uuid7()}"
 
-    @staticmethod
-    def _user_message(text: str) -> UserMessage:
+    def _user_message(self, prepared: PreparedPrompt | str, *, provider_text: str | None = None) -> UserMessage:
+        if isinstance(prepared, PreparedPrompt):
+            text = provider_text if provider_text is not None else prepared.provider_text
+            extra: dict[str, object] = {}
+            if prepared.resource_expansion is not None:
+                extra["resourceCommand"] = prepared.resource_expansion.to_message_extra(
+                    display_mode=self.resource_command_display_mode()
+                )
+            return UserMessage(
+                role="user",
+                content=[TextContent(text=text)],
+                timestamp=_now_ms(),
+                **extra,
+            )
+        text = provider_text if provider_text is not None else prepared
         return UserMessage(
             role="user",
             content=[TextContent(text=text)],

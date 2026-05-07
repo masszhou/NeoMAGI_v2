@@ -1,7 +1,7 @@
 """cli.tools — built-in coding tools and tool render metadata."""
 
 from .context import bash_execution_to_text, convert_coding_messages_to_llm
-from .definitions import ToolDefinition, ToolExecutionContext, ToolName
+from .definitions import SkillEnvGrant, ToolDefinition, ToolExecutionContext, ToolName
 from .profiles import (
     ALL_TOOLS,
     CODING_PROFILE,
@@ -21,6 +21,7 @@ __all__ = [
     "CODING_PROFILE",
     "READ_ONLY_PROFILE",
     "RuntimeArtifactStore",
+    "SkillEnvGrant",
     "ToolDefinition",
     "ToolExecutionContext",
     "ToolName",

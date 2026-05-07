@@ -7,6 +7,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from .commands import ResourceCommandExpansion
 from .diagnostics import ResourceDiagnostic
 from .frontmatter import split_frontmatter
 from .source_info import SourceInfo
@@ -75,6 +76,11 @@ def parse_command_args(text: str) -> list[str]:
 
 
 def expand_prompt_template(text: str, templates: list[PromptTemplate]) -> str | None:
+    detail = expand_prompt_template_detail(text, templates)
+    return detail.expanded if detail is not None else None
+
+
+def expand_prompt_template_detail(text: str, templates: list[PromptTemplate]) -> ResourceCommandExpansion | None:
     if not text.startswith("/"):
         return None
     command, _, raw_args = text[1:].partition(" ")
@@ -83,7 +89,13 @@ def expand_prompt_template(text: str, templates: list[PromptTemplate]) -> str | 
     if template is None:
         return None
     args = parse_command_args(raw_args)
-    return substitute_args(template.body, args)
+    return ResourceCommandExpansion(
+        original=text,
+        expanded=substitute_args(template.body, args),
+        display=text.strip(),
+        resource_type="prompt",
+        name=template.name,
+    )
 
 
 def substitute_args(template: str, args: list[str]) -> str:
@@ -146,6 +158,7 @@ __all__ = [
     "LoadedPromptTemplates",
     "PromptTemplate",
     "expand_prompt_template",
+    "expand_prompt_template_detail",
     "load_prompt_templates",
     "parse_command_args",
     "substitute_args",

@@ -88,6 +88,35 @@ def test_project_secret_like_settings_are_diagnostic_only(tmp_path: Path) -> Non
     assert not any(diagnostic.field.endswith("apiKeyEnv") for diagnostic in loaded.diagnostics)
 
 
+def test_project_skill_env_settings_keep_references_but_strip_raw_secret(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    (cwd / ".pi").mkdir(parents=True)
+    agent_dir.mkdir()
+    (cwd / ".pi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.brave",
+                            "allow": ["BRAVE_API_KEY"],
+                        }
+                    }
+                },
+                "apiKey": "sk-project-secret",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = SettingsManager(cwd=cwd, agent_dir=agent_dir).load()
+
+    assert loaded.settings.resources.skill_env["brave-search"].env_file == ".env.brave"
+    assert loaded.settings.resources.skill_env["brave-search"].allow == ["BRAVE_API_KEY"]
+    assert any(diagnostic.field == "apiKey" for diagnostic in loaded.diagnostics)
+
+
 def test_resource_settings_project_through_product_schema(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     agent_dir = tmp_path / "agent"
@@ -141,4 +170,36 @@ def test_resource_settings_use_product_merge_semantics(tmp_path: Path) -> None:
     assert loaded.settings.extensions == ("global.py",)
     assert loaded.settings.prompts == ("project-prompts",)
     assert loaded.settings.enable_skill_commands is False
+    assert loaded.settings.skill_env == {}
     assert loaded.settings.extras == {"nested": {"a": 1, "b": 2}}
+
+
+def test_resource_settings_projects_skill_env(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    (cwd / ".pi").mkdir(parents=True)
+    agent_dir.mkdir()
+    (cwd / ".pi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.brave",
+                            "allow": ["BRAVE_API_KEY"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_resource_settings(cwd, agent_dir=agent_dir)
+
+    assert loaded.settings.skill_env == {
+        "brave-search": {
+            "envFile": ".env.brave",
+            "allow": ["BRAVE_API_KEY"],
+        }
+    }

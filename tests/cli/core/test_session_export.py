@@ -199,6 +199,29 @@ def test_missing_usage_cost_exports_null_and_diagnostic(tmp_path: Path) -> None:
     )
 
 
+def test_structured_export_preserves_resource_command_metadata(tmp_path: Path) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    session = manager.new_session(tmp_path)
+    manager.append_message(
+        session.id,
+        UserMessage(
+            content=[TextContent(text="<skill>expanded</skill>")],
+            timestamp=1,
+            resourceCommand={
+                "display": "/skill:reviewer target.py",
+                "displayMode": "compact",
+            },
+        ),
+    )
+
+    envelope = build_session_export_envelope(manager.repository, session.id, clock=_clock)
+    payload = envelope.model_dump(by_alias=True, exclude_none=True)
+    message = payload["pi"]["entries"][0]["message"]
+
+    assert message["content"][0]["text"] == "<skill>expanded</skill>"
+    assert message["resourceCommand"]["display"] == "/skill:reviewer target.py"
+
+
 def test_structured_json_and_html_exports_are_deterministic_and_local(tmp_path: Path) -> None:
     manager = SessionManager(InMemorySessionRepository())
     session = manager.new_session(tmp_path)

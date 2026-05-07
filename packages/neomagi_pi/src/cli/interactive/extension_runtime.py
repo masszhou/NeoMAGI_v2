@@ -7,7 +7,9 @@ import inspect
 import shlex
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from agent_core.types import AfterToolCallResult, BeforeToolCallResult
@@ -23,16 +25,27 @@ from cli.extensions.ui import NoopExtensionUIContext
 from cli.core.model_settings import apply_extension_providers, apply_settings_models
 from cli.slash_commands.registry import PI_BUILTIN_COMMANDS
 from cli.tools.bash import create_bash_tool_definition
+from cli.tools.definitions import SkillEnvGrant
 from cli.tools.wrapper import ToolRuntime, wrap_tool_definition
 from cli.resources import (
+    ResourceCommandExpansion,
     ResourceLoader,
     SystemPromptParts,
     build_system_prompt,
-    expand_prompt_template,
-    expand_skill_command,
+    expand_prompt_template_detail,
+    expand_skill_command_detail,
 )
 
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful coding assistant."
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedPrompt:
+    provider_text: str
+    display_text: str
+    resource_expansion: ResourceCommandExpansion | None = None
+    skill_env_grant: SkillEnvGrant | None = None
+    setup_error: str | None = None
 
 
 def _now_ms() -> int:
@@ -109,13 +122,26 @@ class ExtensionRuntimeMixin:
             return name
         return None
 
-    def prepare_queued_prompt(self, text: str) -> str:
+    def prepare_prompt_submission(self, text: str) -> PreparedPrompt:
+        expansion = self.expand_resource_command_detail(text)
+        if expansion is None:
+            return PreparedPrompt(provider_text=text, display_text=text.strip())
+        grant, setup_error = self._skill_env_grant_for_expansion(expansion)
+        return PreparedPrompt(
+            provider_text=expansion.expanded,
+            display_text=expansion.display,
+            resource_expansion=expansion,
+            skill_env_grant=grant,
+            setup_error=setup_error,
+        )
+
+    def prepare_queued_prompt(self, text: str) -> PreparedPrompt:
         name = self.extension_command_name(text)
         if name is not None:
             raise RuntimeError(
                 f"extension command /{name} cannot be queued while streaming; run it while idle"
             )
-        return self.expand_resource_command(text) or text
+        return self.prepare_prompt_submission(text)
 
     def run_extension_command(self, name: str, args: list[str], raw: str) -> None:
         if self._extension_runner is None:
@@ -165,12 +191,55 @@ class ExtensionRuntimeMixin:
         )
 
     def expand_resource_command(self, text: str) -> str | None:
+        detail = self.expand_resource_command_detail(text)
+        return detail.expanded if detail is not None else None
+
+    def expand_resource_command_detail(self, text: str) -> ResourceCommandExpansion | None:
         snapshot = self._resource_loader.snapshot
         if self._resource_loader.settings.enable_skill_commands:
-            skill = expand_skill_command(text, list(snapshot.skills))
+            skill = expand_skill_command_detail(text, list(snapshot.skills))
             if skill is not None:
                 return skill
-        return expand_prompt_template(text, list(snapshot.prompts))
+        return expand_prompt_template_detail(text, list(snapshot.prompts))
+
+    def resource_command_display_mode(self) -> str:
+        value = self._settings_manager.load().settings.terminal.get("resourceCommandDisplay")
+        return str(value) if value in {"compact", "expanded"} else "compact"
+
+    def _skill_env_grant_for_expansion(
+        self,
+        expansion: ResourceCommandExpansion,
+    ) -> tuple[SkillEnvGrant | None, str | None]:
+        if expansion.resource_type != "skill":
+            return None, None
+        loaded = self._settings_manager.load()
+        config = loaded.settings.resources.skill_env.get(expansion.name)
+        if config is None:
+            return None, None
+        raw_config = _raw_skill_env_config(loaded.project_raw, expansion.name)
+        base_dir = self._cwd
+        if raw_config is None:
+            raw_config = _raw_skill_env_config(loaded.global_raw, expansion.name)
+            base_dir = self._settings_manager.agent_dir
+        env_file = config.env_file
+        source_path = _resolve_env_file(env_file, base_dir)
+        if not source_path.is_file():
+            return (
+                None,
+                f"skill env for {expansion.name!r} references missing envFile {env_file!r}",
+            )
+        env_values = _read_env_file(source_path)
+        missing = [name for name in config.allow if name not in env_values]
+        if missing:
+            names = ", ".join(missing)
+            return (
+                None,
+                f"skill env for {expansion.name!r} is missing allowed variable(s) {names} in envFile {env_file!r}",
+            )
+        grant_values = {name: env_values[name] for name in config.allow}
+        if not grant_values:
+            return None, None
+        return SkillEnvGrant(skill_name=expansion.name, env=grant_values, source=env_file), None
 
     async def _apply_input_event(self, text: str) -> str | None:
         if self._extension_runner is None:
@@ -446,6 +515,48 @@ class ExtensionRuntimeMixin:
         self._agent.state.system_prompt = self._build_system_prompt()
 
 
+def _raw_skill_env_config(raw: dict[str, Any], skill_name: str) -> dict[str, Any] | None:
+    resources = raw.get("resources")
+    if not isinstance(resources, dict):
+        return None
+    skill_env = resources.get("skillEnv") or resources.get("skill_env")
+    if not isinstance(skill_env, dict):
+        return None
+    config = skill_env.get(skill_name)
+    return config if isinstance(config, dict) else None
+
+
+def _resolve_env_file(value: str, base_dir: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve(strict=False)
+    return (base_dir / path).resolve(strict=False)
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped.removeprefix("export ").strip()
+        key, sep, value = stripped.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if not key:
+            continue
+        values[key] = _unquote_env_value(value.strip())
+    return values
+
+
+def _unquote_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
 def _content_blocks_to_dicts(value: Any) -> list[dict[str, Any]] | None:
     if value is None:
         return None
@@ -502,4 +613,4 @@ def _tool_text(result: Any) -> str:
     return "\n".join(parts)
 
 
-__all__ = ["ExtensionRuntimeMixin"]
+__all__ = ["ExtensionRuntimeMixin", "PreparedPrompt"]

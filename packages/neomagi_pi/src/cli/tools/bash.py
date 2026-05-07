@@ -7,6 +7,7 @@ from typing import Any
 
 from agent_core.runtime_types import AbortSignal, ToolUpdateCallback
 from agent_core.types import AgentToolResult
+from policy.redaction import redact_literal_values
 from policy.sandbox import SandboxResult, run_shell_command
 from policy.shell_policy import DEFAULT_TIMEOUT_SECONDS
 
@@ -57,6 +58,8 @@ async def execute_bash(
     command = str(args["command"])
     timeout = float(args.get("timeout") or DEFAULT_TIMEOUT_SECONDS)
     cwd = Path(context.policy_decision.resolved_paths.get("cwd", context.cwd))
+    skill_env = dict(context.skill_env_grant.env) if context.skill_env_grant is not None else None
+    secret_values = context.skill_env_grant.values if context.skill_env_grant is not None else ()
     rolling: list[bytes] = []
     rolling_bytes = 0
     max_rolling = DEFAULT_MAX_BYTES * 2
@@ -70,6 +73,7 @@ async def execute_bash(
             rolling_bytes -= len(removed)
         if on_update is not None:
             preview = b"".join(rolling).decode("utf-8", errors="replace")
+            preview, _ = redact_literal_values(preview, secret_values)
             truncation = truncate_tail(preview)
             on_update(
                 AgentToolResult(
@@ -78,8 +82,15 @@ async def execute_bash(
                 )
             )
 
-    sandbox_result = await run_shell_command(command, cwd=cwd, timeout=timeout, signal=signal, on_data=on_data)
-    return _bash_result(command, sandbox_result, context, artifact_store)
+    sandbox_result = await run_shell_command(
+        command,
+        cwd=cwd,
+        timeout=timeout,
+        signal=signal,
+        on_data=on_data,
+        extra_env=skill_env,
+    )
+    return _bash_result(command, sandbox_result, context, artifact_store, secret_values=secret_values)
 
 
 def _bash_result(
@@ -87,9 +98,12 @@ def _bash_result(
     sandbox_result: SandboxResult,
     context: ToolExecutionContext,
     artifact_store: RuntimeArtifactStore | None,
+    *,
+    secret_values: tuple[str, ...] = (),
 ) -> AgentToolResult:
-    truncation = truncate_tail(sandbox_result.output)
-    full_output_path = _retain_full_output(context, artifact_store, sandbox_result.output, truncation.truncated)
+    output_text, redacted = redact_literal_values(sandbox_result.output, secret_values)
+    truncation = truncate_tail(output_text)
+    full_output_path = _retain_full_output(context, artifact_store, output_text, truncation.truncated)
     output = truncation.content or "(no output)"
     notes = _status_notes(sandbox_result, full_output_path, truncation)
     if notes:
@@ -101,6 +115,14 @@ def _bash_result(
         "truncation": truncation.to_details(),
         "fullOutputPath": full_output_path,
     }
+    if context.skill_env_grant is not None:
+        details["skillEnv"] = {
+            "skill": context.skill_env_grant.skill_name,
+            "names": list(context.skill_env_grant.names),
+            "source": context.skill_env_grant.source,
+        }
+    if redacted:
+        details["redactedSkillEnvOutput"] = True
     return text_result(output, details=details, is_error=is_error)
 
 

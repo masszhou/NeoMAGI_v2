@@ -149,6 +149,16 @@ def redacted_command_preview(command: str) -> tuple[str, bool]:
     return redacted, applied
 
 
+def redact_literal_values(text: str, values: list[str] | tuple[str, ...]) -> tuple[str, bool]:
+    redacted = text
+    applied = False
+    for value in sorted({item for item in values if item}, key=len, reverse=True):
+        if value in redacted:
+            redacted = redacted.replace(value, REDACTED_VALUE)
+            applied = True
+    return redacted, applied
+
+
 def _redact_for_export(
     value: Any,
     report: RedactionReport,
@@ -285,6 +295,7 @@ __all__ = [
     "SENSITIVE_CONTENT_RULE_ID",
     "SENSITIVE_PATH_RULE_ID",
     "redact_for_export",
+    "redact_literal_values",
     "redact_secret_keys",
     "redacted_command_preview",
 ]

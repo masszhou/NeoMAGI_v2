@@ -79,6 +79,25 @@ def test_anthropic_payload_marks_system_last_tool_and_last_user() -> None:
     assert payload["messages"][-1]["content"][-1]["cache_control"] == expected["lastUserCacheControl"]
 
 
+def test_anthropic_ignores_user_message_display_metadata() -> None:
+    context = Context(
+        messages=[
+            UserMessage(
+                content="expanded prompt",
+                timestamp=1,
+                resourceCommand={"display": "/skill:reviewer target.py"},
+            )
+        ]
+    )
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
+
+    payload = build_anthropic_messages_params(model, context, StreamOptions())
+
+    assert payload["messages"][0]["role"] == "user"
+    assert payload["messages"][0]["content"][0]["text"] == "expanded prompt"
+    assert "resourceCommand" not in json.dumps(payload)
+
+
 def test_anthropic_cache_none_forbids_cache_markers() -> None:
     fixture = _json_fixture("anthropic_cache_none")
     model = get_model("anthropic", "claude-haiku-4-5-20251001")

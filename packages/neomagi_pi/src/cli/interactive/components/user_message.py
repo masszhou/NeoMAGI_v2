@@ -29,7 +29,7 @@ class UserMessageComponent(Component):
         self.message: UserMessage = message
 
     def render(self, width: int) -> list[str]:
-        body = _flatten_content(self.message.content)
+        body = _display_content(self.message)
         wrapped = wrap_to_width(body, max(1, width - 4))
         if not wrapped:
             wrapped = [""]
@@ -38,6 +38,16 @@ class UserMessageComponent(Component):
             rows.append(row(f"  {line}", width))
         rows.append(blank(width))
         return self.enforce_width(rows, width)
+
+
+def _display_content(message: UserMessage) -> str:
+    resource_command = getattr(message, "resourceCommand", None)
+    if isinstance(resource_command, dict):
+        mode = resource_command.get("displayMode", "compact")
+        display = resource_command.get("display")
+        if mode != "expanded" and isinstance(display, str) and display.strip():
+            return display
+    return _flatten_content(message.content)
 
 
 __all__ = ["UserMessageComponent"]

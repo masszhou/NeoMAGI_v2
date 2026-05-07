@@ -133,6 +133,24 @@ def test_openai_responses_prompt_cache_fields_and_headers() -> None:
     assert fixture["forbiddenText"] not in str(payload)
 
 
+def test_openai_responses_ignores_user_message_display_metadata() -> None:
+    context = Context(
+        messages=[
+            UserMessage(
+                content="expanded prompt",
+                timestamp=1,
+                resourceCommand={"display": "/skill:reviewer target.py"},
+            )
+        ]
+    )
+    model = get_model("openai", "gpt-4o-mini")
+
+    payload, _headers = build_openai_responses_params(model, context, StreamOptions())
+
+    assert payload["input"] == [{"role": "user", "content": "expanded prompt"}]
+    assert "resourceCommand" not in json.dumps(payload)
+
+
 def test_openai_responses_cache_none_forbids_cache_fields() -> None:
     model = get_model("openai", "gpt-4o-mini")
     payload, headers = build_openai_responses_params(

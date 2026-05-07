@@ -60,6 +60,40 @@ def test_user_message_renders_role_header_and_text() -> None:
     assert any("hello" in line for line in out)
 
 
+def test_user_message_renders_resource_command_display_metadata() -> None:
+    msg = UserMessage(
+        role="user",
+        content="expanded skill body",
+        timestamp=1,
+        resourceCommand={
+            "display": "/skill:reviewer target.py",
+            "displayMode": "compact",
+        },
+    )
+
+    out = "\n".join(UserMessageComponent(msg).render(80))
+
+    assert "/skill:reviewer target.py" in out
+    assert "expanded skill body" not in out
+
+
+def test_user_message_verbose_resource_command_renders_provider_content() -> None:
+    msg = UserMessage(
+        role="user",
+        content="expanded skill body",
+        timestamp=1,
+        resourceCommand={
+            "display": "/skill:reviewer target.py",
+            "displayMode": "expanded",
+        },
+    )
+
+    out = "\n".join(UserMessageComponent(msg).render(80))
+
+    assert "expanded skill body" in out
+    assert "/skill:reviewer target.py" not in out
+
+
 def test_assistant_message_streaming_text_accumulates() -> None:
     comp = AssistantMessageComponent()
     base_partial = AssistantMessage(

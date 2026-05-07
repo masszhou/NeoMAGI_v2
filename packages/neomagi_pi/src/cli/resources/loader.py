@@ -111,6 +111,7 @@ class ResourceLoader:
         themes = load_themes(self._theme_paths())
         context_files = load_context_files(self.cwd, agent_dir=self.agent_dir)
         diagnostics.extend(skills.diagnostics)
+        diagnostics.extend(_skill_env_diagnostics(self._settings.skill_env, skills.skills))
         diagnostics.extend(prompts.diagnostics)
         diagnostics.extend(themes.diagnostics)
         diagnostics.extend(context_files.diagnostics)
@@ -266,6 +267,27 @@ def _dedupe(paths: tuple[Path, ...]) -> tuple[Path, ...]:
             result.append(resolved)
             seen.add(resolved)
     return tuple(result)
+
+
+def _skill_env_diagnostics(
+    configured: dict[str, object],
+    skills: tuple[Skill, ...],
+) -> list[ResourceDiagnostic]:
+    if not configured:
+        return []
+    loaded_names = {skill.name for skill in skills}
+    diagnostics: list[ResourceDiagnostic] = []
+    for name in sorted(configured):
+        if name not in loaded_names:
+            diagnostics.append(
+                ResourceDiagnostic(
+                    type="warning",
+                    message=f"skill env configured for missing skill {name!r}",
+                    resource_type="settings",
+                    name=f"resources.skillEnv.{name}",
+                )
+            )
+    return diagnostics
 
 
 __all__ = ["ResourceExtensionPaths", "ResourceLoader", "ResourceSnapshot"]

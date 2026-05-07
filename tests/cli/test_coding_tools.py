@@ -23,7 +23,7 @@ from cli.tools import (
     create_read_only_tools,
 )
 from cli.tools.context import convert_coding_messages_to_llm
-from cli.tools.definitions import ToolDefinition, object_schema
+from cli.tools.definitions import SkillEnvGrant, ToolDefinition, object_schema
 from cli.tools.edit import prepare_edit_arguments
 from cli.tools.wrapper import ToolRuntime, default_policy_decider, wrap_tool_definition
 from policy.audit import InMemoryAuditSink
@@ -400,6 +400,52 @@ def test_tool_audit_args_are_summarized_and_redacted(tmp_path: Path) -> None:
         }
         assert "super-secret-content" not in str(write_args)
         assert audit.records[1].redaction_status == "applied"
+
+    asyncio.run(run())
+
+
+def test_bash_skill_env_grant_is_scoped_redacted_and_audited(tmp_path: Path) -> None:
+    async def run() -> None:
+        audit = InMemoryAuditSink()
+        secret = "FAKE_BRAVE_SECRET_VALUE"
+        grant = SkillEnvGrant(
+            skill_name="brave-search",
+            env={"BRAVE_API_KEY": secret},
+            source=".env.brave",
+        )
+        ordinary = _tool_map(create_coding_tools(tmp_path))["bash"]
+        granted = _tool_map(
+            create_coding_tools(
+                tmp_path,
+                audit_sink=audit,
+                skill_env_grant_provider=lambda: grant,
+            )
+        )["bash"]
+
+        ordinary_result = await ordinary.execute(
+            "ordinary",
+            {"command": 'test -z "${BRAVE_API_KEY:-}" && echo missing || echo present'},
+            None,
+            None,
+        )
+        granted_result = await granted.execute(
+            "granted",
+            {"command": 'printf "%s" "$BRAVE_API_KEY"'},
+            None,
+            None,
+        )
+
+        assert "missing" in ordinary_result.content[0]["text"]
+        assert secret not in granted_result.content[0]["text"]
+        assert "[redacted]" in granted_result.content[0]["text"]
+        assert granted_result.details["skillEnv"] == {
+            "skill": "brave-search",
+            "names": ["BRAVE_API_KEY"],
+            "source": ".env.brave",
+        }
+        assert audit.records[0].args["skillEnvNames"] == ["BRAVE_API_KEY"]
+        assert audit.records[0].args["skillEnvSource"] == ".env.brave"
+        assert secret not in str(audit.records[0].model_dump(by_alias=True))
 
     asyncio.run(run())
 

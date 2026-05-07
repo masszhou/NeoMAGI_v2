@@ -83,6 +83,20 @@ def test_bash_env_allowlist_strips_sensitive_values(monkeypatch: pytest.MonkeyPa
     assert "SSH_AUTH_SOCK" in os.environ
 
 
+def test_sandbox_environment_accepts_explicit_extra_env_without_global_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("BRAVE_API_KEY", "parent-secret")
+
+    ordinary = sandbox_environment(tmp_path)
+    granted = sandbox_environment(tmp_path, extra_env={"BRAVE_API_KEY": "granted-secret"})
+
+    assert "BRAVE_API_KEY" not in ordinary
+    assert granted["BRAVE_API_KEY"] == "granted-secret"
+
+
 def _decision(tmp_path: Path, command: str):
     return decide_shell_access(
         PolicyRequest(
