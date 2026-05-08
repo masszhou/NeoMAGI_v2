@@ -1,10 +1,17 @@
-"""Local auth storage for reusable provider credentials."""
+"""Local auth storage for reusable provider credentials.
+
+The default location follows ADR-0019: ``$XDG_CONFIG_HOME/neomagi/auth.json``,
+Windows ``%APPDATA%\\neomagi\\auth.json``, or ``~/.config/neomagi/auth.json``.
+A legacy ``~/.neomagi/auth.json`` from earlier installs is migrated on first
+resolve so users don't lose login state across upgrades.
+"""
 
 from __future__ import annotations
 
 import fcntl
 import json
 import os
+import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,12 +26,45 @@ from .oauth import (
 AUTH_PATH_ENV = "NEOMAGI_AUTH_PATH"
 AUTH_FILE_MODE = 0o600
 AUTH_DIR_MODE = 0o700
-DEFAULT_AUTH_PATH = Path.home() / ".neomagi" / "auth.json"
+_USER_CONFIG_SUBDIR = "neomagi"
+LEGACY_AUTH_PATH = Path.home() / ".neomagi" / "auth.json"
 OPENAI_CODEX_PROVIDER = "openai-codex"
 
 
 class AuthStorageError(RuntimeError):
     """Raised when local auth storage cannot be read or written safely."""
+
+
+def _user_config_auth_path(env: Mapping[str, str] | None = None) -> Path:
+    """Return ``<config-root>/neomagi/auth.json`` per ADR-0019."""
+
+    env_values = env if env is not None else os.environ
+    xdg = (env_values.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg:
+        return Path(xdg).expanduser() / _USER_CONFIG_SUBDIR / "auth.json"
+    if sys.platform == "win32":
+        appdata = (env_values.get("APPDATA") or "").strip()
+        if appdata:
+            return Path(appdata) / _USER_CONFIG_SUBDIR / "auth.json"
+    return Path.home() / ".config" / _USER_CONFIG_SUBDIR / "auth.json"
+
+
+def default_auth_path(env: Mapping[str, str] | None = None) -> Path:
+    """Resolved default auth path (post-migration)."""
+
+    new_path = _user_config_auth_path(env)
+    if not new_path.exists() and LEGACY_AUTH_PATH.exists():
+        if _migrate_legacy_auth(new_path):
+            return new_path
+        return LEGACY_AUTH_PATH
+    return new_path
+
+
+# Backwards-compatible module attribute: the post-ADR-0019 default location,
+# computed without migration so importing this module is side-effect-free.
+# Callers that want migration semantics should use :func:`default_auth_path`
+# or :func:`resolve_auth_path`.
+DEFAULT_AUTH_PATH = _user_config_auth_path()
 
 
 def resolve_auth_path(path: str | os.PathLike[str] | None = None) -> Path:
@@ -33,7 +73,32 @@ def resolve_auth_path(path: str | os.PathLike[str] | None = None) -> Path:
     configured = os.environ.get(AUTH_PATH_ENV)
     if configured:
         return Path(configured).expanduser()
-    return DEFAULT_AUTH_PATH
+    return default_auth_path()
+
+
+def _migrate_legacy_auth(new_path: Path) -> bool:
+    """Move ``~/.neomagi/auth.json`` to the user config dir.
+
+    Returns ``True`` on success. On failure, callers fall back to the legacy
+    path so users don't lose login state.
+    """
+
+    try:
+        new_path.parent.mkdir(mode=AUTH_DIR_MODE, parents=True, exist_ok=True)
+        _chmod_if_possible(new_path.parent, AUTH_DIR_MODE)
+        LEGACY_AUTH_PATH.replace(new_path)
+        _chmod_if_possible(new_path, AUTH_FILE_MODE)
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not migrate {LEGACY_AUTH_PATH} to {new_path}: "
+            f"{exc}; continuing with legacy path\n"
+        )
+        return False
+    try:
+        LEGACY_AUTH_PATH.parent.rmdir()
+    except OSError:
+        pass
+    return True
 
 
 def load_auth_storage(
@@ -270,7 +335,9 @@ __all__ = [
     "AUTH_PATH_ENV",
     "AuthStorageError",
     "DEFAULT_AUTH_PATH",
+    "LEGACY_AUTH_PATH",
     "credential_status",
+    "default_auth_path",
     "delete_credential",
     "list_credentials",
     "load_auth_storage",
