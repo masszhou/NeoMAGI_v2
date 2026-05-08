@@ -27,6 +27,7 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0016 | Provider-side prompt cache contract | accepted | 2026-04-26 | `design_docs/decisions/0016-provider-side-prompt-cache-contract.md` |
 | 0017 | Use provider SDKs for OpenAI and Anthropic | accepted | 2026-04-26 | `design_docs/decisions/0017-use-provider-sdks-for-openai-and-anthropic.md` |
 | 0018 | Package neomagi_pi as monorepo product boundary | accepted | 2026-05-06 | `design_docs/decisions/0018-package-neomagi-pi-as-monorepo-product-boundary.md` |
+| 0019 | User config dir as default .env source | proposed | 2026-05-08 | `design_docs/decisions/0019-user-config-dir-as-default-env-source.md` |
 
 ## Amendments
 
