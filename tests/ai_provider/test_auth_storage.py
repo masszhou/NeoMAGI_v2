@@ -246,3 +246,84 @@ def test_resolve_auth_path_honors_neomagi_auth_path_env(monkeypatch, tmp_path) -
     monkeypatch.setenv("NEOMAGI_AUTH_PATH", str(tmp_path / "custom.json"))
 
     assert resolve_auth_path() == tmp_path / "custom.json"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission expectations")
+def test_default_auth_path_handles_concurrent_migration(monkeypatch, tmp_path) -> None:
+    """If another process completes the move between our exists()/replace(),
+    we should still treat migration as successful (post-hoc invariant)."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    legacy_dir = home / ".neomagi"
+    legacy_dir.mkdir()
+    legacy = legacy_dir / "auth.json"
+    legacy.write_text(
+        '{"openai": {"type": "api_key", "key": "sk-shared"}}\n',
+        encoding="utf-8",
+    )
+    new_path = home / ".config" / "neomagi" / "auth.json"
+    monkeypatch.setattr(auth_storage_module.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(auth_storage_module, "LEGACY_AUTH_PATH", legacy)
+    monkeypatch.setattr(auth_storage_module.sys, "platform", "linux")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    real_replace = Path.replace
+
+    def racy_replace(self, target):
+        # Simulate "process A" completing the move atomically just before
+        # we get to it: do the actual move, then raise as our own replace()
+        # would when its source has been pulled out from under us.
+        if Path(self) == legacy:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            real_replace(self, Path(target))
+            raise FileNotFoundError(f"No such file or directory: {self}")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", racy_replace)
+
+    resolved = default_auth_path({})
+
+    assert resolved == new_path
+    assert new_path.is_file()
+    assert not legacy.exists()
+    assert (
+        json.loads(new_path.read_text(encoding="utf-8"))["openai"]["key"]
+        == "sk-shared"
+    )
+
+
+def test_default_auth_path_returns_new_when_both_files_disappear(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """Pathological: both files vanish during migration. We should NOT return
+    the legacy path (a subsequent write would recreate it and trigger another
+    migration on the next run)."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    legacy_dir = home / ".neomagi"
+    legacy_dir.mkdir()
+    legacy = legacy_dir / "auth.json"
+    legacy.write_text("{}\n", encoding="utf-8")
+    new_path = home / ".config" / "neomagi" / "auth.json"
+    monkeypatch.setattr(auth_storage_module.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(auth_storage_module, "LEGACY_AUTH_PATH", legacy)
+    monkeypatch.setattr(auth_storage_module.sys, "platform", "linux")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    def disappear_then_fail(self, target):
+        # Simulate something deleting both files mid-migration.
+        if Path(self) == legacy:
+            legacy.unlink()
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(Path, "replace", disappear_then_fail)
+
+    resolved = default_auth_path({})
+
+    assert resolved == new_path
+    assert not legacy.exists()
+    assert "could not migrate" in capsys.readouterr().err

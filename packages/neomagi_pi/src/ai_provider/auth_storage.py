@@ -53,9 +53,14 @@ def default_auth_path(env: Mapping[str, str] | None = None) -> Path:
     """Resolved default auth path (post-migration)."""
 
     new_path = _user_config_auth_path(env)
-    if not new_path.exists() and LEGACY_AUTH_PATH.exists():
-        if _migrate_legacy_auth(new_path):
-            return new_path
+    if new_path.exists() or not LEGACY_AUTH_PATH.exists():
+        return new_path
+    if _migrate_legacy_auth(new_path):
+        return new_path
+    # Migration failed: only fall back to legacy if it still has data,
+    # otherwise the new path is canonical and `_ensure_auth_file` will
+    # create it on demand (avoids recreating the legacy file post-failure).
+    if LEGACY_AUTH_PATH.exists():
         return LEGACY_AUTH_PATH
     return new_path
 
@@ -79,8 +84,11 @@ def resolve_auth_path(path: str | os.PathLike[str] | None = None) -> Path:
 def _migrate_legacy_auth(new_path: Path) -> bool:
     """Move ``~/.neomagi/auth.json`` to the user config dir.
 
-    Returns ``True`` on success. On failure, callers fall back to the legacy
-    path so users don't lose login state.
+    Returns ``True`` when the post-migration invariant holds (new path is a
+    file and the legacy path is gone). If our own ``replace()`` raises but
+    a concurrent process completed the move, we still return ``True``;
+    real failures (permissions, filesystem errors) return ``False`` and the
+    caller falls back to the legacy path so users don't lose login state.
     """
 
     try:
@@ -89,6 +97,10 @@ def _migrate_legacy_auth(new_path: Path) -> bool:
         LEGACY_AUTH_PATH.replace(new_path)
         _chmod_if_possible(new_path, AUTH_FILE_MODE)
     except OSError as exc:
+        # Another process may have completed the move between our existence
+        # check and replace(); detect that via the post-migration invariant.
+        if new_path.is_file() and not LEGACY_AUTH_PATH.exists():
+            return True
         sys.stderr.write(
             f"warning: could not migrate {LEGACY_AUTH_PATH} to {new_path}: "
             f"{exc}; continuing with legacy path\n"
