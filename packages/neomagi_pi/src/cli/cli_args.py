@@ -36,6 +36,7 @@ class CliOptions:
     thinking_level: ThinkingLevel
     cache_retention: CacheRetention | None
     tui_render_mode: Literal["command", "canvas"] | None
+    env_file: Path | None = None
 
 
 def build_parser(*, prog: str = "magipi") -> argparse.ArgumentParser:
@@ -48,6 +49,13 @@ def build_parser(*, prog: str = "magipi") -> argparse.ArgumentParser:
         add_help=True,
         allow_abbrev=False,
     )
+    _add_session_args(parser)
+    _add_runtime_args(parser)
+    _add_storage_args(parser)
+    return parser
+
+
+def _add_session_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--playback",
         type=Path,
@@ -70,6 +78,9 @@ def build_parser(*, prog: str = "magipi") -> argparse.ArgumentParser:
             "wired to a real provider in M9/M10)."
         ),
     )
+
+
+def _add_runtime_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL_REF,
@@ -97,7 +108,21 @@ def build_parser(*, prog: str = "magipi") -> argparse.ArgumentParser:
             "scrollback; canvas uses the fixed viewport."
         ),
     )
-    return parser
+
+
+def _add_storage_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        type=Path,
+        metavar="PATH",
+        default=None,
+        help=(
+            "Explicit DATABASE_* .env file (highest-priority source per "
+            "ADR-0019). Must exist and contain all required keys; otherwise "
+            "fail-fast."
+        ),
+    )
 
 
 def parse_args(argv: list[str] | None = None, *, prog: str = "magipi") -> CliOptions:
@@ -124,6 +149,7 @@ def parse_args(argv: list[str] | None = None, *, prog: str = "magipi") -> CliOpt
         thinking_level=thinking_level,
         cache_retention=args.cache_retention,
         tui_render_mode=args.tui_render_mode,
+        env_file=args.env_file,
     )
 
 

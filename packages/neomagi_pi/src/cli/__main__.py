@@ -20,7 +20,13 @@ from .cli_args import CliOptions, parse_args
 
 
 def main(argv: list[str] | None = None) -> int:
-    opts = parse_args(argv if argv is not None else sys.argv[1:], prog=_program_name())
+    raw_argv = list(argv if argv is not None else sys.argv[1:])
+    if raw_argv and raw_argv[0] == "config":
+        from .config_commands import run_config_command
+
+        return run_config_command(raw_argv[1:], prog=_program_name())
+
+    opts = parse_args(raw_argv, prog=_program_name())
 
     if opts.print_only:
         return _run_print(opts)
@@ -59,7 +65,7 @@ def _run_interactive(opts: CliOptions) -> int:
     runtime = None
     if opts.playback is None:
         try:
-            db_config = load_database_config()
+            db_config = load_database_config(env_file=opts.env_file)
             conn = connect_database(db_config)
             ensure_schema(conn, db_config)
             session_manager = SessionManager(PostgresSessionRepository(conn, db_config))

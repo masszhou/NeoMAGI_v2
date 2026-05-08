@@ -10,7 +10,16 @@ Pi-mono source map (commit 97a38bf6, see ADR-0011):
 
 from .audit_repository import InMemoryAuditRepository, PostgresAuditRepository
 from .audit_sink import PostgresAuditSink
-from .config import DatabaseConfig, DatabaseConfigError, load_database_config
+from .config import (
+    ConfigSource,
+    DatabaseConfig,
+    DatabaseConfigError,
+    describe_database_config_source,
+    load_database_config,
+    read_env_template,
+    resolve_database_config,
+    would_fall_back_to,
+)
 from .connection import DatabaseConnectionError, connect_database
 from .schema import SchemaBootstrapError, ensure_schema
 from .session_jsonl import SessionJsonlError, export_session_jsonl, import_session_jsonl
@@ -18,6 +27,7 @@ from .in_memory_session_repository import InMemorySessionRepository
 from .session_repository import PostgresSessionRepository
 
 __all__ = [
+    "ConfigSource",
     "DatabaseConfig",
     "DatabaseConfigError",
     "DatabaseConnectionError",
@@ -29,8 +39,12 @@ __all__ = [
     "SchemaBootstrapError",
     "SessionJsonlError",
     "connect_database",
+    "describe_database_config_source",
     "ensure_schema",
     "export_session_jsonl",
     "import_session_jsonl",
     "load_database_config",
+    "read_env_template",
+    "resolve_database_config",
+    "would_fall_back_to",
 ]

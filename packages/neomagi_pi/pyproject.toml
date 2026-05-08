@@ -32,6 +32,9 @@ packages = [
     "src/infra",
 ]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/storage/templates/env.template" = "storage/templates/env.template"
+
 [tool.hatch.build.targets.sdist]
 include = [
     "README.md",
