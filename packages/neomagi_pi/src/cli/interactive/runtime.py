@@ -100,7 +100,7 @@ class InteractiveAgentRuntime(
     def __init__(
         self,
         *,
-        model_ref: str = "faux/faux-1",
+        model_ref: str = "faux/local/faux-1",
         thinking_level: ThinkingLevel = "off",
         cache_retention: CacheRetention | None = None,
         agent_factory: Callable[[AgentOptions], Agent] = Agent,

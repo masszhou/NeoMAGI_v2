@@ -626,7 +626,7 @@ def _render_summary(envelope: SessionExportEnvelope) -> str:
         ("Generated", envelope.generated_at),
         ("CWD", session.cwd),
         ("Current leaf", session.current_leaf or "none"),
-        ("Model", _join_non_empty(session.provider, session.model_id) or "none"),
+        ("Model", _format_model_ref(session.provider, session.model_id)),
         ("Thinking", session.thinking_level or "none"),
         ("Tokens", str(usage.total_tokens)),
         ("Cost", cost),
@@ -726,6 +726,22 @@ def _string_or_none(value: Any) -> str | None:
 
 def _join_non_empty(*values: str | None) -> str:
     return "/".join(value for value in values if value)
+
+
+def _format_model_ref(provider: str | None, model_id: str | None) -> str:
+    """Render the canonical ``vendor/auth-channel/model-id`` model ref.
+
+    Sessions persist ``(provider, model_id)``; reverse-look up the user-visible
+    ``(vendor, auth-channel)`` for display so the summary matches the runtime
+    footer and ``/model list``.
+    """
+
+    if not provider or not model_id:
+        return "none"
+    from ai_provider.model_registry import provider_auth_info
+
+    vendor, auth_channel = provider_auth_info(provider)
+    return f"{vendor}/{auth_channel}/{model_id}"
 
 
 _HTML_CSS = """

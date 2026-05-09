@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_core.types import AfterToolCallResult, BeforeToolCallResult
-from ai_provider.model_registry import validate_thinking_level_for_model
+from ai_provider.model_registry import canonical_model_ref, validate_thinking_level_for_model
 from ai_provider.runtime_types import ProviderResponse
 from ai_provider.types import Model, TextContent, UserMessage
 from cli.core.session_types import CustomMessage, MessageEndEvent, MessageStartEvent
@@ -504,7 +504,7 @@ class ExtensionRuntimeMixin:
 
     def _extension_set_model(self, model: Model) -> bool:
         try:
-            self.set_model_ref(f"{model.provider}/{model.id}")
+            self.set_model_ref(canonical_model_ref(model))
         except Exception:
             return False
         self._notify_wake()

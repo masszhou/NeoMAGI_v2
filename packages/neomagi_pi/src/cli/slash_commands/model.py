@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from ai_provider.auth_storage import credential_status
 from ai_provider.credentials import get_env_api_key
-from ai_provider.model_registry import list_model_entries, resolve_model
+from ai_provider.model_registry import (
+    canonical_model_ref,
+    list_model_entries,
+    resolve_model,
+)
 
 from .registry import SlashCommandContext
 
@@ -28,10 +32,11 @@ def handle_model(ctx: SlashCommandContext) -> None:
             _set_cache(ctx, ctx.args[1:])
             return
         model = resolve_model(ctx.args[0])
-        runtime.set_model_ref(f"{model.provider}/{model.id}")
+        canonical = canonical_model_ref(model)
+        runtime.set_model_ref(canonical)
         ctx.controller.editor.set_footer(runtime.footer_summary)
         ctx.controller.status.push_notification(
-            f"model set: {model.provider}/{model.id}",
+            f"model set: {canonical}",
             level="info",
         )
     except Exception as exc:
@@ -56,11 +61,14 @@ def handle_scoped_models(ctx: SlashCommandContext) -> None:
         if item.strip()
     ]
     try:
-        for ref in refs:
-            resolve_model(ref)
-        runtime.settings_manager.update_value("project", "model.enabledModels", refs)
+        canonical_refs = [canonical_model_ref(resolve_model(ref)) for ref in refs]
+        runtime.settings_manager.update_value(
+            "project",
+            "model.enabledModels",
+            canonical_refs,
+        )
         ctx.controller.status.push_notification(
-            f"scoped models updated: {len(refs)}",
+            f"scoped models updated: {len(canonical_refs)}",
             level="info",
         )
     except Exception as exc:
@@ -100,7 +108,7 @@ def _model_list(current_ref: str) -> str:
     lines = ["models:"]
     for entry in list_model_entries():
         model = entry.model
-        ref = f"{model.provider}/{model.id}"
+        ref = canonical_model_ref(model)
         marker = "*" if ref == current_ref else "-"
         auth = _auth_status(model.provider)
         owner = f":{entry.owner}" if entry.owner else ""

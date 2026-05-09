@@ -10,7 +10,7 @@ from typing import Literal
 from ai_provider.model_registry import resolve_model, validate_thinking_level_for_model
 from ai_provider.types import CacheRetention, ThinkingLevel
 
-DEFAULT_MODEL_REF = "faux/faux-1"
+DEFAULT_MODEL_REF = "faux/local/faux-1"
 THINKING_LEVELS: tuple[ThinkingLevel, ...] = (
     "off",
     "minimal",
@@ -84,8 +84,12 @@ def _add_runtime_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL_REF,
-        metavar="PROVIDER/MODEL",
-        help="Interactive runtime model override (default: faux/faux-1).",
+        metavar="VENDOR/AUTH/MODEL",
+        help=(
+            "Interactive runtime model override "
+            "(format: vendor/auth-channel/model; legacy provider/model still "
+            "accepted; default: faux/local/faux-1)."
+        ),
     )
     parser.add_argument(
         "--thinking-level",

@@ -5,7 +5,13 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from ai_provider.model_registry import resolve_model, unregister_models_by_source
+from ai_provider.model_registry import (
+    canonical_model_ref,
+    provider_auth_info,
+    resolve_model,
+    unregister_models_by_source,
+)
+from cli.core.model_settings import apply_extension_providers
 from cli.interactive.runtime import InteractiveAgentRuntime
 from cli.extensions.loader import load_extension_from_factory
 from cli.extensions.runtime import create_extension_runtime
@@ -65,6 +71,59 @@ def test_provider_registration_rejects_invalid_model_limits(tmp_path) -> None:
     extension = asyncio.run(load_extension_from_factory(setup, name="bad-provider", cwd=tmp_path, runtime=runtime))
 
     assert extension.providers == {}
+
+
+def test_extension_provider_authchannel_field_does_not_change_credential_channel(
+    tmp_path,
+) -> None:
+    """Extension ``register_provider`` callers may pass a stray ``authChannel``
+    field; it must be ignored. The custom provider stays on the ``api`` lane
+    and never picks up ``openai-codex`` OAuth credentials.
+    """
+
+    def setup(api) -> None:
+        api.register_provider(
+            "local-openai",
+            {
+                "baseUrl": "http://127.0.0.1:11434/v1",
+                "api": "openai-responses",
+                "authChannel": "oauth",
+                "models": [
+                    {
+                        "id": "local-1",
+                        "name": "Local 1",
+                        "reasoning": False,
+                        "input": ["text"],
+                        "cost": {"input": 0, "output": 0},
+                        "contextWindow": 8192,
+                        "maxTokens": 2048,
+                        "authChannel": "oauth",
+                    }
+                ],
+            },
+        )
+
+    runtime = create_extension_runtime()
+    extension = asyncio.run(
+        load_extension_from_factory(
+            setup,
+            name="provider-ext",
+            cwd=tmp_path,
+            runtime=runtime,
+        )
+    )
+    try:
+        diagnostics = apply_extension_providers([extension])
+        assert diagnostics == []
+        model = resolve_model("local-openai/local-1")
+        assert model.provider == "local-openai"
+        # The runtime must still treat this as ``api``-channel; otherwise an
+        # ``authChannel="oauth"`` extension could quietly hijack the OAuth
+        # credential path.
+        assert canonical_model_ref(model) == "local-openai/api/local-1"
+        assert provider_auth_info(model.provider) == ("local-openai", "api")
+    finally:
+        unregister_models_by_source("extension")
 
 
 def test_provider_unregister_removes_extension_owned_record(tmp_path) -> None:

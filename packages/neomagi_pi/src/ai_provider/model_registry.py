@@ -21,6 +21,58 @@ SOURCE_PRIORITIES: dict[str, int] = {
     RUNTIME_SOURCE: 40,
 }
 
+# --- Three-segment model ref: vendor / auth-channel / model-id ---------------
+#
+# The user-visible ref encodes (vendor, auth-channel) explicitly so OpenAI
+# API key lanes and ChatGPT/Codex OAuth lanes are visually distinct. The
+# adapter API family stays in ``model.api`` (e.g. ``openai-responses``,
+# ``openai-codex-responses``, ``anthropic-messages``).
+
+ALLOWED_AUTH_CHANNELS: frozenset[str] = frozenset({"api", "oauth", "local"})
+DEFAULT_AUTH_CHANNEL = "api"
+
+# Map internal provider id -> (vendor, auth-channel). The provider id remains
+# the credential boundary used by ``resolve_api_key`` and auth storage; the
+# vendor/channel pair is the user-visible decoration.
+_BUILTIN_PROVIDER_AUTH: dict[str, tuple[str, str]] = {
+    "openai": ("openai", "api"),
+    "openai-codex": ("openai", "oauth"),
+    "anthropic": ("anthropic", "api"),
+    "opencode": ("opencode", "api"),
+    "faux": ("faux", "local"),
+}
+
+# Reverse map for parsing canonical refs back to an internal provider.
+_VENDOR_CHANNEL_TO_PROVIDER: dict[tuple[str, str], str] = {
+    info: provider for provider, info in _BUILTIN_PROVIDER_AUTH.items()
+}
+
+# Names that, when seen in the first segment, force three-segment parsing so
+# malformed canonical refs (``openai/keychain/...``) fail with a precise
+# auth-channel diagnostic instead of degrading to a generic ``unknown model``.
+_RESERVED_FIRST_SEGMENTS: frozenset[str] = frozenset(
+    {vendor for vendor, _channel in _BUILTIN_PROVIDER_AUTH.values()}
+    | set(_BUILTIN_PROVIDER_AUTH)
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRef:
+    """Parsed three-segment user-visible model reference."""
+
+    vendor: str
+    auth_channel: str
+    model_id: str
+    provider: str
+
+    @property
+    def canonical(self) -> str:
+        return f"{self.vendor}/{self.auth_channel}/{self.model_id}"
+
+    @property
+    def legacy(self) -> str:
+        return f"{self.provider}/{self.model_id}"
+
 
 @dataclass(frozen=True, slots=True)
 class ModelRegistryEntry:
@@ -245,11 +297,138 @@ def list_model_entries(provider: str | None = None) -> list[ModelRegistryEntry]:
     return sorted(entries, key=lambda entry: (entry.model.provider, entry.model.id))
 
 
+def parse_model_ref(model_ref: str) -> ModelRef:
+    """Parse a user-visible model ref into a ``ModelRef``.
+
+    Accepts the canonical three-segment form ``vendor/auth-channel/model-id``
+    and the legacy two-segment ``provider/model-id`` for one compatibility
+    window. Auth-channel is checked against an exact lowercase allowlist;
+    unknown channels and unknown ``(vendor, auth-channel)`` combinations
+    fail-fast rather than fall back to vendor-based inference.
+
+    Model ids may contain ``/`` (e.g. OpenAI-compatible custom providers
+    using ``org/model``-style ids). Disambiguation: when the second segment
+    is in :data:`ALLOWED_AUTH_CHANNELS` and a third segment exists, the ref
+    is treated as canonical and any remaining segments are joined back into
+    ``model_id``. Otherwise the ref is legacy two-segment with ``model_id``
+    consuming everything after the first ``/``.
+    """
+
+    if not isinstance(model_ref, str) or not model_ref.strip():
+        raise ValueError(_unknown_model_ref_message(model_ref))
+    parts = model_ref.split("/")
+    if len(parts) < 2 or any(not part for part in parts):
+        raise ValueError(_unknown_model_ref_message(model_ref))
+    forced_three_segment = (
+        len(parts) >= 3 and parts[0] in _RESERVED_FIRST_SEGMENTS
+    )
+    auth_channel_match = (
+        len(parts) >= 3 and parts[1] in ALLOWED_AUTH_CHANNELS
+    )
+    if forced_three_segment or auth_channel_match:
+        vendor = parts[0]
+        auth_channel = parts[1]
+        if auth_channel not in ALLOWED_AUTH_CHANNELS:
+            raise ValueError(
+                f"unknown auth-channel {auth_channel!r}; expected one of "
+                f"{sorted(ALLOWED_AUTH_CHANNELS)}. "
+                "Format: vendor/auth-channel/model"
+            )
+        model_id = "/".join(parts[2:])
+        provider = _resolve_provider_for_canonical(vendor, auth_channel, model_ref)
+        return ModelRef(
+            vendor=vendor,
+            auth_channel=auth_channel,
+            model_id=model_id,
+            provider=provider,
+        )
+    # Legacy two-segment: provider / model_id (model_id may contain ``/``).
+    provider, _sep, model_id = model_ref.partition("/")
+    vendor, auth_channel = provider_auth_info(provider)
+    return ModelRef(
+        vendor=vendor,
+        auth_channel=auth_channel,
+        model_id=model_id,
+        provider=provider,
+    )
+
+
+def provider_auth_info(provider: str) -> tuple[str, str]:
+    """Return ``(vendor, auth_channel)`` for an internal provider id.
+
+    Built-in providers use the fixed mapping. Custom providers default to
+    ``auth-channel=api``; settings/extension declarations of ``authChannel``
+    are not consulted in this round.
+    """
+
+    info = _BUILTIN_PROVIDER_AUTH.get(provider)
+    if info is not None:
+        return info
+    return (provider, DEFAULT_AUTH_CHANNEL)
+
+
+def canonical_model_ref(model_or_ref: Model | ModelRef | str) -> str:
+    """Render the canonical ``vendor/auth-channel/model-id`` form."""
+
+    if isinstance(model_or_ref, ModelRef):
+        return model_or_ref.canonical
+    if isinstance(model_or_ref, Model):
+        vendor, auth_channel = provider_auth_info(model_or_ref.provider)
+        return f"{vendor}/{auth_channel}/{model_or_ref.id}"
+    return parse_model_ref(model_or_ref).canonical
+
+
+def legacy_model_ref(model_or_ref: Model | ModelRef | str) -> str:
+    """Render the legacy two-segment ``provider/model-id`` form.
+
+    Kept for compatibility tests and migration messaging only; new outputs
+    should use :func:`canonical_model_ref`.
+    """
+
+    if isinstance(model_or_ref, ModelRef):
+        return model_or_ref.legacy
+    if isinstance(model_or_ref, Model):
+        return f"{model_or_ref.provider}/{model_or_ref.id}"
+    return parse_model_ref(model_or_ref).legacy
+
+
 def resolve_model(model_ref: str) -> Model:
-    provider, sep, model_id = model_ref.partition("/")
-    if not sep or not provider or not model_id:
-        raise ValueError("model reference must use explicit provider/model form")
-    return get_model(provider, model_id)
+    parsed = parse_model_ref(model_ref)
+    return get_model(parsed.provider, parsed.model_id)
+
+
+def _resolve_provider_for_canonical(
+    vendor: str,
+    auth_channel: str,
+    raw_ref: str,
+) -> str:
+    provider = _VENDOR_CHANNEL_TO_PROVIDER.get((vendor, auth_channel))
+    if provider is not None:
+        return provider
+    # Custom providers may not have a built-in vendor/channel mapping. Allow
+    # ``vendor=<custom-provider-id>`` with the default ``api`` channel as long
+    # as that provider id is registered AND is not a built-in. Built-ins are
+    # exposed via the canonical (vendor, auth-channel) pair only — accepting
+    # e.g. ``openai-codex/api/...`` here would silently re-canonicalize to
+    # ``openai/oauth/...`` and defeat the user-visible auth-channel guarantee.
+    if (
+        auth_channel == DEFAULT_AUTH_CHANNEL
+        and vendor not in _BUILTIN_PROVIDER_AUTH
+        and any(provider_id == vendor for provider_id, _model_id in _models)
+    ):
+        return vendor
+    raise ValueError(
+        f"unknown model {raw_ref}: no internal provider for "
+        f"vendor={vendor!r} auth-channel={auth_channel!r}. "
+        "Format: vendor/auth-channel/model"
+    )
+
+
+def _unknown_model_ref_message(model_ref: object) -> str:
+    return (
+        f"unknown model {model_ref!r}: model reference must use "
+        "vendor/auth-channel/model (legacy provider/model still accepted)"
+    )
 
 
 def validate_thinking_level_for_model(model: Model, level: ThinkingLevel) -> ThinkingLevel:
@@ -290,17 +469,24 @@ for _model in BUILTIN_MODELS:
 
 
 __all__ = [
+    "ALLOWED_AUTH_CHANNELS",
     "BUILTIN_MODELS",
     "BUILTIN_SOURCE",
+    "DEFAULT_AUTH_CHANNEL",
     "EXTENSION_SOURCE",
+    "ModelRef",
     "ModelRegistryEntry",
     "RUNTIME_SOURCE",
     "SETTINGS_SOURCE",
+    "canonical_model_ref",
     "clear_models_for_tests",
     "get_model",
     "get_model_entry",
+    "legacy_model_ref",
     "list_model_entries",
     "list_models",
+    "parse_model_ref",
+    "provider_auth_info",
     "register_model",
     "resolve_model",
     "unregister_models_by_source",

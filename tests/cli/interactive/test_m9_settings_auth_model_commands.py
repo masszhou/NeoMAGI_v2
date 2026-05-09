@@ -64,13 +64,81 @@ def test_model_command_writes_durable_model_and_thinking_entries(tmp_path: Path)
         runtime.shutdown()
 
 
+def test_model_list_renders_canonical_three_segment_refs() -> None:
+    from cli.slash_commands.model import _model_list
+
+    rendered = _model_list("faux/local/faux-1")
+    assert "faux/local/faux-1" in rendered
+    assert "openai/api/gpt-5.4" in rendered
+    assert "openai/oauth/gpt-5.3-codex" in rendered
+    assert "anthropic/api/claude-sonnet-4-6" in rendered
+
+
+def test_model_command_accepts_legacy_ref_and_notifies_with_canonical(
+    tmp_path: Path,
+) -> None:
+    controller, runtime, _manager = _controller(tmp_path)
+    try:
+        _dispatch(controller, "/model faux/faux-1")
+        rendered = "\n".join(
+            note.text for note in controller.status._notifications  # noqa: SLF001
+        )
+        assert "model set: faux/local/faux-1" in rendered
+        assert runtime.state.model_ref == "faux/local/faux-1"
+    finally:
+        runtime.shutdown()
+
+
+def test_runtime_state_model_ref_normalizes_to_canonical_on_init(
+    tmp_path: Path,
+) -> None:
+    runtime = InteractiveAgentRuntime(
+        model_ref="faux/faux-1",
+        cwd=tmp_path,
+        tool_profile="none",
+    )
+    try:
+        assert runtime.state.model_ref == "faux/local/faux-1"
+        assert "faux/local/faux-1" in runtime.footer_summary
+    finally:
+        runtime.shutdown()
+
+
+def test_runtime_resume_session_with_legacy_model_change_uses_canonical(
+    tmp_path: Path,
+) -> None:
+    manager = SessionManager(InMemorySessionRepository())
+    runtime = InteractiveAgentRuntime(
+        cwd=tmp_path,
+        session_manager=manager,
+        tool_profile="none",
+    )
+    try:
+        session_id = runtime.state.durable_session_id
+        assert session_id is not None
+        # Simulate a legacy session entry that records the internal provider id
+        # (e.g. ``openai-codex``). Resume must continue parsing and the runtime
+        # state must surface the canonical three-segment ref.
+        manager.append_model_change(
+            session_id,
+            provider="openai-codex",
+            model_id="gpt-5.3-codex",
+        )
+        runtime.resume_session(session_id)
+        assert runtime.state.model_ref == "openai/oauth/gpt-5.3-codex"
+    finally:
+        runtime.shutdown()
+
+
 def test_scoped_models_persist_to_project_settings(tmp_path: Path) -> None:
     controller, runtime, _manager = _controller(tmp_path)
     try:
+        # Legacy two-segment ref must still be accepted; settings writeback
+        # normalizes to the canonical three-segment form.
         _dispatch(controller, "/scoped-models faux/faux-1")
 
         settings = json.loads((tmp_path / ".pi" / "settings.json").read_text())
-        assert settings["model"]["enabledModels"] == ["faux/faux-1"]
+        assert settings["model"]["enabledModels"] == ["faux/local/faux-1"]
     finally:
         runtime.shutdown()
 
