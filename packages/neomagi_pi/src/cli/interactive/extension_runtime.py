@@ -9,7 +9,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 from agent_core.types import AfterToolCallResult, BeforeToolCallResult
@@ -23,6 +22,10 @@ from cli.extensions.runner import ExtensionRunner
 from cli.extensions.tools import create_extension_tools
 from cli.extensions.ui import NoopExtensionUIContext
 from cli.core.model_settings import apply_extension_providers, apply_settings_models
+from cli.interactive.skill_env_grant import (
+    format_skill_env_setup_error,
+    resolve_skill_env_grant,
+)
 from cli.slash_commands.registry import PI_BUILTIN_COMMANDS
 from cli.tools.bash import create_bash_tool_definition
 from cli.tools.definitions import SkillEnvGrant
@@ -222,34 +225,15 @@ class ExtensionRuntimeMixin:
     ) -> tuple[SkillEnvGrant | None, str | None]:
         if expansion.resource_type != "skill":
             return None, None
-        loaded = self._settings_manager.load()
-        config = loaded.settings.resources.skill_env.get(expansion.name)
-        if config is None:
-            return None, None
-        raw_config = _raw_skill_env_config(loaded.project_raw, expansion.name)
-        base_dir = self._cwd
-        if raw_config is None:
-            raw_config = _raw_skill_env_config(loaded.global_raw, expansion.name)
-            base_dir = self._settings_manager.agent_dir
-        env_file = config.env_file
-        source_path = _resolve_env_file(env_file, base_dir)
-        if not source_path.is_file():
-            return (
-                None,
-                f"skill env for {expansion.name!r} references missing envFile {env_file!r}",
-            )
-        env_values = _read_env_file(source_path)
-        missing = [name for name in config.allow if name not in env_values]
-        if missing:
-            names = ", ".join(missing)
-            return (
-                None,
-                f"skill env for {expansion.name!r} is missing allowed variable(s) {names} in envFile {env_file!r}",
-            )
-        grant_values = {name: env_values[name] for name in config.allow}
-        if not grant_values:
-            return None, None
-        return SkillEnvGrant(skill_name=expansion.name, env=grant_values, source=env_file), None
+        grant, failure = resolve_skill_env_grant(
+            expansion.name,
+            loaded_settings=self._settings_manager.load(),
+            cwd=self._cwd,
+            agent_dir=self._settings_manager.agent_dir,
+        )
+        if failure is not None:
+            return None, format_skill_env_setup_error(expansion.name, failure)
+        return grant, None
 
     async def _apply_input_event(self, text: str) -> str | None:
         if self._extension_runner is None:
@@ -523,48 +507,6 @@ class ExtensionRuntimeMixin:
     def _refresh_agent_tool_state(self) -> None:
         self._agent.tools = self._build_tools()
         self._agent.state.system_prompt = self._build_system_prompt()
-
-
-def _raw_skill_env_config(raw: dict[str, Any], skill_name: str) -> dict[str, Any] | None:
-    resources = raw.get("resources")
-    if not isinstance(resources, dict):
-        return None
-    skill_env = resources.get("skillEnv") or resources.get("skill_env")
-    if not isinstance(skill_env, dict):
-        return None
-    config = skill_env.get(skill_name)
-    return config if isinstance(config, dict) else None
-
-
-def _resolve_env_file(value: str, base_dir: Path) -> Path:
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path.resolve(strict=False)
-    return (base_dir / path).resolve(strict=False)
-
-
-def _read_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("export "):
-            stripped = stripped.removeprefix("export ").strip()
-        key, sep, value = stripped.partition("=")
-        if not sep:
-            continue
-        key = key.strip()
-        if not key:
-            continue
-        values[key] = _unquote_env_value(value.strip())
-    return values
-
-
-def _unquote_env_value(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
 
 
 def _content_blocks_to_dicts(value: Any) -> list[dict[str, Any]] | None:
