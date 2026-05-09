@@ -451,6 +451,35 @@ def test_grant_is_cleared_when_run_settles(tmp_path) -> None:
         runtime.shutdown()
 
 
+def test_missing_resolved_path_does_not_activate_via_args_fallback(tmp_path) -> None:
+    skill_path = _write_brave_skill(tmp_path)
+    _write_brave_settings(tmp_path)
+    (tmp_path / ".env.brave").write_text("BRAVE_API_KEY=FAKE_VALUE\n", encoding="utf-8")
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        # Construct a context where args["path"] points at the SKILL.md but the
+        # tool result details lack resolvedPath. Activation must NOT happen via
+        # args fallback (host trusts only the resolved path on the tool result).
+        result = AgentToolResult(
+            content=[{"type": "text", "text": "body"}],
+            details={"path": str(skill_path)},  # resolvedPath intentionally absent
+        )
+        context = SimpleNamespace(
+            tool_call={"id": "tc-1", "name": "read"},
+            args={"path": str(skill_path)},
+            result=result,
+            is_error=False,
+            assistant_message={},
+        )
+
+        out = _run_after_tool_call(runtime, context)
+
+        assert runtime._active_skill_env_grant is None  # noqa: SLF001
+        _assert_no_skill_env_fields(out)
+    finally:
+        runtime.shutdown()
+
+
 def test_concurrent_read_and_bash_dispatch_grant_visible_only_to_subsequent_tool_loop(
     tmp_path,
 ) -> None:

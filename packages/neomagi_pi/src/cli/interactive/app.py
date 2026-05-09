@@ -379,14 +379,6 @@ class InteractiveController:
         )
 
     def _focus_offset_provider(self, focused: Any, width: int) -> int | None:
-        """Translate a focus on the editor (nested inside ``_RootComponent``)
-        into the row offset substrate's cursor placement needs.
-
-        Reads the root's cached ``_last_visible_msg_rows`` from the most
-        recent ``render_with_height`` call, so the cursor lands on the
-        editor's actual on-screen row even when the message column was
-        clipped to fit the terminal height (manual §4.9)."""
-
         if focused is self._editor:
             return self._root.editor_offset(width)
         return None
@@ -531,13 +523,17 @@ class InteractiveController:
         text = self._editor.buffer.take()
         if not text.strip():
             return
-        if self._editor.state == EditorState.STREAMING:
-            self._runtime.follow_up(text)
-        else:
-            self._runtime.submit(text)
-        self._messages.scroll_to_bottom()
-        self._editor.set_state(EditorState.STREAMING)
-        self._editor.set_footer(self._runtime.footer_summary)
+        try:
+            if self._editor.state == EditorState.STREAMING:
+                self._runtime.follow_up(text)
+            else:
+                self._runtime.submit(text)
+            self._messages.scroll_to_bottom()
+            self._editor.set_state(EditorState.STREAMING)
+            self._editor.set_footer(self._runtime.footer_summary)
+        except RuntimeError as exc:
+            self._editor.set_state(EditorState.IDLE)
+            self._status.push_notification(str(exc), level="error", ttl_seconds=8.0)
         self._app.request_render()
 
     def _schedule_runtime_drain(self) -> None:

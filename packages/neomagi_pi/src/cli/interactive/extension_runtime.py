@@ -15,7 +15,6 @@ from agent_core.types import AfterToolCallResult, BeforeToolCallResult
 from ai_provider.model_registry import canonical_model_ref, validate_thinking_level_for_model
 from ai_provider.runtime_types import ProviderResponse
 from ai_provider.types import Model, TextContent, UserMessage
-from collections.abc import Mapping
 from pathlib import Path
 
 from cli.core.session_types import CustomMessage, MessageEndEvent, MessageStartEvent
@@ -425,8 +424,8 @@ class ExtensionRuntimeMixin:
         # "idempotent" or "no_op": do not write details (avoid transcript noise).
         return {}
 
-    def _match_skill_by_read_path(self, args: Any, result: Any) -> Skill | None:
-        target = self._resolve_read_target_path(args, result)
+    def _match_skill_by_read_path(self, _args: Any, result: Any) -> Skill | None:
+        target = self._resolve_read_target_path(result)
         if target is None:
             return None
         for skill in self._resource_loader.snapshot.skills:
@@ -437,25 +436,12 @@ class ExtensionRuntimeMixin:
                 continue
         return None
 
-    def _resolve_read_target_path(self, args: Any, result: Any) -> Path | None:
+    def _resolve_read_target_path(self, result: Any) -> Path | None:
         resolved_str = _read_resolved_path_from_details(getattr(result, "details", None))
-        if resolved_str is None:
-            resolved_str = self._resolved_path_from_args(args)
         if resolved_str is None:
             return None
         try:
             return Path(resolved_str).resolve(strict=False)
-        except OSError:
-            return None
-
-    def _resolved_path_from_args(self, args: Any) -> str | None:
-        if not isinstance(args, Mapping):
-            return None
-        path_arg = args.get("path")
-        if not isinstance(path_arg, str) or not path_arg:
-            return None
-        try:
-            return str((self._cwd / Path(path_arg)).resolve(strict=False))
         except OSError:
             return None
 
