@@ -15,8 +15,6 @@ PACK_ROOT = SHOWCASE_ROOT / "skills" / "pi-skills"
 EXPECTED_SKILLS = [
     "brave-search",
     "browser-tools",
-    "gccli",
-    "gdcli",
     "gmcli",
     "transcribe",
     "vscode",
@@ -84,8 +82,6 @@ def test_generated_skills_have_frontmatter_and_expected_helpers() -> None:
 def test_generated_high_risk_gates_are_concrete() -> None:
     browser = _section("browser-tools", "Sensitive operations")
     gmcli = _section("gmcli", "Sensitive operations")
-    gdcli = _section("gdcli", "Sensitive operations")
-    gccli = _section("gccli", "Sensitive operations")
     transcribe = _section("transcribe", "Sensitive operations")
 
     assert "--profile" in browser
@@ -93,12 +89,6 @@ def test_generated_high_risk_gates_are_concrete() -> None:
     assert "send" in gmcli
     assert "drafts" in gmcli
     assert "attachment download risk" in gmcli
-    assert "upload" in gdcli
-    assert "mkdir" in gdcli
-    assert "share --anyone" in gdcli
-    assert "create" in gccli
-    assert "update" in gccli
-    assert "delete" in gccli
     assert "upload to Groq" in transcribe
     assert "transcribe.sh <audio-file>" in transcribe
 

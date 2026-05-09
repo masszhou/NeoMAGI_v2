@@ -14,8 +14,6 @@ UPSTREAM_REF = "75d32a382b0c8aafce356d68e17d2dc94c0c953b"
 EXPECTED_SKILLS = (
     "brave-search",
     "browser-tools",
-    "gccli",
-    "gdcli",
     "gmcli",
     "transcribe",
     "vscode",
@@ -190,14 +188,6 @@ node --version && echo "node found" || echo "node missing"
 test -d "{baseDir}/node_modules" && echo "dependencies installed" || echo "run npm install in {baseDir}"
 command -v google-chrome || command -v chromium || test -d "/Applications/Google Chrome.app"
 ```""",
-        "gccli": """```bash
-command -v gccli && echo "gccli found" || echo "gccli missing"
-gccli accounts list
-```""",
-        "gdcli": """```bash
-command -v gdcli && echo "gdcli found" || echo "gdcli missing"
-gdcli accounts list
-```""",
         "gmcli": """```bash
 command -v gmcli && echo "gmcli found" || echo "gmcli missing"
 gmcli accounts list
@@ -227,8 +217,6 @@ def _credentials(skill_name: str) -> str:
             "NeoMAGI may inject it through `resources.skillEnv.brave-search` when configured."
         ),
         "browser-tools": "Does not require API credentials. Browser profile data and cookies are credentials for safety purposes.",
-        "gccli": "Uses OAuth files under `~/.gccli/`. Do not print or copy those files.",
-        "gdcli": "Uses OAuth files under `~/.gdcli/`. Do not print or copy those files.",
         "gmcli": "Uses OAuth files under `~/.gmcli/`. Do not print or copy those files.",
         "transcribe": (
             "Requires `GROQ_API_KEY`. Check only whether it is set; never echo the value. "
@@ -249,15 +237,6 @@ def _sensitive_operations(skill_name: str) -> str:
         "browser-tools": (
             "Require same-turn user confirmation before `browser-start.js --profile` or `browser-cookies.js`. "
             "Treat screenshots, DOM dumps, and JavaScript evaluation on authenticated pages as sensitive."
-        ),
-        "gccli": (
-            "Read-only `calendars`, `events`, `event`, and `freebusy` are allowed after account selection. "
-            "Require same-turn user confirmation before Calendar `create`, `update`, or `delete` operations."
-        ),
-        "gdcli": (
-            "Read-only `ls`, `search`, and explicit downloads to a user-approved path are allowed after account "
-            "selection. Require same-turn user confirmation before Drive `upload`, `mkdir`, `share --anyone`, "
-            "or delete operations."
         ),
         "gmcli": (
             "Search and thread reads may expose private email; summarize instead of copying full bodies by default. "
