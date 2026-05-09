@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from ai_provider.auth_storage import credential_status
 from ai_provider.credentials import get_env_api_key
 from ai_provider.model_registry import (
@@ -9,6 +11,8 @@ from ai_provider.model_registry import (
     list_model_entries,
     resolve_model,
 )
+from ai_provider.prompt_cache import resolve_cache_retention
+from ai_provider.types import CacheRetention
 
 from .registry import SlashCommandContext
 
@@ -96,10 +100,14 @@ def _set_cache(ctx: SlashCommandContext, args: list[str]) -> None:
         raise ValueError(f"invalid cache retention: {retention}")
     runtime = ctx.controller.runtime
     assert runtime is not None
-    runtime.set_cache_retention(None if retention == "default" else retention)  # type: ignore[arg-type]
+    next_retention: CacheRetention | None = (
+        None if retention == "default" else cast(CacheRetention, retention)
+    )
+    runtime.set_cache_retention(next_retention)
+    effective_retention = resolve_cache_retention(next_retention)
     ctx.controller.editor.set_footer(runtime.footer_summary)
     ctx.controller.status.push_notification(
-        f"cache retention set: {retention}",
+        f"cache retention set: {effective_retention}",
         level="info",
     )
 

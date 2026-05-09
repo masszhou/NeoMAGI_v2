@@ -17,6 +17,7 @@ from typing import Any
 from agent_core import Agent, AgentOptions
 from agent_core.cache_affinity import derive_provider_cache_affinity_id
 from ai_provider.credentials import resolve_api_key
+from ai_provider.prompt_cache import resolve_cache_retention
 from ai_provider.types import (
     AssistantMessage,
     CacheRetention,
@@ -177,7 +178,7 @@ class InteractiveAgentRuntime(
 
     @property
     def footer_summary(self) -> str:
-        cache = self._cache_retention or "default"
+        cache = resolve_cache_retention(self._cache_retention)
         extensions = ""
         if self._extension_runner is not None:
             extension_count = len(self._extension_runner.runtime.extensions)

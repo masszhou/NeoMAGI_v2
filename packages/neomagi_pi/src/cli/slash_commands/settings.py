@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_provider.prompt_cache import resolve_cache_retention
 from cli.core.settings import SettingsScope
 
 from .registry import SlashCommandContext
@@ -92,7 +93,7 @@ def _coerce_value(path: str, value: str) -> Any:
 def _settings_summary(loaded) -> str:
     settings = loaded.settings
     model = settings.model
-    cache = model.cache_retention or "default"
+    cache = resolve_cache_retention(model.cache_retention)
     current = "/".join(part for part in (model.provider, model.id) if part) or "(runtime)"
     lines = [
         "settings:",

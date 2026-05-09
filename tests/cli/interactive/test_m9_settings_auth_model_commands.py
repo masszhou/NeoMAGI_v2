@@ -9,6 +9,7 @@ from cli.interactive.app import InteractiveController
 from cli.interactive.runtime import InteractiveAgentRuntime
 from cli.slash_commands.auth import _auth_status_lines
 from cli.slash_commands.registry import SlashCommandRegistry, register_builtin_commands
+from cli.slash_commands.settings import _settings_summary
 from storage.in_memory_session_repository import InMemorySessionRepository
 from tui.app import TUIApp
 
@@ -90,8 +91,10 @@ def test_model_command_accepts_legacy_ref_and_notifies_with_canonical(
 
 
 def test_runtime_state_model_ref_normalizes_to_canonical_on_init(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("PI_CACHE_RETENTION", raising=False)
     runtime = InteractiveAgentRuntime(
         model_ref="faux/faux-1",
         cwd=tmp_path,
@@ -100,6 +103,46 @@ def test_runtime_state_model_ref_normalizes_to_canonical_on_init(
     try:
         assert runtime.state.model_ref == "faux/local/faux-1"
         assert "faux/local/faux-1" in runtime.footer_summary
+        assert "cache=short" in runtime.footer_summary
+        assert "cache=default" not in runtime.footer_summary
+    finally:
+        runtime.shutdown()
+
+
+def test_runtime_footer_recomputes_default_cache_retention(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("PI_CACHE_RETENTION", raising=False)
+    runtime = InteractiveAgentRuntime(
+        cwd=tmp_path,
+        tool_profile="none",
+    )
+    try:
+        assert "cache=short" in runtime.footer_summary
+        monkeypatch.setenv("PI_CACHE_RETENTION", "long")
+        assert "cache=long" in runtime.footer_summary
+    finally:
+        runtime.shutdown()
+
+
+def test_model_cache_default_notifies_effective_retention(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("PI_CACHE_RETENTION", raising=False)
+    controller, runtime, _manager = _controller(tmp_path)
+    try:
+        _dispatch(controller, "/model --cache none")
+        assert "cache=none" in controller.editor._footer  # noqa: SLF001
+
+        _dispatch(controller, "/model --cache default")
+
+        notification = controller.status._notifications[-1].text  # noqa: SLF001
+        assert notification == "cache retention set: short"
+        assert "default" not in notification
+        assert "cache=short" in controller.editor._footer  # noqa: SLF001
+        assert "cache=default" not in controller.editor._footer  # noqa: SLF001
     finally:
         runtime.shutdown()
 
@@ -150,6 +193,25 @@ def test_settings_command_updates_resource_settings_and_reload(tmp_path: Path) -
 
         assert runtime.settings_snapshot().settings.resources.enable_skill_commands is False
         assert runtime._resource_loader.settings.enable_skill_commands is False  # noqa: SLF001
+    finally:
+        runtime.shutdown()
+
+
+def test_settings_summary_shows_effective_cache_retention(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("PI_CACHE_RETENTION", "long")
+    controller, runtime, _manager = _controller(tmp_path)
+    try:
+        rendered = _settings_summary(runtime.settings_snapshot())
+        assert "- cache retention: long" in rendered
+        assert "- cache retention: default" not in rendered
+
+        _dispatch(controller, "/settings set model.cacheRetention none")
+
+        rendered = _settings_summary(runtime.settings_snapshot())
+        assert "- cache retention: none" in rendered
     finally:
         runtime.shutdown()
 
