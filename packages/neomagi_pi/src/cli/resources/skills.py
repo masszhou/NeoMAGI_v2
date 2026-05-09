@@ -67,18 +67,37 @@ def load_skills(roots: list[SkillSearchRoot | Path]) -> LoadedSkills:
     return LoadedSkills(tuple(skills), tuple(diagnostics))
 
 
-def format_skills_for_prompt(skills: list[Skill]) -> str:
+def format_skills_for_prompt(skills: list[Skill], *, bash_active: bool = False) -> str:
     visible = [skill for skill in skills if not skill.disable_model_invocation]
     if not visible:
         return ""
     lines = [
-        "<available_skills>",
-        "Use the read tool to inspect a skill before following details. Paths are relative to location.",
+        "The following skills are internal capability packages. Users do not need to invoke them explicitly.",
+        "When the user's task matches a skill description, read the skill's SKILL.md, follow it, and use tools yourself.",
     ]
+    if bash_active:
+        lines.append(
+            "If a skill describes scripts or CLI commands, run them with bash when safe. "
+            "Resolve relative paths against the directory containing SKILL.md."
+        )
+    else:
+        lines.append(
+            "Resolve relative paths against the directory containing SKILL.md. "
+            "If a skill requires running scripts or CLI commands and bash is not available, "
+            "tell the user what is needed instead of attempting it."
+        )
+    lines.extend(
+        [
+            "Do not merely tell the user the command unless the user asks for commands, "
+            "execution is unsafe, or required credentials are missing.",
+            "",
+            "<available_skills>",
+        ]
+    )
     for skill in visible:
         lines.append(
             f'<skill name="{html.escape(skill.name)}" '
-            f'location="{html.escape(str(skill.base_dir))}">'
+            f'location="{html.escape(str(skill.path))}">'
         )
         lines.append(html.escape(skill.description))
         lines.append("</skill>")
