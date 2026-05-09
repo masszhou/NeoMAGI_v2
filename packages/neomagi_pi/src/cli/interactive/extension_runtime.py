@@ -15,6 +15,9 @@ from agent_core.types import AfterToolCallResult, BeforeToolCallResult
 from ai_provider.model_registry import canonical_model_ref, validate_thinking_level_for_model
 from ai_provider.runtime_types import ProviderResponse
 from ai_provider.types import Model, TextContent, UserMessage
+from collections.abc import Mapping
+from pathlib import Path
+
 from cli.core.session_types import CustomMessage, MessageEndEvent, MessageStartEvent
 from cli.extensions.event_types import BeforeAgentStartEvent, BeforeProviderRequestEvent, InputEvent
 from cli.extensions.loader import load_extensions
@@ -23,6 +26,9 @@ from cli.extensions.tools import create_extension_tools
 from cli.extensions.ui import NoopExtensionUIContext
 from cli.core.model_settings import apply_extension_providers, apply_settings_models
 from cli.interactive.skill_env_grant import (
+    SkillEnvGateState,
+    decide_skill_env_gate_state,
+    format_skill_env_conflict_error,
     format_skill_env_setup_error,
     resolve_skill_env_grant,
 )
@@ -33,6 +39,7 @@ from cli.tools.wrapper import ToolRuntime, wrap_tool_definition
 from cli.resources import (
     ResourceCommandExpansion,
     ResourceLoader,
+    Skill,
     SystemPromptParts,
     build_system_prompt,
     expand_prompt_template_detail,
@@ -307,17 +314,29 @@ class ExtensionRuntimeMixin:
         return None
 
     async def _after_tool_call(self, context: Any, _signal: asyncio.Event | None) -> AfterToolCallResult | None:
-        if self._extension_runner is None:
-            return None
         tool_call = dict(context.tool_call)
+        tool_name = str(tool_call.get("name", ""))
         result = context.result
+        host_patch = self._compute_skill_env_details_patch(
+            tool_name=tool_name,
+            args=context.args,
+            result=result,
+            is_error=bool(context.is_error),
+        )
+        merged_details = result.details
+        if host_patch:
+            merged_details = {**(result.details or {}), **host_patch}
+        if self._extension_runner is None:
+            if not host_patch:
+                return None
+            return AfterToolCallResult(details=merged_details)
         event = {
             "type": "tool_result",
             "toolCallId": tool_call.get("id", ""),
-            "toolName": tool_call.get("name", ""),
+            "toolName": tool_name,
             "input": context.args,
             "content": result.content,
-            "details": result.details,
+            "details": merged_details,
             "isError": context.is_error,
         }
         patched = await self._extension_runner.emit_tool_result(event)
@@ -326,6 +345,119 @@ class ExtensionRuntimeMixin:
             details=patched.get("details"),
             isError=patched.get("isError"),
         )
+
+    def _try_set_active_skill_env_grant(self, grant: SkillEnvGrant | None) -> SkillEnvGateState:
+        state = decide_skill_env_gate_state(self._active_skill_env_grant, grant)
+        if state == "set":
+            self._active_skill_env_grant = grant
+        return state
+
+    def _apply_queued_skill_env_grant(self, prepared: PreparedPrompt) -> None:
+        if prepared.skill_env_grant is None:
+            return
+        state = self._try_set_active_skill_env_grant(prepared.skill_env_grant)
+        if state != "conflict":
+            return
+        active = self._active_skill_env_grant
+        raise RuntimeError(
+            format_skill_env_conflict_error(
+                active_skill=active.skill_name if active is not None else "",
+                attempted_skill=prepared.skill_env_grant.skill_name,
+            )
+        )
+
+    def _compute_skill_env_details_patch(
+        self,
+        *,
+        tool_name: str,
+        args: Any,
+        result: Any,
+        is_error: bool,
+    ) -> dict[str, Any]:
+        if tool_name != "read" or is_error:
+            return {}
+        skill = self._match_skill_by_read_path(args, result)
+        if skill is None:
+            return {}
+        if skill.disable_model_invocation:
+            return {
+                "skillEnvActivationSkipped": {
+                    "skill": skill.name,
+                    "reason": "disabled_model_invocation",
+                }
+            }
+        grant, failure = resolve_skill_env_grant(
+            skill.name,
+            loaded_settings=self._settings_manager.load(),
+            cwd=self._cwd,
+            agent_dir=self._settings_manager.agent_dir,
+        )
+        if failure is not None:
+            skipped: dict[str, Any] = {
+                "skill": skill.name,
+                "reason": failure.reason,
+                "source": failure.source,
+            }
+            if failure.missing_names:
+                skipped["missingNames"] = list(failure.missing_names)
+            return {"skillEnvActivationSkipped": skipped}
+        if grant is None:
+            return {}
+        state = self._try_set_active_skill_env_grant(grant)
+        if state == "set":
+            return {
+                "skillEnvActivated": {
+                    "skill": grant.skill_name,
+                    "names": list(grant.names),
+                    "source": grant.source,
+                    "trigger": "read",
+                }
+            }
+        if state == "conflict":
+            active = self._active_skill_env_grant
+            return {
+                "skillEnvActivationSkipped": {
+                    "skill": grant.skill_name,
+                    "reason": "conflict",
+                    "activeSkill": active.skill_name if active is not None else "",
+                }
+            }
+        # "idempotent" or "no_op": do not write details (avoid transcript noise).
+        return {}
+
+    def _match_skill_by_read_path(self, args: Any, result: Any) -> Skill | None:
+        target = self._resolve_read_target_path(args, result)
+        if target is None:
+            return None
+        for skill in self._resource_loader.snapshot.skills:
+            try:
+                if Path(skill.path).resolve(strict=False) == target:
+                    return skill
+            except OSError:
+                continue
+        return None
+
+    def _resolve_read_target_path(self, args: Any, result: Any) -> Path | None:
+        resolved_str = _read_resolved_path_from_details(getattr(result, "details", None))
+        if resolved_str is None:
+            resolved_str = self._resolved_path_from_args(args)
+        if resolved_str is None:
+            return None
+        try:
+            return Path(resolved_str).resolve(strict=False)
+        except OSError:
+            return None
+
+    def _resolved_path_from_args(self, args: Any) -> str | None:
+        if not isinstance(args, Mapping):
+            return None
+        path_arg = args.get("path")
+        if not isinstance(path_arg, str) or not path_arg:
+            return None
+        try:
+            return str((self._cwd / Path(path_arg)).resolve(strict=False))
+        except OSError:
+            return None
 
     async def _reload_resources(self, reason: str) -> None:
         apply_settings_models(self._settings_manager.load().settings)
@@ -507,6 +639,13 @@ class ExtensionRuntimeMixin:
     def _refresh_agent_tool_state(self) -> None:
         self._agent.tools = self._build_tools()
         self._agent.state.system_prompt = self._build_system_prompt()
+
+
+def _read_resolved_path_from_details(details: Any) -> str | None:
+    if not isinstance(details, dict):
+        return None
+    candidate = details.get("resolvedPath")
+    return candidate if isinstance(candidate, str) and candidate else None
 
 
 def _content_blocks_to_dicts(value: Any) -> list[dict[str, Any]] | None:

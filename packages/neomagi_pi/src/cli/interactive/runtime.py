@@ -251,8 +251,7 @@ class InteractiveAgentRuntime(
             prepared = self.prepare_queued_prompt(prompt)
             if prepared.setup_error is not None:
                 raise RuntimeError(prepared.setup_error)
-            if prepared.skill_env_grant is not None:
-                self._active_skill_env_grant = prepared.skill_env_grant
+            self._apply_queued_skill_env_grant(prepared)
             self._queued_steering.append(prepared.display_text)
             self._loop.call_soon_threadsafe(self._agent.steer, self._user_message(prepared))
             self._enqueue_queue_update_locked()
@@ -268,8 +267,7 @@ class InteractiveAgentRuntime(
             prepared = self.prepare_queued_prompt(prompt)
             if prepared.setup_error is not None:
                 raise RuntimeError(prepared.setup_error)
-            if prepared.skill_env_grant is not None:
-                self._active_skill_env_grant = prepared.skill_env_grant
+            self._apply_queued_skill_env_grant(prepared)
             self._queued_follow_up.append(prepared.display_text)
             self._loop.call_soon_threadsafe(self._agent.follow_up, self._user_message(prepared))
             self._enqueue_queue_update_locked()
@@ -428,8 +426,7 @@ class InteractiveAgentRuntime(
 
     async def _run_prompt(self, prepared: PreparedPrompt, generation: int) -> None:
         try:
-            if prepared.skill_env_grant is not None:
-                self._active_skill_env_grant = prepared.skill_env_grant
+            self._try_set_active_skill_env_grant(prepared.skill_env_grant)
             if prepared.setup_error is not None:
                 raise RuntimeError(prepared.setup_error)
             prompt = await self._apply_input_event(prepared.provider_text)
