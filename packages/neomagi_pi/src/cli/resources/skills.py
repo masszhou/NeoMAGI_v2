@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,14 @@ from .source_info import SourceInfo
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
 IGNORED_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
+
+# Skill bodies sometimes carry shell snippets like ``command -v node >/dev/null`` or
+# ``... >/tmp/foo``. The shell policy blocks those redirects because the target path
+# escapes cwd, and a model that copies the snippet verbatim into ``bash`` will hit a
+# hard block instead of running the check. We surface this as a warning at load time
+# so users with stale workspace copies of a showcase skill see the cause without
+# having to diff against the showcase by hand.
+_POLICY_INCOMPATIBLE_REDIRECT_RE = re.compile(r"[12&]?>+\s*/(?:dev/null|tmp/)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +181,7 @@ def _load_skill(
     diagnostics: list[ResourceDiagnostic],
 ) -> Skill | None:
     try:
-        metadata, _body = split_frontmatter(path.read_text(encoding="utf-8"))
+        metadata, body = split_frontmatter(path.read_text(encoding="utf-8"))
     except Exception as exc:
         diagnostics.append(
             ResourceDiagnostic(type="error", message=f"failed to read skill: {exc}", path=str(path), resource_type="skill")
@@ -197,6 +206,21 @@ def _load_skill(
                 name=name,
             )
         )
+    redirects = _policy_incompatible_redirects(body)
+    if redirects:
+        diagnostics.append(
+            ResourceDiagnostic(
+                type="warning",
+                message=(
+                    f"skill body contains policy-incompatible shell redirect(s) "
+                    f"{', '.join(redirects)!s}; bash calls copying these will be "
+                    f"blocked by shell policy. Likely a stale copy — re-sync from showcase."
+                ),
+                path=str(path),
+                resource_type="skill",
+                name=name,
+            )
+        )
     return Skill(
         name=name,
         description=description.strip(),
@@ -205,6 +229,11 @@ def _load_skill(
         source=source,
         disable_model_invocation=bool(metadata.get("disable-model-invocation", False)),
     )
+
+
+def _policy_incompatible_redirects(body: str) -> list[str]:
+    matches = _POLICY_INCOMPATIBLE_REDIRECT_RE.findall(body)
+    return list(dict.fromkeys(match.strip() for match in matches))
 
 
 def _name_warnings(name: str, parent_dir_name: str) -> list[str]:

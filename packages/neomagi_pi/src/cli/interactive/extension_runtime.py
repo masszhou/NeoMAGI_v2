@@ -105,10 +105,19 @@ class ExtensionRuntimeMixin:
             len(self._extension_runner.runtime.extensions) if self._extension_runner is not None else 0
         )
         diagnostics_count = len(snapshot.diagnostics) + len(self._extension_diagnostics)
-        return (
+        summary = (
             f"reloaded resources: extensions={extension_count} skills={len(snapshot.skills)} "
             f"prompts={len(snapshot.prompts)} diagnostics={diagnostics_count}"
         )
+        diagnostic_lines: list[str] = []
+        for diagnostic in snapshot.diagnostics:
+            label = diagnostic.name or diagnostic.resource_type or ""
+            prefix = f"[{label}] " if label else ""
+            diagnostic_lines.append(f"- {diagnostic.type}: {prefix}{diagnostic.message}")
+        diagnostic_lines.extend(f"- extension: {message}" for message in self._extension_diagnostics)
+        if diagnostic_lines:
+            summary = summary + "\n" + "\n".join(diagnostic_lines)
+        return summary
 
     def extension_commands(self) -> dict[str, dict[str, Any]]:
         if self._extension_runner is None:

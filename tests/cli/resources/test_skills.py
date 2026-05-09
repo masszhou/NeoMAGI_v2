@@ -9,6 +9,52 @@ from cli.resources.skills import (
 )
 
 
+def test_skill_loader_warns_on_policy_incompatible_redirect_in_body(tmp_path) -> None:
+    skill_dir = tmp_path / "stale-brave"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: stale-brave\ndescription: Stale brave-search copy.\n---\n"
+        "## Setup check\n\n"
+        "```bash\n"
+        "command -v node >/dev/null && echo node found\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_skills([tmp_path])
+
+    assert [skill.name for skill in loaded.skills] == ["stale-brave"]
+    redirect_warnings = [
+        diagnostic
+        for diagnostic in loaded.diagnostics
+        if diagnostic.type == "warning" and "policy-incompatible" in diagnostic.message
+    ]
+    assert len(redirect_warnings) == 1
+    message = redirect_warnings[0].message
+    assert ">/dev/null" in message
+    assert "re-sync" in message.lower()
+
+
+def test_skill_loader_does_not_warn_when_body_is_policy_clean(tmp_path) -> None:
+    skill_dir = tmp_path / "clean-brave"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: clean-brave\ndescription: Clean brave-search copy.\n---\n"
+        "## Setup check\n\n"
+        "```bash\n"
+        "node --version && echo node found\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_skills([tmp_path])
+
+    assert [skill.name for skill in loaded.skills] == ["clean-brave"]
+    assert not any(
+        "policy-incompatible" in diagnostic.message for diagnostic in loaded.diagnostics
+    )
+
+
 def test_skill_loader_keeps_invalid_name_with_warning(tmp_path) -> None:
     skill_dir = tmp_path / "parent-name"
     skill_dir.mkdir()
