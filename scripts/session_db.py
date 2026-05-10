@@ -25,8 +25,8 @@ from storage.schema import _quote_identifier  # noqa: E402
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    dotenv_path = Path(args.dotenv) if args.dotenv is not None else REPO_ROOT / ".env"
-    config = load_database_config(dotenv_path=dotenv_path)
+    env_file = Path(args.env_file) if args.env_file is not None else None
+    config = load_database_config(env_file=env_file)
     schema = _quote_identifier(config.schema)
 
     with connect_database(config) as conn:
@@ -56,7 +56,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dotenv",
-        help="Path to .env; defaults to the repository root .env. Environment variables win.",
+        "--env-file",
+        dest="env_file",
+        help="Path to an explicit database env file; omit to use normal config resolution.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("ensure", help="Create missing session tables and schema metadata.")
