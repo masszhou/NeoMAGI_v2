@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 
 from ai_provider.auth_storage import AUTH_PATH_ENV, load_auth_storage, save_api_key
+from ai_provider.oauth import OAuthCredentials
+import cli.slash_commands.auth as auth_commands
 from cli.core.session_manager import SessionManager
 from cli.interactive.app import InteractiveController
 from cli.interactive.runtime import InteractiveAgentRuntime
@@ -248,3 +250,87 @@ def test_auth_status_lines_redacts_stored_credentials(
 
     assert "sk-test-secret" not in rendered
     assert "sk-t...cret" in rendered
+
+
+class _FakeOAuthCallbackServer:
+    def __init__(self, code: str | None) -> None:
+        self.code = code
+        self.closed = False
+
+    async def wait_for_code(self) -> str | None:
+        return self.code
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_oauth_callback_thread_reports_token_exchange_error(monkeypatch) -> None:
+    pending = auth_commands._PendingOAuth(  # noqa: SLF001
+        verifier="verifier",
+        state="state",
+        server=_FakeOAuthCallbackServer("code"),
+    )
+    notifications: list[tuple[str, str]] = []
+
+    async def fail_exchange(code: str, verifier: str) -> OAuthCredentials:
+        raise RuntimeError("token endpoint unavailable")
+
+    monkeypatch.setattr(auth_commands, "exchange_openai_authorization_code", fail_exchange)
+    monkeypatch.setattr(
+        auth_commands,
+        "save_oauth_credentials",
+        lambda provider, credentials: None,
+    )
+    auth_commands._PENDING_OPENAI_CODEX = pending  # noqa: SLF001
+
+    auth_commands._wait_for_callback(  # noqa: SLF001
+        pending,
+        lambda message, level: notifications.append((level, message)),
+    )
+
+    assert pending.server.closed
+    assert auth_commands._PENDING_OPENAI_CODEX is None  # noqa: SLF001
+    assert notifications == [
+        (
+            "error",
+            "OpenAI Codex OAuth callback failed after authorization: "
+            "token endpoint unavailable",
+        )
+    ]
+    assert auth_commands._LAST_OPENAI_CODEX_CALLBACK_ERROR == notifications[0][1]  # noqa: SLF001
+
+
+def test_oauth_callback_thread_reports_auth_save_path(monkeypatch, tmp_path: Path) -> None:
+    pending = auth_commands._PendingOAuth(  # noqa: SLF001
+        verifier="verifier",
+        state="state",
+        server=_FakeOAuthCallbackServer("code"),
+    )
+    auth_path = tmp_path / "auth.json"
+    saved: list[tuple[str, OAuthCredentials]] = []
+    notifications: list[tuple[str, str]] = []
+
+    async def exchange(code: str, verifier: str) -> OAuthCredentials:
+        return OAuthCredentials(access="access", refresh="refresh", expires=123)
+
+    monkeypatch.setattr(auth_commands, "exchange_openai_authorization_code", exchange)
+    monkeypatch.setattr(
+        auth_commands,
+        "save_oauth_credentials",
+        lambda provider, credentials: saved.append((provider, credentials)),
+    )
+    monkeypatch.setattr(auth_commands, "resolve_auth_path", lambda: auth_path)
+    auth_commands._PENDING_OPENAI_CODEX = pending  # noqa: SLF001
+
+    auth_commands._wait_for_callback(  # noqa: SLF001
+        pending,
+        lambda message, level: notifications.append((level, message)),
+    )
+
+    assert saved == [
+        ("openai-codex", OAuthCredentials(access="access", refresh="refresh", expires=123))
+    ]
+    assert notifications == [
+        ("info", f"OpenAI Codex OAuth credential saved: {auth_path}")
+    ]
+    assert auth_commands._LAST_OPENAI_CODEX_CALLBACK_ERROR is None  # noqa: SLF001

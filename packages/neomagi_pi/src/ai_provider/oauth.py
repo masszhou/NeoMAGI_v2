@@ -637,7 +637,8 @@ def _make_oauth_handler(
             self._send_html(
                 HTTPStatus.OK,
                 _oauth_success_html(
-                    "OpenAI authentication completed. You can close this window."
+                    "Authorization code received. Return to NeoMAGI to confirm "
+                    "that credentials were saved."
                 ),
             )
 

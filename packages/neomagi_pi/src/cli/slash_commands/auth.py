@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +12,7 @@ from ai_provider.auth_storage import (
     OPENAI_CODEX_PROVIDER,
     delete_credential,
     list_credentials,
+    resolve_auth_path,
     save_api_key,
     save_oauth_credentials,
 )
@@ -33,6 +35,9 @@ class _PendingOAuth:
 
 
 _PENDING_OPENAI_CODEX: _PendingOAuth | None = None
+_LAST_OPENAI_CODEX_CALLBACK_ERROR: str | None = None
+_LAST_OPENAI_CODEX_SAVE_PATH: str | None = None
+_OAuthNotify = Callable[[str, str], None]
 
 
 def handle_login(ctx: SlashCommandContext) -> None:
@@ -59,7 +64,7 @@ def handle_login(ctx: SlashCommandContext) -> None:
             _finish_openai_codex_login(" ".join(ctx.args[1:]))
             ctx.controller.status.push_notification("OpenAI Codex OAuth credential saved", level="info")
             return
-        message = _start_openai_codex_login()
+        message = _start_openai_codex_login(_controller_notifier(ctx.controller))
         ctx.controller.push_session_message(message)
     except Exception as exc:
         ctx.controller.status.push_notification(str(exc), level="error", ttl_seconds=8.0)
@@ -86,17 +91,18 @@ def _save_api_key_args(args: list[str]) -> None:
     save_api_key(provider, key)
 
 
-def _start_openai_codex_login() -> str:
-    global _PENDING_OPENAI_CODEX
+def _start_openai_codex_login(notify: _OAuthNotify | None = None) -> str:
+    global _LAST_OPENAI_CODEX_CALLBACK_ERROR, _PENDING_OPENAI_CODEX
     if _PENDING_OPENAI_CODEX is not None:
         _PENDING_OPENAI_CODEX.server.close()
+    _LAST_OPENAI_CODEX_CALLBACK_ERROR = None
     start = start_openai_oauth_login()
     server = start_openai_oauth_callback_server(start.state)
     pending = _PendingOAuth(verifier=start.verifier, state=start.state, server=server)
     _PENDING_OPENAI_CODEX = pending
     thread = threading.Thread(
         target=_wait_for_callback,
-        args=(pending,),
+        args=(pending, notify),
         name="neomagi-openai-codex-oauth",
         daemon=True,
     )
@@ -111,7 +117,7 @@ def _start_openai_codex_login() -> str:
 
 
 def _finish_openai_codex_login(value: str) -> None:
-    global _PENDING_OPENAI_CODEX
+    global _LAST_OPENAI_CODEX_CALLBACK_ERROR, _LAST_OPENAI_CODEX_SAVE_PATH, _PENDING_OPENAI_CODEX
     pending = _PENDING_OPENAI_CODEX
     if pending is None:
         raise RuntimeError("no pending OpenAI Codex login; run /login openai-codex first")
@@ -122,21 +128,39 @@ def _finish_openai_codex_login(value: str) -> None:
         exchange_openai_authorization_code(parsed.code, pending.verifier)
     )
     save_oauth_credentials(OPENAI_CODEX_PROVIDER, credentials)
+    _LAST_OPENAI_CODEX_CALLBACK_ERROR = None
+    _LAST_OPENAI_CODEX_SAVE_PATH = str(resolve_auth_path())
     pending.server.close()
     _PENDING_OPENAI_CODEX = None
 
 
-def _wait_for_callback(pending: _PendingOAuth) -> None:
-    global _PENDING_OPENAI_CODEX
+def _wait_for_callback(pending: _PendingOAuth, notify: _OAuthNotify | None = None) -> None:
+    global _LAST_OPENAI_CODEX_CALLBACK_ERROR, _LAST_OPENAI_CODEX_SAVE_PATH, _PENDING_OPENAI_CODEX
     try:
         code = asyncio.run(pending.server.wait_for_code())
         if not code:
+            _LAST_OPENAI_CODEX_CALLBACK_ERROR = (
+                "OpenAI Codex OAuth callback did not return an authorization code; "
+                "paste the redirect URL with `/login openai-codex <redirect-url-or-code>`"
+            )
+            _notify(notify, _LAST_OPENAI_CODEX_CALLBACK_ERROR, "warn")
             return
         credentials = asyncio.run(
             exchange_openai_authorization_code(code, pending.verifier)
         )
         save_oauth_credentials(OPENAI_CODEX_PROVIDER, credentials)
-    except Exception:
+        _LAST_OPENAI_CODEX_CALLBACK_ERROR = None
+        _LAST_OPENAI_CODEX_SAVE_PATH = str(resolve_auth_path())
+        _notify(
+            notify,
+            f"OpenAI Codex OAuth credential saved: {_LAST_OPENAI_CODEX_SAVE_PATH}",
+            "info",
+        )
+    except Exception as exc:
+        _LAST_OPENAI_CODEX_CALLBACK_ERROR = (
+            f"OpenAI Codex OAuth callback failed after authorization: {exc}"
+        )
+        _notify(notify, _LAST_OPENAI_CODEX_CALLBACK_ERROR, "error")
         return
     finally:
         pending.server.close()
@@ -145,13 +169,33 @@ def _wait_for_callback(pending: _PendingOAuth) -> None:
 
 
 def _auth_status_lines() -> str:
+    auth_path = resolve_auth_path()
     credentials = list_credentials()
+    diagnostics = [f"path: {auth_path}"]
+    if _LAST_OPENAI_CODEX_CALLBACK_ERROR:
+        diagnostics.append(f"last openai-codex oauth error: {_LAST_OPENAI_CODEX_CALLBACK_ERROR}")
+    elif _LAST_OPENAI_CODEX_SAVE_PATH:
+        diagnostics.append(f"last openai-codex oauth save: {_LAST_OPENAI_CODEX_SAVE_PATH}")
     if not credentials:
-        return "auth: no stored credentials"
+        return "\n".join(["auth: no stored credentials", *diagnostics])
     lines = ["auth:"]
     for provider, entry in sorted(credentials.items()):
         lines.append(f"- {provider}: {_entry_summary(entry)}")
+    lines.extend(diagnostics)
     return "\n".join(lines)
+
+
+def _controller_notifier(controller: Any) -> _OAuthNotify:
+    def notify(message: str, level: str) -> None:
+        controller.status.push_notification(message, level=level, ttl_seconds=8.0)
+
+    return notify
+
+
+def _notify(notify: _OAuthNotify | None, message: str, level: str) -> None:
+    if notify is None:
+        return
+    notify(message, level)
 
 
 def _entry_summary(entry: dict[str, Any]) -> str:
