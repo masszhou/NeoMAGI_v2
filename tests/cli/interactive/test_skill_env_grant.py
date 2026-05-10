@@ -40,8 +40,8 @@ def test_decide_gate_state_conflict_when_different_skill() -> None:
 
 
 def _write_settings(cwd: Path, payload: dict) -> None:
-    (cwd / ".pi").mkdir(parents=True, exist_ok=True)
-    (cwd / ".pi" / "settings.json").write_text(json.dumps(payload), encoding="utf-8")
+    (cwd / ".magipi").mkdir(parents=True, exist_ok=True)
+    (cwd / ".magipi" / "settings.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _resolver_inputs(cwd: Path, agent_dir: Path) -> tuple[Path, Path, object]:
@@ -58,12 +58,19 @@ def test_resolve_grant_success_for_project_settings(tmp_path) -> None:
         {
             "resources": {
                 "skillEnv": {
-                    "brave-search": {"envFile": ".env.brave", "allow": ["BRAVE_API_KEY"]}
+                    "brave-search": {
+                        "envFile": ".magipi/secrets/brave-search.env",
+                        "allow": ["BRAVE_API_KEY"],
+                    }
                 }
             }
         },
     )
-    (tmp_path / ".env.brave").write_text("BRAVE_API_KEY=FAKE_VALUE\n", encoding="utf-8")
+    (tmp_path / ".magipi" / "secrets").mkdir(parents=True)
+    (tmp_path / ".magipi" / "secrets" / "brave-search.env").write_text(
+        "BRAVE_API_KEY=FAKE_VALUE\n",
+        encoding="utf-8",
+    )
     cwd, agent_dir, loaded = _resolver_inputs(tmp_path, agent_dir)
 
     grant, failure = resolve_skill_env_grant(
@@ -74,7 +81,7 @@ def test_resolve_grant_success_for_project_settings(tmp_path) -> None:
     assert grant is not None
     assert grant.skill_name == "brave-search"
     assert grant.env["BRAVE_API_KEY"] == "FAKE_VALUE"
-    assert grant.source == ".env.brave"
+    assert grant.source == ".magipi/secrets/brave-search.env"
 
 
 def test_resolve_grant_returns_none_when_skillenv_unconfigured(tmp_path) -> None:
@@ -144,7 +151,7 @@ def test_resolve_grant_reports_missing_allow_var(tmp_path) -> None:
     assert failure.missing_names == ("EXTRA_TOKEN",)
 
 
-def test_resolve_grant_uses_agent_dir_when_only_global_configured(tmp_path) -> None:
+def test_resolve_grant_ignores_global_skill_env(tmp_path) -> None:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     (agent_dir / "settings.json").write_text(
@@ -167,8 +174,33 @@ def test_resolve_grant_uses_agent_dir_when_only_global_configured(tmp_path) -> N
     )
 
     assert failure is None
-    assert grant is not None
-    assert grant.env["BRAVE_API_KEY"] == "FAKE_VALUE"
+    assert grant is None
+
+
+def test_resolve_grant_rejects_low_quality_allowed_value(tmp_path) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    _write_settings(
+        tmp_path,
+        {
+            "resources": {
+                "skillEnv": {
+                    "brave-search": {"envFile": ".env.brave", "allow": ["BRAVE_API_KEY"]}
+                }
+            }
+        },
+    )
+    (tmp_path / ".env.brave").write_text("BRAVE_API_KEY=token\n", encoding="utf-8")
+    cwd, agent_dir, loaded = _resolver_inputs(tmp_path, agent_dir)
+
+    grant, failure = resolve_skill_env_grant(
+        "brave-search", loaded_settings=loaded, cwd=cwd, agent_dir=agent_dir
+    )
+
+    assert grant is None
+    assert failure is not None
+    assert failure.reason == "low_quality_value"
+    assert failure.missing_names == ("BRAVE_API_KEY",)
 
 
 def test_format_setup_error_missing_env_file_matches_legacy_string() -> None:
@@ -227,5 +259,5 @@ def test_format_setup_error_does_not_leak_env_values() -> None:
 
 @pytest.fixture(autouse=True)
 def _isolated_settings(monkeypatch, tmp_path):
-    """Settings manager touches NEOMAGI_AGENT_DIR; isolate per-test."""
-    monkeypatch.setenv("NEOMAGI_AGENT_DIR", str(tmp_path / "_agent_iso"))
+    """Keep XDG-derived defaults inside each test when a default manager is used."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "_xdg"))

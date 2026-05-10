@@ -69,6 +69,17 @@ _SENSITIVE_PATH_MARKERS = (
     "id_rsa",
     "id_ed25519",
 )
+_LOW_ENTROPY_LITERAL_DENYLIST = {
+    "test",
+    "key",
+    "secret",
+    "password",
+    "token",
+    "none",
+    "null",
+    "dummy",
+    "example",
+}
 
 
 @dataclass(slots=True)
@@ -152,7 +163,12 @@ def redacted_command_preview(command: str) -> tuple[str, bool]:
 def redact_literal_values(text: str, values: list[str] | tuple[str, ...]) -> tuple[str, bool]:
     redacted = text
     applied = False
-    for value in sorted({item for item in values if item}, key=len, reverse=True):
+    candidates = {
+        item
+        for item in values
+        if item and len(item.strip()) >= 8 and item.strip().lower() not in _LOW_ENTROPY_LITERAL_DENYLIST
+    }
+    for value in sorted(candidates, key=len, reverse=True):
         if value in redacted:
             redacted = redacted.replace(value, REDACTED_VALUE)
             applied = True

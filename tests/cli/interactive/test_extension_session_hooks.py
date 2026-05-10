@@ -14,8 +14,8 @@ class FailingSummaryGenerator:
 
 
 def test_extension_compaction_hook_replaces_summary_with_from_hook(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "compact_hook.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "compact_hook.py").write_text(
         """
 def setup(api):
     def before(event):
@@ -58,8 +58,8 @@ def setup(api):
 
 
 def test_extension_compaction_hook_can_cancel(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "compact_cancel.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "compact_cancel.py").write_text(
         """
 def setup(api):
     api.on("session_before_compact", lambda _event: {"cancel": True})
@@ -84,8 +84,8 @@ def setup(api):
 
 
 def test_extension_tree_hook_replaces_branch_summary_with_from_hook(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "tree_hook.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "tree_hook.py").write_text(
         """
 def setup(api):
     def before(event):

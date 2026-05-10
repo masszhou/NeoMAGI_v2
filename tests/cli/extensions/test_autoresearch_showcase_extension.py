@@ -18,7 +18,7 @@ from cli.extensions.runner import ExtensionRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SHOWCASE_WORKSPACE = REPO_ROOT / "showcase" / "qmd_autoresearch_mini" / "workspace"
-EXTENSION_PATH = SHOWCASE_WORKSPACE / ".pi" / "extensions" / "autoresearch.py"
+EXTENSION_PATH = SHOWCASE_WORKSPACE / ".magipi" / "extensions" / "autoresearch.py"
 
 
 def test_mini_benchmark_outputs_stable_metric_lines() -> None:
@@ -254,7 +254,7 @@ async def _call_tool(
     args: dict[str, Any],
     exec_impl: Any | None = None,
 ) -> dict[str, Any]:
-    loaded = await load_extensions([workspace / ".pi" / "extensions" / "autoresearch.py"], cwd=workspace)
+    loaded = await load_extensions([workspace / ".magipi" / "extensions" / "autoresearch.py"], cwd=workspace)
     runner = ExtensionRunner(loaded.runtime)
     if exec_impl is not None:
         runner.bind_core(exec=exec_impl)

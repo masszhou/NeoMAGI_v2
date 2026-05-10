@@ -1,7 +1,7 @@
 Fixture: project skill
 
 Purpose:
-- Exercises project-local `.pi/skills/<name>/SKILL.md` discovery.
+- Exercises project-local `.magipi/skills/<name>/SKILL.md` discovery.
 - Confirms `/skill:<name>` expands to explicit skill body text without writing memory.
 
 Pi reference:

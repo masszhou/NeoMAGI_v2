@@ -9,7 +9,7 @@ from cli.core.settings import SettingsManager
 
 from .context_files import ContextFile, load_context_files
 from .diagnostics import ResourceDiagnostic
-from .paths import default_agent_dir, resolve_resource_path
+from .paths import default_magipi_resource_root, resolve_resource_path
 from .prompt_templates import PromptTemplate, load_prompt_templates
 from .settings import ResourceSettings, load_resource_settings
 from .skills import Skill, SkillSearchRoot, load_skills
@@ -41,7 +41,7 @@ class ResourceSnapshot:
 @dataclass(slots=True)
 class ResourceLoader:
     cwd: Path
-    agent_dir: Path = field(default_factory=default_agent_dir)
+    agent_dir: Path = field(default_factory=default_magipi_resource_root)
     explicit_extensions: tuple[Path, ...] = ()
     explicit_skills: tuple[Path, ...] = ()
     explicit_prompts: tuple[Path, ...] = ()
@@ -106,6 +106,7 @@ class ResourceLoader:
         self._settings = loaded_settings.settings
         diagnostics = list(loaded_settings.diagnostics)
         extensions = self._discover_extensions(diagnostics)
+        diagnostics.extend(self._inactive_skill_source_diagnostics())
         skills = load_skills(self._skill_roots())
         prompts = load_prompt_templates(self._prompt_paths())
         themes = load_themes(self._theme_paths())
@@ -135,7 +136,7 @@ class ResourceLoader:
     def _extension_sources(self) -> list[SourceInfo]:
         return [
             *_sources_from_paths(self._settings.extensions, base_dir=self.agent_dir, cwd=self.cwd, scope="user", origin="settings", priority=0),
-            SourceInfo("project", "auto", self.cwd / ".pi" / "extensions", self.cwd / ".pi", 1),
+            SourceInfo("project", "auto", self.cwd / ".magipi" / "extensions", self.cwd / ".magipi", 1),
             SourceInfo("user", "auto", self.agent_dir / "extensions", self.agent_dir, 2),
             *[
                 SourceInfo("explicit", "explicit", path, self.cwd, 3)
@@ -148,27 +149,21 @@ class ResourceLoader:
         ]
 
     def _skill_roots(self) -> list[SkillSearchRoot]:
-        roots: list[SkillSearchRoot] = []
-        roots.extend(
-            SkillSearchRoot(source.path, allow_root_markdown=True, source=source)
-            for source in _sources_from_paths(self._settings.skills, base_dir=self.agent_dir, cwd=self.cwd, scope="user", origin="settings", priority=0)
-        )
-        roots.append(SkillSearchRoot(self.cwd / ".pi" / "skills", allow_root_markdown=True, source=SourceInfo("project", "auto", self.cwd / ".pi" / "skills", self.cwd / ".pi", 1)))
-        roots.append(SkillSearchRoot(self.agent_dir / "skills", allow_root_markdown=True, source=SourceInfo("user", "auto", self.agent_dir / "skills", self.agent_dir, 2)))
-        home_like_dir = self.agent_dir.parent.parent if self.agent_dir.name == "agent" else self.agent_dir.parent
-        agents_skills_dir = home_like_dir / ".agents" / "skills"
-        roots.append(SkillSearchRoot(agents_skills_dir, allow_root_markdown=False, source=SourceInfo("user", "auto", agents_skills_dir, home_like_dir, 3)))
-        for directory in [*reversed(self.cwd.parents), self.cwd]:
-            root = directory / ".agents" / "skills"
-            roots.append(SkillSearchRoot(root, allow_root_markdown=False, source=SourceInfo("project", "auto", root, directory, 4)))
-        roots.extend(SkillSearchRoot(path, allow_root_markdown=True, source=SourceInfo("explicit", "explicit", path, self.cwd, 5)) for path in self.explicit_skills)
-        roots.extend(SkillSearchRoot(path, allow_root_markdown=True, source=SourceInfo("temporary", "extension", path, path.parent, 6)) for path in self._extension_paths.skills)
-        return roots
+        root = self.cwd / ".magipi" / "skills"
+        return [
+            SkillSearchRoot(
+                root,
+                allow_root_markdown=True,
+                source=SourceInfo("project", "auto", root, self.cwd / ".magipi", 1),
+                containment_root=root,
+                display_root=self.cwd,
+            )
+        ]
 
     def _prompt_paths(self) -> list[Path]:
         return [
             *[source.path for source in _sources_from_paths(self._settings.prompts, base_dir=self.agent_dir, cwd=self.cwd, scope="user", origin="settings", priority=0)],
-            self.cwd / ".pi" / "prompts",
+            self.cwd / ".magipi" / "prompts",
             self.agent_dir / "prompts",
             *self.explicit_prompts,
             *self._extension_paths.prompts,
@@ -177,20 +172,60 @@ class ResourceLoader:
     def _theme_paths(self) -> list[Path]:
         return [
             *[source.path for source in _sources_from_paths(self._settings.themes, base_dir=self.agent_dir, cwd=self.cwd, scope="user", origin="settings", priority=0)],
-            self.cwd / ".pi" / "themes",
+            self.cwd / ".magipi" / "themes",
             self.agent_dir / "themes",
             *self.explicit_themes,
             *self._extension_paths.themes,
         ]
 
     def _system_prompt(self) -> str | None:
-        return load_prompt_file(self.cwd / ".pi" / "SYSTEM.md") or load_prompt_file(self.agent_dir / "SYSTEM.md")
+        return load_prompt_file(self.cwd / ".magipi" / "SYSTEM.md") or load_prompt_file(self.agent_dir / "SYSTEM.md")
 
     def _append_system_prompts(self) -> list[str | None]:
         return [
-            load_prompt_file(self.cwd / ".pi" / "APPEND_SYSTEM.md"),
+            load_prompt_file(self.cwd / ".magipi" / "APPEND_SYSTEM.md"),
             load_prompt_file(self.agent_dir / "APPEND_SYSTEM.md"),
         ]
+
+    def _inactive_skill_source_diagnostics(self) -> list[ResourceDiagnostic]:
+        diagnostics: list[ResourceDiagnostic] = []
+        for value in self._settings.skills:
+            diagnostics.append(
+                ResourceDiagnostic(
+                    type="warning",
+                    message=(
+                        "resources.skills is ignored for active runtime discovery; "
+                        "materialize skills under .magipi/skills instead"
+                    ),
+                    path=str(value),
+                    resource_type="skill",
+                )
+            )
+        for path in self.explicit_skills:
+            diagnostics.append(
+                ResourceDiagnostic(
+                    type="warning",
+                    message=(
+                        "explicit skill paths are ignored for active runtime discovery; "
+                        "materialize skills under .magipi/skills instead"
+                    ),
+                    path=str(path),
+                    resource_type="skill",
+                )
+            )
+        for path in self._extension_paths.skills:
+            diagnostics.append(
+                ResourceDiagnostic(
+                    type="warning",
+                    message=(
+                        "extension-contributed skill paths are ignored for active runtime discovery; "
+                        "materialize skills under .magipi/skills instead"
+                    ),
+                    path=str(path),
+                    resource_type="skill",
+                )
+            )
+        return diagnostics
 
 
 def _extension_files(source: SourceInfo, diagnostics: list[ResourceDiagnostic]) -> list[ResourceInfo]:

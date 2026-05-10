@@ -139,8 +139,8 @@ def test_provider_unregister_removes_extension_owned_record(tmp_path) -> None:
 
 
 def test_extension_provider_registration_applies_to_live_model_registry(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "provider.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "provider.py").write_text(
         """
 def setup(api):
     api.register_provider(

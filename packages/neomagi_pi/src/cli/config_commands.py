@@ -1,9 +1,9 @@
-"""``magipi config`` subcommands (ADR-0019).
+"""``magipi config`` subcommands (ADR-0019/0020).
 
-- ``config init`` writes the bundled ``.env`` template into the user config
-  directory; refuses to clobber unless ``--force`` is given (and then backs
-  the existing file up to ``<path>.bak``). On Unix the directory is set to
-  ``0700`` and the file to ``0600``.
+- ``config init`` writes the bundled ``database.env`` template into the user
+  config secrets directory; refuses to clobber unless ``--force`` is given
+  (and then backs the existing file up to ``<path>.bak``). On Unix the newly
+  created secret directories are set to ``0700`` and the file to ``0600``.
 - ``config path`` prints the active DATABASE_* source so users can tell
   which file (or shell environment) is winning.
 """
@@ -18,9 +18,9 @@ from typing import Mapping
 
 from storage.config import (
     DatabaseConfigError,
-    _user_config_dotenv_path,
     read_env_template,
     resolve_database_config,
+    user_database_env_path,
     would_fall_back_to,
 )
 
@@ -35,9 +35,9 @@ def run_config_command(argv: list[str], *, prog: str) -> int:
 
     init_parser = sub.add_parser(
         "init",
-        help="Write the bundled .env template to the user config directory.",
+        help="Write the bundled database.env template to the user config secrets directory.",
         description=(
-            "Write the bundled .env template to the user config directory. "
+            "Write the bundled database.env template to the user config secrets directory. "
             "Refuses to overwrite unless --force is given; then backs up the "
             "existing file to <path>.bak."
         ),
@@ -45,7 +45,7 @@ def run_config_command(argv: list[str], *, prog: str) -> int:
     init_parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite an existing .env (after backing it up to <path>.bak).",
+        help="Overwrite an existing database.env (after backing it up to <path>.bak).",
     )
     init_parser.add_argument(
         "--path",
@@ -100,7 +100,7 @@ def _run_init(
     target = (
         override_path.expanduser()
         if override_path is not None
-        else _user_config_dotenv_path(env_values)
+        else user_database_env_path(env_values)
     )
 
     if target.exists() and not force:

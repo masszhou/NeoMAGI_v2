@@ -46,7 +46,7 @@ def test_parse_args_collects_env_file(tmp_path) -> None:
 
 
 def test_config_init_writes_template(tmp_path) -> None:
-    target = tmp_path / "neomagi" / ".env"
+    target = tmp_path / "neomagi" / "secrets" / "database.env"
     out = io.StringIO()
     err = io.StringIO()
 
@@ -61,7 +61,7 @@ def test_config_init_writes_template(tmp_path) -> None:
 
 
 def test_config_init_refuses_overwrite_without_force(tmp_path) -> None:
-    target = tmp_path / "neomagi" / ".env"
+    target = tmp_path / "neomagi" / "secrets" / "database.env"
     target.parent.mkdir(parents=True)
     target.write_text("DATABASE_HOST=existing\n", encoding="utf-8")
     out = io.StringIO()
@@ -75,7 +75,7 @@ def test_config_init_refuses_overwrite_without_force(tmp_path) -> None:
 
 
 def test_config_init_force_backs_up_existing(tmp_path) -> None:
-    target = tmp_path / "neomagi" / ".env"
+    target = tmp_path / "neomagi" / "secrets" / "database.env"
     target.parent.mkdir(parents=True)
     target.write_text("DATABASE_HOST=existing\n", encoding="utf-8")
     out = io.StringIO()
@@ -93,7 +93,7 @@ def test_config_init_force_backs_up_existing(tmp_path) -> None:
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only permission expectations")
 def test_config_init_sets_unix_permissions(tmp_path) -> None:
-    target = tmp_path / "private" / ".env"
+    target = tmp_path / "private" / "secrets" / "database.env"
     out = io.StringIO()
     err = io.StringIO()
 
@@ -113,7 +113,7 @@ def test_config_init_preserves_existing_parent_mode(tmp_path) -> None:
     shared = tmp_path / "shared-config"
     shared.mkdir()
     shared.chmod(0o755)
-    target = shared / "neomagi" / ".env"
+    target = shared / "neomagi" / "secrets" / "database.env"
     out = io.StringIO()
     err = io.StringIO()
 
@@ -130,7 +130,7 @@ def test_config_init_preserves_existing_parent_mode(tmp_path) -> None:
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only permission expectations")
 def test_config_init_warns_when_chmod_fails(tmp_path, monkeypatch) -> None:
-    target = tmp_path / "neomagi" / ".env"
+    target = tmp_path / "neomagi" / "secrets" / "database.env"
     out = io.StringIO()
     err = io.StringIO()
 
@@ -160,12 +160,12 @@ def test_config_path_reports_file_source(tmp_path) -> None:
 
 
 def test_config_path_reports_env_with_fallback(tmp_path, monkeypatch) -> None:
-    user_path = tmp_path / "userconfig" / ".env"
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"
     user_path.parent.mkdir(parents=True)
     _write_env(user_path, host="user-host")
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
     monkeypatch.setattr(config_module, "_app_root_dotenv_path", lambda: None)
@@ -191,8 +191,8 @@ def test_config_path_reports_env_with_fallback(tmp_path, monkeypatch) -> None:
 def test_config_path_propagates_no_source_error(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
-        lambda env_values: tmp_path / "missing" / ".env",
+        "user_database_env_path",
+        lambda env_values: tmp_path / "missing" / "secrets" / "database.env",
     )
     monkeypatch.setattr(config_module, "_app_root_dotenv_path", lambda: None)
     out = io.StringIO()
@@ -205,7 +205,7 @@ def test_config_path_propagates_no_source_error(tmp_path, monkeypatch) -> None:
 
 
 def test_run_config_command_dispatches_init(tmp_path, capsys) -> None:
-    target = tmp_path / "neomagi" / ".env"
+    target = tmp_path / "neomagi" / "secrets" / "database.env"
 
     rc = run_config_command(["init", "--path", str(target)], prog="magipi")
 
@@ -246,7 +246,7 @@ def _run_module(*args: str, env_overrides: dict[str, str] | None = None,
 
 
 def test_module_config_init_subprocess_writes_template(tmp_path) -> None:
-    target = tmp_path / "neomagi" / ".env"
+    target = tmp_path / "neomagi" / "secrets" / "database.env"
 
     result = _run_module("config", "init", "--path", str(target))
 

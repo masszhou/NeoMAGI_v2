@@ -6,8 +6,8 @@ from tui.app import TUIApp
 
 
 def _controller_with_extension(tmp_path, source: str) -> tuple[InteractiveController, InteractiveAgentRuntime]:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "renderer.py").write_text(source, encoding="utf-8")
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "renderer.py").write_text(source, encoding="utf-8")
     runtime = InteractiveAgentRuntime(cwd=tmp_path)
     controller = InteractiveController(tui_app=TUIApp(), runtime=runtime)
     controller.bootstrap()

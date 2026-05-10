@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -135,11 +136,10 @@ class LoadedSettings:
 
 
 class SettingsManager:
-    """Load, merge, and save Pi-compatible product settings.
+    """Load, merge, and save MagiPi product settings.
 
-    M9 keeps the Pi-compatible global path (`~/.pi/agent/settings.json`, or
-    `NEOMAGI_AGENT_DIR/settings.json`) as the single global product/resource
-    settings path. Project settings live at `<cwd>/.pi/settings.json`.
+    Global settings live at `<user-config-root>/magipi/settings.json`.
+    Project settings live at `<cwd>/.magipi/settings.json`.
     """
 
     def __init__(
@@ -150,7 +150,7 @@ class SettingsManager:
         overrides: Mapping[str, Any] | None = None,
     ) -> None:
         self.cwd = Path(cwd).resolve()
-        self.agent_dir = Path(agent_dir).expanduser().resolve() if agent_dir is not None else _default_agent_dir()
+        self.agent_dir = Path(agent_dir).expanduser().resolve() if agent_dir is not None else _default_magipi_resource_root()
         self.overrides = dict(overrides or {})
 
     @property
@@ -159,18 +159,19 @@ class SettingsManager:
 
     @property
     def project_path(self) -> Path:
-        return self.cwd / ".pi" / "settings.json"
+        return self.cwd / ".magipi" / "settings.json"
 
     def load(self) -> LoadedSettings:
         diagnostics: list[SettingsDiagnostic] = []
         global_raw = _normalize_legacy_resource_keys(
             _read_json_object(self.global_path, diagnostics, scope="global")
         )
+        _diagnose_global_skill_env(global_raw, diagnostics, self.global_path)
         project_raw = _normalize_legacy_resource_keys(
             _read_json_object(self.project_path, diagnostics, scope="project")
         )
         sanitized_project = _strip_project_secrets(project_raw, diagnostics, self.project_path)
-        merged = _deep_merge(_deep_merge(_defaults(), global_raw), sanitized_project)
+        merged = _merge_product_settings(_deep_merge(_defaults(), global_raw), sanitized_project)
         if self.overrides:
             merged = _deep_merge(merged, dict(self.overrides))
         try:
@@ -197,6 +198,8 @@ class SettingsManager:
         path = self._path_for_scope(scope)
         raw = _read_json_object(path, [], scope=scope)
         _set_dotted(raw, dotted_path, value)
+        if scope == "project":
+            _ensure_project_gitignore(self.cwd)
         _write_json_object(path, raw)
         return self.load()
 
@@ -208,6 +211,8 @@ class SettingsManager:
         path = self._path_for_scope(scope)
         raw = _read_json_object(path, [], scope=scope)
         mutator(raw)
+        if scope == "project":
+            _ensure_project_gitignore(self.cwd)
         _write_json_object(path, raw)
         return self.load()
 
@@ -223,11 +228,15 @@ def _defaults() -> dict[str, Any]:
     return ProductSettings().model_dump(by_alias=True, exclude_none=True)
 
 
-def _default_agent_dir() -> Path:
-    override = os.environ.get("NEOMAGI_AGENT_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
-    return (Path.home() / ".pi" / "agent").resolve()
+def _default_magipi_resource_root() -> Path:
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg:
+        return (Path(xdg).expanduser() / "neomagi" / "magipi").resolve()
+    if sys.platform == "win32":
+        appdata = (os.environ.get("APPDATA") or "").strip()
+        if appdata:
+            return (Path(appdata) / "neomagi" / "magipi").resolve()
+    return (Path.home() / ".config" / "neomagi" / "magipi").resolve()
 
 
 def _read_json_object(
@@ -261,6 +270,38 @@ def _read_json_object(
         )
         return {}
     return dict(data)
+
+
+def _ensure_project_gitignore(cwd: Path) -> None:
+    magipi_dir = cwd / ".magipi"
+    magipi_dir.mkdir(parents=True, exist_ok=True)
+    gitignore = magipi_dir / ".gitignore"
+    existing = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
+    lines = existing.splitlines()
+    if "secrets/" not in lines:
+        lines.append("secrets/")
+        gitignore.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+
+def _diagnose_global_skill_env(
+    raw: dict[str, Any],
+    diagnostics: list[SettingsDiagnostic],
+    path: Path,
+) -> None:
+    resources = raw.get("resources")
+    if not isinstance(resources, dict):
+        return
+    if "skillEnv" not in resources and "skill_env" not in resources:
+        return
+    diagnostics.append(
+        SettingsDiagnostic(
+            severity="warning",
+            message="global resources.skillEnv is ignored at runtime; configure skill env in workspace .magipi/settings.json",
+            path=str(path),
+            scope="global",
+            field="resources.skillEnv",
+        )
+    )
 
 
 def _write_json_object(path: Path, data: Mapping[str, Any]) -> None:
@@ -306,6 +347,22 @@ def _deep_merge(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
             merged[key] = _deep_merge(merged[key], value)
         else:
             merged[key] = value
+    return merged
+
+
+def _merge_product_settings(base: Mapping[str, Any], project: Mapping[str, Any]) -> dict[str, Any]:
+    merged = _deep_merge(base, project)
+    project_resources = project.get("resources")
+    if isinstance(project_resources, Mapping) and (
+        "skillEnv" in project_resources or "skill_env" in project_resources
+    ):
+        resources = dict(merged.get("resources") or {})
+        resources["skillEnv"] = project_resources.get(
+            "skillEnv",
+            project_resources.get("skill_env", {}),
+        )
+        resources.pop("skill_env", None)
+        merged["resources"] = resources
     return merged
 
 

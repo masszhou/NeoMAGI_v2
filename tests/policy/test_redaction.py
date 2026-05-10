@@ -83,3 +83,14 @@ def test_literal_value_redaction_masks_known_runtime_secret_values() -> None:
     assert applied is True
     assert "FAKE_BRAVE_SECRET_VALUE" not in redacted
     assert REDACTED_VALUE in redacted
+
+
+def test_literal_value_redaction_ignores_low_entropy_values() -> None:
+    redacted, applied = redact_literal_values(
+        "test token key short real-secret-value",
+        ("test", "token", "key", "short", "real-secret-value"),
+    )
+
+    assert applied is True
+    assert "test token key short" in redacted
+    assert "real-secret-value" not in redacted

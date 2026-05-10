@@ -167,6 +167,33 @@ def test_skill_prompt_location_points_at_skill_md_file(tmp_path) -> None:
     assert f'location="{skill_dir.resolve()}"' not in prompt
 
 
+def test_skill_prompt_can_use_workspace_relative_display_location(tmp_path) -> None:
+    skill_dir = tmp_path / ".magipi" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text(
+        "---\nname: demo\ndescription: Demo skill description.\n---\nRun {baseDir}/helper.js\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_skills(
+        [
+            SkillSearchRoot(
+                tmp_path / ".magipi" / "skills",
+                allow_root_markdown=True,
+                containment_root=tmp_path / ".magipi" / "skills",
+                display_root=tmp_path,
+            )
+        ]
+    )
+    prompt = format_skills_for_prompt(list(loaded.skills))
+    expanded = expand_skill_command("/skill:demo", list(loaded.skills)) or ""
+
+    assert 'location=".magipi/skills/demo/SKILL.md"' in prompt
+    assert str(skill_path.resolve()) not in prompt
+    assert "Run .magipi/skills/demo/helper.js" in expanded
+
+
 def test_skill_prompt_keeps_compact_attribute_xml_shape(tmp_path) -> None:
     skill_dir = tmp_path / "demo"
     skill_dir.mkdir()

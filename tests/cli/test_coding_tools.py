@@ -450,6 +450,39 @@ def test_bash_skill_env_grant_is_scoped_redacted_and_audited(tmp_path: Path) -> 
     asyncio.run(run())
 
 
+def test_skill_env_grant_only_applies_to_model_bash(tmp_path: Path) -> None:
+    async def run() -> None:
+        grant = SkillEnvGrant(
+            skill_name="brave-search",
+            env={"BRAVE_API_KEY": "FAKE_BRAVE_SECRET_VALUE"},
+            source=".env.brave",
+        )
+        bash_definition = create_all_tool_definitions(tmp_path)["bash"]
+        results: dict[str, AgentToolResult] = {}
+        for actor in ("user", "extension"):
+            tool = wrap_tool_definition(
+                bash_definition,
+                ToolRuntime(
+                    cwd=str(tmp_path),
+                    actor=actor,
+                    skill_env_grant_provider=lambda: grant,
+                ),
+            )
+            results[actor] = await tool.execute(
+                f"{actor}-bash",
+                {"command": 'test -z "${BRAVE_API_KEY:-}" && echo missing || echo present'},
+                None,
+                None,
+            )
+
+        assert "missing" in results["user"].content[0]["text"]
+        assert "missing" in results["extension"].content[0]["text"]
+        assert "skillEnv" not in results["user"].details
+        assert "skillEnv" not in results["extension"].details
+
+    asyncio.run(run())
+
+
 def test_runtime_artifact_store_uses_private_permissions() -> None:
     store = RuntimeArtifactStore(f"pytest-{time.time_ns()}")
     try:

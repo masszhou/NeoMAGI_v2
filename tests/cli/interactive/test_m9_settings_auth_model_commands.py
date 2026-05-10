@@ -180,7 +180,7 @@ def test_scoped_models_persist_to_project_settings(tmp_path: Path) -> None:
         # normalizes to the canonical three-segment form.
         _dispatch(controller, "/scoped-models faux/faux-1")
 
-        settings = json.loads((tmp_path / ".pi" / "settings.json").read_text())
+        settings = json.loads((tmp_path / ".magipi" / "settings.json").read_text())
         assert settings["model"]["enabledModels"] == ["faux/local/faux-1"]
     finally:
         runtime.shutdown()

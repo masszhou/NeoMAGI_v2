@@ -29,8 +29,8 @@ SECRET_VALUE_RE = re.compile(
     r"github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b"
 )
 VALID_STATUSES = {"baseline", "keep", "discard", "crash", "checks_failed"}
-PRESERVED_PREFIXES = ("autoresearch.", "autoresearch-artifacts/", ".pi/")
-PRESERVED_FILES = {"autoresearch.md", "autoresearch.sh", "autoresearch.jsonl", ".pi"}
+PRESERVED_PREFIXES = ("autoresearch.", "autoresearch-artifacts/", ".magipi/")
+PRESERVED_FILES = {"autoresearch.md", "autoresearch.sh", "autoresearch.jsonl", ".magipi"}
 
 
 def setup(api: Any) -> None:
@@ -458,7 +458,7 @@ def _git_lines(workdir: Path, *args: str) -> list[str]:
 
 
 def _existing_preserved_paths(workdir: Path) -> list[str]:
-    return [rel for rel in [".pi", "autoresearch.md", "autoresearch.sh", "autoresearch.jsonl", "autoresearch.checks.sh", "autoresearch-artifacts"] if (workdir / rel).exists()]
+    return [rel for rel in [".magipi", "autoresearch.md", "autoresearch.sh", "autoresearch.jsonl", "autoresearch.checks.sh", "autoresearch-artifacts"] if (workdir / rel).exists()]
 
 
 def _is_preserved(rel: str) -> bool:

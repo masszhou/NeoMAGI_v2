@@ -9,8 +9,6 @@ Google, Gmail, Drive, Calendar, Brave, Groq, browser, or VS Code providers to Ne
 
 - `brave-search`
 - `browser-tools`
-- `gccli`
-- `gdcli`
 - `gmcli`
 - `transcribe`
 - `vscode`
@@ -21,26 +19,12 @@ Google, Gmail, Drive, Calendar, Brave, Groq, browser, or VS Code providers to Ne
 Project-level copy or symlink:
 
 ```bash
-mkdir -p .pi/skills
-ln -s ../../showcase/pi_skills_compat/skills/pi-skills .pi/skills/pi-skills
+mkdir -p .magipi/skills
+cp -R showcase/pi_skills_compat/skills/pi-skills .magipi/skills/pi-skills
 ```
 
-Settings-level path in `.pi/settings.json` or `~/.pi/agent/settings.json`:
-
-```json
-{
-  "resources": {
-    "skills": ["./showcase/pi_skills_compat/skills/pi-skills"]
-  }
-}
-```
-
-User-level copy or symlink:
-
-```bash
-mkdir -p ~/.pi/agent/skills
-ln -s "$(pwd)/showcase/pi_skills_compat/skills/pi-skills" ~/.pi/agent/skills/pi-skills
-```
+Runtime skill discovery is workspace-local. Settings-level, global, symlinked external, and pool
+paths are not active skill inputs; copy the pack into `.magipi/skills/` before startup or `/reload`.
 
 ## Execution Boundary
 
@@ -54,5 +38,5 @@ transcripts into session logs or findings.
 ## Upstream Notes
 
 The upstream README at this ref lists a `subagent` requirement, but the repository contains no
-`subagent/SKILL.md`. This pack generates only the eight concrete skill directories found in the
+`subagent/SKILL.md`. This pack generates only the six concrete skill directories found in the
 pinned source tree.

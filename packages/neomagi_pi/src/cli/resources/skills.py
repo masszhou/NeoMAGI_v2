@@ -33,6 +33,16 @@ class Skill:
     base_dir: Path
     source: SourceInfo | None = None
     disable_model_invocation: bool = False
+    display_location: str | None = None
+    display_base_dir: str | None = None
+
+    @property
+    def prompt_location(self) -> str:
+        return self.display_location or str(self.path)
+
+    @property
+    def prompt_base_dir(self) -> str:
+        return self.display_base_dir or str(self.base_dir)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +56,8 @@ class SkillSearchRoot:
     path: Path
     allow_root_markdown: bool = False
     source: SourceInfo | None = None
+    containment_root: Path | None = None
+    display_root: Path | None = None
 
 
 def load_skills(roots: list[SkillSearchRoot | Path]) -> LoadedSkills:
@@ -55,7 +67,13 @@ def load_skills(roots: list[SkillSearchRoot | Path]) -> LoadedSkills:
     for root in roots:
         search_root = root if isinstance(root, SkillSearchRoot) else SkillSearchRoot(Path(root))
         for path in _discover_skill_files(search_root.path, search_root.allow_root_markdown):
-            skill = _load_skill(path, search_root.source, diagnostics)
+            skill = _load_skill(
+                path,
+                search_root.source,
+                diagnostics,
+                containment_root=search_root.containment_root,
+                display_root=search_root.display_root,
+            )
             if skill is None:
                 continue
             if skill.name in seen:
@@ -106,7 +124,7 @@ def format_skills_for_prompt(skills: list[Skill], *, bash_active: bool = False) 
     for skill in visible:
         lines.append(
             f'<skill name="{html.escape(skill.name)}" '
-            f'location="{html.escape(str(skill.path))}">'
+            f'location="{html.escape(skill.prompt_location)}">'
         )
         lines.append(html.escape(skill.description))
         lines.append("</skill>")
@@ -129,10 +147,10 @@ def expand_skill_command_detail(text: str, skills: list[Skill]) -> ResourceComma
         return None
     metadata, body = split_frontmatter(skill.path.read_text(encoding="utf-8"))
     del metadata
-    body = body.strip().replace("{baseDir}", str(skill.base_dir))
+    body = body.strip().replace("{baseDir}", skill.prompt_base_dir)
     expanded = (
-        f'<skill name="{html.escape(skill.name)}" location="{html.escape(str(skill.base_dir))}">\n'
-        f"References are relative to {skill.base_dir}.\n\n"
+        f'<skill name="{html.escape(skill.name)}" location="{html.escape(skill.prompt_base_dir)}">\n'
+        f"References are relative to {skill.prompt_base_dir}.\n\n"
         f"{body}\n"
         "</skill>"
     )
@@ -179,29 +197,43 @@ def _load_skill(
     path: Path,
     source: SourceInfo | None,
     diagnostics: list[ResourceDiagnostic],
+    *,
+    containment_root: Path | None = None,
+    display_root: Path | None = None,
 ) -> Skill | None:
-    try:
-        metadata, body = split_frontmatter(path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    resolved_path = path.resolve()
+    if containment_root is not None and not _is_relative_to(resolved_path, containment_root):
         diagnostics.append(
-            ResourceDiagnostic(type="error", message=f"failed to read skill: {exc}", path=str(path), resource_type="skill")
+            ResourceDiagnostic(
+                type="warning",
+                message="skill SKILL.md resolves outside workspace .magipi/skills; skipping",
+                path=str(resolved_path),
+                resource_type="skill",
+            )
         )
         return None
-    name = str(metadata.get("name") or path.parent.name)
+    try:
+        metadata, body = split_frontmatter(resolved_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        diagnostics.append(
+            ResourceDiagnostic(type="error", message=f"failed to read skill: {exc}", path=str(resolved_path), resource_type="skill")
+        )
+        return None
+    name = str(metadata.get("name") or resolved_path.parent.name)
     description = metadata.get("description")
     if not isinstance(description, str) or not description.strip():
         diagnostics.append(
-            ResourceDiagnostic(type="warning", message="skill description is required", path=str(path), resource_type="skill", name=name)
+            ResourceDiagnostic(type="warning", message="skill description is required", path=str(resolved_path), resource_type="skill", name=name)
         )
         return None
-    for warning in _name_warnings(name, path.parent.name):
-        diagnostics.append(ResourceDiagnostic(type="warning", message=warning, path=str(path), resource_type="skill", name=name))
+    for warning in _name_warnings(name, resolved_path.parent.name):
+        diagnostics.append(ResourceDiagnostic(type="warning", message=warning, path=str(resolved_path), resource_type="skill", name=name))
     if len(description) > MAX_DESCRIPTION_LENGTH:
         diagnostics.append(
             ResourceDiagnostic(
                 type="warning",
                 message=f"description exceeds {MAX_DESCRIPTION_LENGTH} characters ({len(description)})",
-                path=str(path),
+                path=str(resolved_path),
                 resource_type="skill",
                 name=name,
             )
@@ -216,19 +248,40 @@ def _load_skill(
                     f"{', '.join(redirects)!s}; bash calls copying these will be "
                     f"blocked by shell policy. Likely a stale copy — re-sync from showcase."
                 ),
-                path=str(path),
+                path=str(resolved_path),
                 resource_type="skill",
                 name=name,
             )
         )
+    display_location = _display_path(resolved_path, display_root)
+    display_base_dir = _display_path(resolved_path.parent, display_root)
     return Skill(
         name=name,
         description=description.strip(),
-        path=path.resolve(),
-        base_dir=path.parent.resolve(),
+        path=resolved_path,
+        base_dir=resolved_path.parent,
         source=source,
         disable_model_invocation=bool(metadata.get("disable-model-invocation", False)),
+        display_location=display_location,
+        display_base_dir=display_base_dir,
     )
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _display_path(path: Path, root: Path | None) -> str | None:
+    if root is None:
+        return None
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def _policy_incompatible_redirects(body: str) -> list[str]:

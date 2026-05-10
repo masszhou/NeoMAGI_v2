@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neomagi-pi"
-version = "0.1.0"
+version = "0.1.1"
 description = "NeoMAGI Pi-compatible local agent shell"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -33,7 +33,7 @@ packages = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/storage/templates/env.template" = "storage/templates/env.template"
+"src/storage/templates/database.env.template" = "storage/templates/database.env.template"
 
 [tool.hatch.build.targets.sdist]
 include = [

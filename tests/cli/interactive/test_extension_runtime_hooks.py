@@ -26,8 +26,8 @@ def _drain_until_idle(runtime: InteractiveAgentRuntime, *, timeout: float = 3.0)
 
 
 def test_runtime_loads_extension_tool_through_governed_path(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "tool_ext.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "tool_ext.py").write_text(
         """
 async def execute(args, tool_context, signal, on_update):
     return {"content": [{"type": "text", "text": "echo " + args["text"]}], "details": {"ok": True}}
@@ -63,8 +63,8 @@ def setup(api):
 
 
 def test_runtime_extension_tool_call_and_result_hooks(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "hooks.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "hooks.py").write_text(
         """
 def setup(api):
     def before(event):
@@ -102,8 +102,8 @@ def setup(api):
 
 
 def test_runtime_extension_user_bash_intercepts(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "bash_ext.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "bash_ext.py").write_text(
         """
 def setup(api):
     api.on("user_bash", lambda event: {
@@ -122,8 +122,8 @@ def setup(api):
 
 
 def test_runtime_reload_refreshes_extension_commands(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    extension = tmp_path / ".pi" / "extensions" / "cmd.py"
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    extension = tmp_path / ".magipi" / "extensions" / "cmd.py"
     extension.write_text(
         "def setup(api):\n    api.register_command('hello', {'description': 'v1', 'handler': lambda ctx: None})\n",
         encoding="utf-8",
@@ -144,16 +144,16 @@ def test_runtime_reload_refreshes_extension_commands(tmp_path) -> None:
 
 
 def test_runtime_reports_extension_command_collisions(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "a_first.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "a_first.py").write_text(
         "def setup(api):\n    api.register_command('hello', {'description': 'first', 'handler': lambda ctx: None})\n",
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "extensions" / "b_second.py").write_text(
+    (tmp_path / ".magipi" / "extensions" / "b_second.py").write_text(
         "def setup(api):\n    api.register_command('hello', {'description': 'second', 'handler': lambda ctx: None})\n",
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "extensions" / "c_builtin.py").write_text(
+    (tmp_path / ".magipi" / "extensions" / "c_builtin.py").write_text(
         "def setup(api):\n    api.register_command('reload', {'description': 'shadow', 'handler': lambda ctx: None})\n",
         encoding="utf-8",
     )
@@ -193,13 +193,13 @@ def test_reload_command_rejects_while_streaming(tmp_path) -> None:
 
 
 def test_runtime_expands_skill_and_prompt_template_commands(tmp_path) -> None:
-    (tmp_path / ".pi" / "skills" / "reviewer").mkdir(parents=True)
-    (tmp_path / ".pi" / "prompts").mkdir(parents=True)
-    (tmp_path / ".pi" / "skills" / "reviewer" / "SKILL.md").write_text(
+    (tmp_path / ".magipi" / "skills" / "reviewer").mkdir(parents=True)
+    (tmp_path / ".magipi" / "prompts").mkdir(parents=True)
+    (tmp_path / ".magipi" / "skills" / "reviewer" / "SKILL.md").write_text(
         "---\nname: reviewer\ndescription: Review files.\n---\nRead carefully.\n",
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
+    (tmp_path / ".magipi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
     runtime = InteractiveAgentRuntime(cwd=tmp_path)
     try:
         skill = runtime.expand_resource_command("/skill:reviewer target.py")
@@ -213,12 +213,12 @@ def test_runtime_expands_skill_and_prompt_template_commands(tmp_path) -> None:
 
 
 def test_runtime_prepares_resource_command_display_metadata_and_skill_env(tmp_path) -> None:
-    (tmp_path / ".pi" / "skills" / "brave-search").mkdir(parents=True)
-    (tmp_path / ".pi" / "skills" / "brave-search" / "SKILL.md").write_text(
+    (tmp_path / ".magipi" / "skills" / "brave-search").mkdir(parents=True)
+    (tmp_path / ".magipi" / "skills" / "brave-search" / "SKILL.md").write_text(
         "---\nname: brave-search\ndescription: Search the web.\n---\nRun search.\n",
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "settings.json").write_text(
+    (tmp_path / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -251,12 +251,12 @@ def test_runtime_prepares_resource_command_display_metadata_and_skill_env(tmp_pa
 
 
 def test_runtime_skill_env_missing_file_reports_non_secret_setup_error(tmp_path) -> None:
-    (tmp_path / ".pi" / "skills" / "brave-search").mkdir(parents=True)
-    (tmp_path / ".pi" / "skills" / "brave-search" / "SKILL.md").write_text(
+    (tmp_path / ".magipi" / "skills" / "brave-search").mkdir(parents=True)
+    (tmp_path / ".magipi" / "skills" / "brave-search" / "SKILL.md").write_text(
         "---\nname: brave-search\ndescription: Search the web.\n---\nRun search.\n",
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "settings.json").write_text(
+    (tmp_path / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -283,17 +283,17 @@ def test_runtime_skill_env_missing_file_reports_non_secret_setup_error(tmp_path)
 
 
 def test_runtime_respects_disabled_skill_commands_for_expand_and_autocomplete(tmp_path) -> None:
-    (tmp_path / ".pi" / "skills" / "reviewer").mkdir(parents=True)
-    (tmp_path / ".pi" / "prompts").mkdir(parents=True)
-    (tmp_path / ".pi" / "settings.json").write_text(
+    (tmp_path / ".magipi" / "skills" / "reviewer").mkdir(parents=True)
+    (tmp_path / ".magipi" / "prompts").mkdir(parents=True)
+    (tmp_path / ".magipi" / "settings.json").write_text(
         '{"enableSkillCommands": false}',
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "skills" / "reviewer" / "SKILL.md").write_text(
+    (tmp_path / ".magipi" / "skills" / "reviewer" / "SKILL.md").write_text(
         "---\nname: reviewer\ndescription: Review files.\n---\nRead carefully.\n",
         encoding="utf-8",
     )
-    (tmp_path / ".pi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
+    (tmp_path / ".magipi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
     runtime = InteractiveAgentRuntime(cwd=tmp_path)
     try:
         skill = runtime.expand_resource_command("/skill:reviewer target.py")
@@ -309,8 +309,8 @@ def test_runtime_respects_disabled_skill_commands_for_expand_and_autocomplete(tm
 
 
 def test_runtime_extension_set_active_tools_refreshes_tools_without_generation_bump(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "tools.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "tools.py").write_text(
         """
 def setup(api):
     api.register_command("read_only", {
@@ -337,8 +337,8 @@ def setup(api):
 
 
 def test_runtime_input_event_can_transform_or_handle(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "input_ext.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "input_ext.py").write_text(
         """
 def setup(api):
     api.on("input", lambda event: {"action": "transform", "text": event.text + " transformed"})
@@ -355,8 +355,8 @@ def setup(api):
 
 
 def test_runtime_extension_actions_append_custom_entries_and_messages(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "custom.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "custom.py").write_text(
         """
 def setup(api):
     def emit(_ctx):
@@ -385,8 +385,8 @@ def setup(api):
 
 def test_runtime_extension_exec_uses_governed_bash_path(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "exec_ext.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "exec_ext.py").write_text(
         """
 def setup(api):
     async def run(_ctx):
@@ -416,8 +416,8 @@ def setup(api):
 
 
 def test_runtime_extension_before_agent_start_and_provider_hooks(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "agent_hooks.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "agent_hooks.py").write_text(
         """
 def setup(api):
     def before_agent(event):

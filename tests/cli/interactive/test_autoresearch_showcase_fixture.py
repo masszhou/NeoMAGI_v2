@@ -16,7 +16,7 @@ SHOWCASE_WORKSPACE = REPO_ROOT / "showcase" / "qmd_autoresearch_mini" / "workspa
 
 def test_autoresearch_showcase_fixture_loads_extension_skill_and_prompt(tmp_path: Path) -> None:
     async def run() -> None:
-        loader = ResourceLoader(cwd=SHOWCASE_WORKSPACE, agent_dir=tmp_path / ".pi" / "agent")
+        loader = ResourceLoader(cwd=SHOWCASE_WORKSPACE, agent_dir=tmp_path / ".magipi" / "agent")
         await loader.reload()
         first_snapshot = loader.snapshot
         first_extensions = await load_extensions([resource.path for resource in first_snapshot.extensions], cwd=SHOWCASE_WORKSPACE)

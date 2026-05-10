@@ -3,19 +3,33 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
+def user_config_root() -> Path:
+    """Return the NeoMAGI user config root per ADR-0020."""
+
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    if xdg:
+        return (Path(xdg).expanduser() / "neomagi").resolve()
+    if sys.platform == "win32":
+        appdata = (os.environ.get("APPDATA") or "").strip()
+        if appdata:
+            return (Path(appdata) / "neomagi").resolve()
+    return (Path.home() / ".config" / "neomagi").resolve()
+
+
+def default_magipi_resource_root() -> Path:
+    """Return the global MagiPi non-skill resource root per ADR-0020."""
+
+    return user_config_root() / "magipi"
+
+
 def default_agent_dir() -> Path:
-    """Return the Pi-compatible global agent directory.
+    """Backward-compatible name for the global MagiPi resource root."""
 
-    Tests can set ``NEOMAGI_AGENT_DIR`` to avoid touching the real home dir.
-    """
-
-    override = os.environ.get("NEOMAGI_AGENT_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
-    return (Path.home() / ".pi" / "agent").resolve()
+    return default_magipi_resource_root()
 
 
 def resolve_resource_path(value: str | Path, *, base_dir: Path, cwd: Path) -> Path:
@@ -40,4 +54,11 @@ def ancestors_root_to_cwd(cwd: Path) -> list[Path]:
     return list(reversed([resolved, *resolved.parents]))
 
 
-__all__ = ["ancestors_root_to_cwd", "default_agent_dir", "is_relative_to", "resolve_resource_path"]
+__all__ = [
+    "ancestors_root_to_cwd",
+    "default_agent_dir",
+    "default_magipi_resource_root",
+    "is_relative_to",
+    "resolve_resource_path",
+    "user_config_root",
+]

@@ -10,10 +10,10 @@ from cli.resources.settings import load_resource_settings
 def test_settings_manager_merges_global_project_and_preserves_unknown_on_save(
     tmp_path: Path,
 ) -> None:
-    agent_dir = tmp_path / "home" / ".pi" / "agent"
+    agent_dir = tmp_path / "home" / ".magipi" / "agent"
     cwd = tmp_path / "repo"
     agent_dir.mkdir(parents=True)
-    (cwd / ".pi").mkdir(parents=True)
+    (cwd / ".magipi").mkdir(parents=True)
     (agent_dir / "settings.json").write_text(
         json.dumps(
             {
@@ -24,7 +24,7 @@ def test_settings_manager_merges_global_project_and_preserves_unknown_on_save(
         ),
         encoding="utf-8",
     )
-    (cwd / ".pi" / "settings.json").write_text(
+    (cwd / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "model": {"id": "gpt-4o-mini"},
@@ -44,17 +44,67 @@ def test_settings_manager_merges_global_project_and_preserves_unknown_on_save(
     assert loaded.settings.resources.skills == ["project-skills"]
 
     manager.update_value("project", "model.thinkingLevel", "high")
-    saved = json.loads((cwd / ".pi" / "settings.json").read_text(encoding="utf-8"))
+    saved = json.loads((cwd / ".magipi" / "settings.json").read_text(encoding="utf-8"))
     assert saved["projectOnly"] == 1
     assert saved["model"]["thinkingLevel"] == "high"
+    assert (cwd / ".magipi" / ".gitignore").read_text(encoding="utf-8") == "secrets/\n"
+
+
+def test_settings_manager_defaults_to_neomagi_magipi_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+    manager = SettingsManager(cwd=cwd)
+
+    assert manager.global_path == xdg / "neomagi" / "magipi" / "settings.json"
+    assert manager.project_path == cwd / ".magipi" / "settings.json"
+
+
+def test_settings_manager_ignores_old_pi_defaults(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    (cwd / ".pi").mkdir()
+    (cwd / ".pi" / "settings.json").write_text(
+        json.dumps({"model": {"id": "old-project"}}),
+        encoding="utf-8",
+    )
+    old_global = tmp_path / "home" / ".pi" / "agent"
+    old_global.mkdir(parents=True)
+    (old_global / "settings.json").write_text(
+        json.dumps({"model": {"id": "old-global"}}),
+        encoding="utf-8",
+    )
+
+    loaded = SettingsManager(cwd=cwd).load()
+
+    assert loaded.settings.model.id is None
+
+
+def test_settings_manager_load_does_not_create_magipi(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+
+    SettingsManager(cwd=cwd, agent_dir=tmp_path / "agent").load()
+
+    assert not (cwd / ".magipi").exists()
 
 
 def test_project_secret_like_settings_are_diagnostic_only(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     agent_dir = tmp_path / "agent"
-    (cwd / ".pi").mkdir(parents=True)
+    (cwd / ".magipi").mkdir(parents=True)
     agent_dir.mkdir()
-    (cwd / ".pi" / "settings.json").write_text(
+    (cwd / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "providers": {
@@ -91,9 +141,9 @@ def test_project_secret_like_settings_are_diagnostic_only(tmp_path: Path) -> Non
 def test_project_skill_env_settings_keep_references_but_strip_raw_secret(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     agent_dir = tmp_path / "agent"
-    (cwd / ".pi").mkdir(parents=True)
+    (cwd / ".magipi").mkdir(parents=True)
     agent_dir.mkdir()
-    (cwd / ".pi" / "settings.json").write_text(
+    (cwd / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -120,9 +170,9 @@ def test_project_skill_env_settings_keep_references_but_strip_raw_secret(tmp_pat
 def test_resource_settings_project_through_product_schema(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     agent_dir = tmp_path / "agent"
-    (cwd / ".pi").mkdir(parents=True)
+    (cwd / ".magipi").mkdir(parents=True)
     agent_dir.mkdir()
-    (cwd / ".pi" / "settings.json").write_text(
+    (cwd / ".magipi" / "settings.json").write_text(
         json.dumps(
             {"resources": {"enableSkillCommands": False, "prompts": ["./prompts"]}}
         ),
@@ -138,7 +188,7 @@ def test_resource_settings_project_through_product_schema(tmp_path: Path) -> Non
 def test_resource_settings_use_product_merge_semantics(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     agent_dir = tmp_path / "agent"
-    (cwd / ".pi").mkdir(parents=True)
+    (cwd / ".magipi").mkdir(parents=True)
     agent_dir.mkdir()
     (agent_dir / "settings.json").write_text(
         json.dumps(
@@ -153,7 +203,7 @@ def test_resource_settings_use_product_merge_semantics(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (cwd / ".pi" / "settings.json").write_text(
+    (cwd / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -177,9 +227,9 @@ def test_resource_settings_use_product_merge_semantics(tmp_path: Path) -> None:
 def test_resource_settings_projects_skill_env(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     agent_dir = tmp_path / "agent"
-    (cwd / ".pi").mkdir(parents=True)
+    (cwd / ".magipi").mkdir(parents=True)
     agent_dir.mkdir()
-    (cwd / ".pi" / "settings.json").write_text(
+    (cwd / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -203,3 +253,80 @@ def test_resource_settings_projects_skill_env(tmp_path: Path) -> None:
             "allow": ["BRAVE_API_KEY"],
         }
     }
+
+
+def test_resource_settings_do_not_deep_merge_skill_env(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    (cwd / ".magipi").mkdir(parents=True)
+    agent_dir.mkdir()
+    (agent_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.global",
+                            "allow": ["GLOBAL_TOKEN"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (cwd / ".magipi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.project",
+                            "allow": ["PROJECT_TOKEN"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_resource_settings(cwd, agent_dir=agent_dir)
+
+    assert loaded.settings.skill_env == {
+        "brave-search": {
+            "envFile": ".env.project",
+            "allow": ["PROJECT_TOKEN"],
+        }
+    }
+
+
+def test_global_skill_env_emits_ignored_runtime_diagnostic(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    agent_dir = tmp_path / "agent"
+    cwd.mkdir()
+    agent_dir.mkdir()
+    (agent_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "skillEnv": {
+                        "brave-search": {
+                            "envFile": ".env.global",
+                            "allow": ["GLOBAL_TOKEN"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = SettingsManager(cwd=cwd, agent_dir=agent_dir).load()
+
+    assert any(
+        diagnostic.scope == "global"
+        and diagnostic.field == "resources.skillEnv"
+        and "ignored at runtime" in diagnostic.message
+        for diagnostic in loaded.diagnostics
+    )

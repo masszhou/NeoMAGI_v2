@@ -15,11 +15,11 @@ from cli.tools.definitions import SkillEnvGrant
 
 @pytest.fixture(autouse=True)
 def _isolated_agent_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEOMAGI_AGENT_DIR", str(tmp_path / "_agent_iso"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "_xdg"))
 
 
 def _write_brave_skill(workspace: Path) -> Path:
-    skill_dir = workspace / ".pi" / "skills" / "brave-search"
+    skill_dir = workspace / ".magipi" / "skills" / "brave-search"
     skill_dir.mkdir(parents=True)
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text(
@@ -30,7 +30,7 @@ def _write_brave_skill(workspace: Path) -> Path:
 
 
 def _write_gmcli_skill(workspace: Path) -> Path:
-    skill_dir = workspace / ".pi" / "skills" / "gmcli"
+    skill_dir = workspace / ".magipi" / "skills" / "gmcli"
     skill_dir.mkdir(parents=True)
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text(
@@ -41,7 +41,7 @@ def _write_gmcli_skill(workspace: Path) -> Path:
 
 
 def _write_brave_settings(workspace: Path) -> None:
-    (workspace / ".pi" / "settings.json").write_text(
+    (workspace / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -218,7 +218,7 @@ def test_missing_env_file_emits_skipped_with_source_no_secret(tmp_path) -> None:
 
 def test_missing_allow_var_emits_skipped_with_missing_names(tmp_path) -> None:
     skill_path = _write_brave_skill(tmp_path)
-    (tmp_path / ".pi" / "settings.json").write_text(
+    (tmp_path / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -250,8 +250,26 @@ def test_missing_allow_var_emits_skipped_with_missing_names(tmp_path) -> None:
         runtime.shutdown()
 
 
+def test_low_quality_secret_value_emits_skipped_without_value(tmp_path) -> None:
+    skill_path = _write_brave_skill(tmp_path)
+    _write_brave_settings(tmp_path)
+    (tmp_path / ".env.brave").write_text("BRAVE_API_KEY=token\n", encoding="utf-8")
+    runtime = InteractiveAgentRuntime(cwd=tmp_path)
+    try:
+        result = _run_after_tool_call(runtime, _make_read_context(skill_path=skill_path))
+
+        assert runtime._active_skill_env_grant is None  # noqa: SLF001
+        assert result is not None
+        skipped = result.details["skillEnvActivationSkipped"]
+        assert skipped["reason"] == "low_quality_value"
+        assert skipped["missingNames"] == ["BRAVE_API_KEY"]
+        assert "token" not in json.dumps(result.details)
+    finally:
+        runtime.shutdown()
+
+
 def test_disable_model_invocation_skill_emits_skipped_disabled(tmp_path) -> None:
-    skill_dir = tmp_path / ".pi" / "skills" / "brave-search"
+    skill_dir = tmp_path / ".magipi" / "skills" / "brave-search"
     skill_dir.mkdir(parents=True)
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text(
@@ -279,7 +297,7 @@ def test_disable_model_invocation_skill_emits_skipped_disabled(tmp_path) -> None
 def test_second_skill_read_emits_conflict_without_overwriting(tmp_path) -> None:
     brave_path = _write_brave_skill(tmp_path)
     gmcli_path = _write_gmcli_skill(tmp_path)
-    (tmp_path / ".pi" / "settings.json").write_text(
+    (tmp_path / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {
@@ -394,7 +412,7 @@ def test_apply_queued_skill_env_grant_idempotent_for_same_skill(tmp_path) -> Non
 def test_explicit_skill_path_then_read_other_skill_emits_conflict(tmp_path) -> None:
     brave_path = _write_brave_skill(tmp_path)
     gmcli_path = _write_gmcli_skill(tmp_path)
-    (tmp_path / ".pi" / "settings.json").write_text(
+    (tmp_path / ".magipi" / "settings.json").write_text(
         json.dumps(
             {
                 "resources": {

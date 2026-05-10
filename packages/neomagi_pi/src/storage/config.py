@@ -1,10 +1,11 @@
 """Database configuration for Postgres-backed durable session storage.
 
-Lookup order is fixed by ADR-0019: ``--env-file`` → shell ``DATABASE_*`` →
-``NEOMAGI_ENV_FILE`` → user config ``.env`` → repo ``.env`` (only inside an
-editable repo checkout). Sources are picked as a *group*: required fields
-never merge across sources. This protects against "stale shell host + old
-file password" connecting to the wrong database (per ADR-0007).
+Lookup order is fixed by ADR-0019/0020: ``--env-file`` → shell
+``DATABASE_*`` → ``NEOMAGI_ENV_FILE`` → user config
+``secrets/database.env`` → repo ``.env`` (only inside an editable repo
+checkout). Sources are picked as a *group*: required fields never merge
+across sources. This protects against "stale shell host + old file password"
+connecting to the wrong database (per ADR-0007).
 """
 
 from __future__ import annotations
@@ -63,11 +64,11 @@ _REQUIRED_KEYS: tuple[str, ...] = (
 _SCHEMA_KEY = "DATABASE_SCHEMA"
 _ENV_FILE_KEY = "NEOMAGI_ENV_FILE"
 _USER_CONFIG_SUBDIR = "neomagi"
-_REPO_MARKER_FILE = ".env_template"
+_REPO_MARKER_FILE = "pyproject.toml"
 _REPO_MARKER_DIR = Path("packages") / "neomagi_pi"
 _REMEDIATION_HINT = (
-    "Run `magipi config init` to write a fresh template to the user config "
-    "directory, or `magipi config path` to inspect the active source."
+    "Run `magipi config init` to write a fresh database.env template to the "
+    "user config directory, or `magipi config path` to inspect the active source."
 )
 
 
@@ -117,10 +118,10 @@ def resolve_database_config(
         values = _read_explicit_file(path, _ENV_FILE_KEY)
         return _build_config(values), ConfigSource(kind="file", label=str(path))
 
-    user_path = _user_config_dotenv_path(env_values)
+    user_path = user_database_env_path(env_values)
     attempts.append(f"user config {user_path}")
     if user_path.is_file():
-        values = _read_auto_file(user_path, "user config .env")
+        values = _read_auto_file(user_path, "user config database.env")
         return _build_config(values), ConfigSource(kind="file", label=str(user_path))
 
     repo_path = _app_root_dotenv_path()
@@ -173,7 +174,7 @@ def would_fall_back_to(
         path = Path(configured).expanduser()
         suffix = "" if path.is_file() else " (missing)"
         return f"{_ENV_FILE_KEY}={path}{suffix}"
-    user_path = _user_config_dotenv_path(stripped)
+    user_path = user_database_env_path(stripped)
     if user_path.is_file():
         return f"user config {user_path}"
     repo_path = _app_root_dotenv_path()
@@ -183,7 +184,7 @@ def would_fall_back_to(
 
 
 def read_env_template() -> str:
-    """Return the bundled ``.env`` template shipped as a package resource.
+    """Return the bundled ``database.env`` template shipped as a package resource.
 
     Reads via :mod:`importlib.resources` so the template is available in
     wheel installs without requiring access to the source repo.
@@ -191,26 +192,32 @@ def read_env_template() -> str:
 
     return (
         resources.files("storage.templates")
-        .joinpath("env.template")
+        .joinpath("database.env.template")
         .read_text(encoding="utf-8")
     )
 
 
-def _user_config_dotenv_path(env_values: Mapping[str, str]) -> Path:
-    """Resolve the user config ``.env`` per ADR-0019.
+def user_database_env_path(env_values: Mapping[str, str]) -> Path:
+    """Resolve the user config ``secrets/database.env`` per ADR-0019/0020.
 
     Order: ``XDG_CONFIG_HOME`` (any platform) → Windows ``APPDATA`` →
-    ``~/.config/neomagi/.env``.
+    ``~/.config/neomagi/secrets/database.env``.
     """
 
     xdg = (env_values.get("XDG_CONFIG_HOME") or "").strip()
     if xdg:
-        return Path(xdg).expanduser() / _USER_CONFIG_SUBDIR / ".env"
+        return Path(xdg).expanduser() / _USER_CONFIG_SUBDIR / "secrets" / "database.env"
     if sys.platform == "win32":
         appdata = (env_values.get("APPDATA") or "").strip()
         if appdata:
-            return Path(appdata) / _USER_CONFIG_SUBDIR / ".env"
-    return Path.home() / ".config" / _USER_CONFIG_SUBDIR / ".env"
+            return Path(appdata) / _USER_CONFIG_SUBDIR / "secrets" / "database.env"
+    return Path.home() / ".config" / _USER_CONFIG_SUBDIR / "secrets" / "database.env"
+
+
+def _user_config_dotenv_path(env_values: Mapping[str, str]) -> Path:
+    """Backward-compatible alias for tests and older internal callers."""
+
+    return user_database_env_path(env_values)
 
 
 def _app_root_dotenv_path() -> Path | None:
@@ -268,7 +275,7 @@ def _read_explicit_file(path: Path, label: str) -> dict[str, str]:
     if missing:
         raise DatabaseConfigError(
             f"{label} ({path}) is missing required keys: {', '.join(missing)}. "
-            f"Fill in the values from `.env_template`. {_REMEDIATION_HINT}"
+            f"Fill in the values from `database.env.template`. {_REMEDIATION_HINT}"
         )
     return values
 
@@ -337,7 +344,7 @@ def _no_source_error(attempts: list[str]) -> str:
         f"{listed}\n"
         "Provide one of: --env-file <path>, all of "
         f"{', '.join(_REQUIRED_KEYS)} in the shell, "
-        f"{_ENV_FILE_KEY}, or a complete user config .env. "
+        f"{_ENV_FILE_KEY}, or a complete user config secrets/database.env. "
         f"{_REMEDIATION_HINT}"
     )
 
@@ -359,5 +366,6 @@ __all__ = [
     "load_database_config",
     "read_env_template",
     "resolve_database_config",
+    "user_database_env_path",
     "would_fall_back_to",
 ]

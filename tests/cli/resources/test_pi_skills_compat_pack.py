@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 
 from cli.resources.frontmatter import split_frontmatter
@@ -24,14 +25,15 @@ EXPECTED_SKILLS = [
 
 def test_resource_loader_discovers_generated_nested_pack(tmp_path) -> None:
     cwd = tmp_path / "repo"
-    agent_dir = tmp_path / "home" / ".pi" / "agent"
-    cwd.mkdir()
+    agent_dir = tmp_path / "home" / ".magipi" / "agent"
+    materialized = cwd / ".magipi" / "skills" / "pi-skills"
+    materialized.parent.mkdir(parents=True)
+    shutil.copytree(PACK_ROOT, materialized)
     agent_dir.mkdir(parents=True)
 
     loader = ResourceLoader(
         cwd=cwd,
         agent_dir=agent_dir,
-        explicit_skills=(SHOWCASE_ROOT / "skills",),
     )
     asyncio.run(loader.reload())
 
@@ -40,18 +42,26 @@ def test_resource_loader_discovers_generated_nested_pack(tmp_path) -> None:
 
 
 def test_skill_command_expansion_resolves_base_dir_for_generated_pack() -> None:
+    cwd = REPO_ROOT / ".tmp" / "pi-skills-compat-test"
+    if cwd.exists():
+        shutil.rmtree(cwd)
+    materialized = cwd / ".magipi" / "skills" / "pi-skills"
+    materialized.parent.mkdir(parents=True)
+    shutil.copytree(PACK_ROOT, materialized)
     loader = ResourceLoader(
-        cwd=REPO_ROOT,
+        cwd=cwd,
         agent_dir=REPO_ROOT / ".tmp" / "test-agent",
-        explicit_skills=(PACK_ROOT,),
     )
-    asyncio.run(loader.reload())
+    try:
+        asyncio.run(loader.reload())
 
-    expanded = expand_skill_command("/skill:brave-search docs", list(loader.get_skills())) or ""
+        expanded = expand_skill_command("/skill:brave-search docs", list(loader.get_skills())) or ""
 
-    assert f"{PACK_ROOT / 'brave-search' / 'search.js'}" in expanded
-    assert "{baseDir}" not in expanded
-    assert "User arguments: docs" in expanded
+        assert ".magipi/skills/pi-skills/brave-search/search.js" in expanded
+        assert "{baseDir}" not in expanded
+        assert "User arguments: docs" in expanded
+    finally:
+        shutil.rmtree(cwd)
 
 
 def test_generated_skills_have_frontmatter_and_expected_helpers() -> None:

@@ -1,7 +1,7 @@
 Fixture: project extension command
 
 Purpose:
-- Exercises project-local `.pi/extensions/*.py` discovery.
+- Exercises project-local `.magipi/extensions/*.py` discovery.
 - Confirms a registered command can append a durable custom entry through the governed ExtensionAPI action path.
 
 Pi reference:

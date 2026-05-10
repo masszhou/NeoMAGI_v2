@@ -1,6 +1,6 @@
 [project]
 name = "neomagi-v2"
-version = "0.1.0"
+version = "0.1.1"
 description = "NeoMAGI v2 repository workspace"
 readme = "README.md"
 requires-python = ">=3.14"

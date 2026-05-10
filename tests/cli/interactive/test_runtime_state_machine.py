@@ -233,8 +233,8 @@ def test_followup_action_rejects_extension_command_and_keeps_buffer(tmp_path: Pa
 
 
 def test_followup_action_expands_prompt_template(tmp_path: Path) -> None:
-    (tmp_path / ".pi" / "prompts").mkdir(parents=True)
-    (tmp_path / ".pi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
+    (tmp_path / ".magipi" / "prompts").mkdir(parents=True)
+    (tmp_path / ".magipi" / "prompts" / "ask.md").write_text("Question: $1", encoding="utf-8")
     _app, controller, runtime = _controller_with_runtime(cwd=tmp_path)
     try:
         controller._handle_runtime_submit(  # noqa: SLF001
@@ -368,8 +368,8 @@ def test_quit_shutdown_stops_runtime_before_exit() -> None:
 
 
 def _write_extension_command(tmp_path: Path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "cmd.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "cmd.py").write_text(
         """
 def setup(api):
     def run(_ctx):
@@ -382,8 +382,8 @@ def setup(api):
 
 
 def _write_reviewer_skill(tmp_path: Path) -> None:
-    (tmp_path / ".pi" / "skills" / "reviewer").mkdir(parents=True)
-    (tmp_path / ".pi" / "skills" / "reviewer" / "SKILL.md").write_text(
+    (tmp_path / ".magipi" / "skills" / "reviewer").mkdir(parents=True)
+    (tmp_path / ".magipi" / "skills" / "reviewer" / "SKILL.md").write_text(
         "---\nname: reviewer\ndescription: Review files.\n---\nReview carefully.\n",
         encoding="utf-8",
     )

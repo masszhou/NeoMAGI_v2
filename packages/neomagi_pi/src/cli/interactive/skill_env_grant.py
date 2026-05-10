@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from cli.core.settings import LoadedSettings
+from cli.core.settings import LoadedSettings, SkillEnvSettings
 from cli.tools.definitions import SkillEnvGrant
 
 SkillEnvGateState = Literal["no_op", "set", "idempotent", "conflict"]
@@ -26,9 +26,22 @@ SkillEnvGateState = Literal["no_op", "set", "idempotent", "conflict"]
 
 @dataclass(frozen=True, slots=True)
 class SkillEnvGrantFailure:
-    reason: Literal["missing_env_file", "missing_allow_var"]
+    reason: Literal["missing_env_file", "missing_allow_var", "low_quality_value"]
     source: str
     missing_names: tuple[str, ...] = ()
+
+
+_LOW_ENTROPY_DENYLIST = {
+    "test",
+    "key",
+    "secret",
+    "password",
+    "token",
+    "none",
+    "null",
+    "dummy",
+    "example",
+}
 
 
 def decide_skill_env_gate_state(
@@ -51,14 +64,12 @@ def resolve_skill_env_grant(
     cwd: Path,
     agent_dir: Path,
 ) -> tuple[SkillEnvGrant | None, SkillEnvGrantFailure | None]:
-    config = loaded_settings.settings.resources.skill_env.get(skill_name)
-    if config is None:
+    del agent_dir
+    raw_config = _raw_skill_env_config(loaded_settings.project_raw, skill_name)
+    if raw_config is None:
         return None, None
-    base_dir = (
-        cwd
-        if _raw_skill_env_config(loaded_settings.project_raw, skill_name) is not None
-        else agent_dir
-    )
+    config = SkillEnvSettings.model_validate(raw_config)
+    base_dir = cwd
     env_file = config.env_file
     source_path = _resolve_env_file(env_file, base_dir)
     if not source_path.is_file():
@@ -71,6 +82,15 @@ def resolve_skill_env_grant(
             source=env_file,
             missing_names=missing,
         )
+    low_quality = tuple(
+        name for name in config.allow if _is_low_quality_secret_value(env_values.get(name, ""))
+    )
+    if low_quality:
+        return None, SkillEnvGrantFailure(
+            reason="low_quality_value",
+            source=env_file,
+            missing_names=low_quality,
+        )
     grant_values = {name: env_values[name] for name in config.allow}
     if not grant_values:
         return None, None
@@ -80,6 +100,12 @@ def resolve_skill_env_grant(
 def format_skill_env_setup_error(skill_name: str, failure: SkillEnvGrantFailure) -> str:
     if failure.reason == "missing_env_file":
         return f"skill env for {skill_name!r} references missing envFile {failure.source!r}"
+    if failure.reason == "low_quality_value":
+        names = ", ".join(failure.missing_names)
+        return (
+            f"skill env for {skill_name!r} has low-quality allowed value(s) "
+            f"{names} in envFile {failure.source!r}"
+        )
     names = ", ".join(failure.missing_names)
     return (
         f"skill env for {skill_name!r} is missing allowed variable(s) {names} "
@@ -111,6 +137,15 @@ def _resolve_env_file(value: str, base_dir: Path) -> Path:
     if path.is_absolute():
         return path.resolve(strict=False)
     return (base_dir / path).resolve(strict=False)
+
+
+def _is_low_quality_secret_value(value: str) -> bool:
+    stripped = value.strip()
+    return (
+        not stripped
+        or len(stripped) < 8
+        or stripped.lower() in _LOW_ENTROPY_DENYLIST
+    )
 
 
 def _read_env_file(path: Path) -> dict[str, str]:

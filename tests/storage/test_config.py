@@ -38,8 +38,8 @@ def isolate_auto_sources(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
-        lambda env_values: tmp_path / "iso_user_config" / ".env",
+        "user_database_env_path",
+        lambda env_values: tmp_path / "iso_user_config" / "secrets" / "database.env",
     )
     monkeypatch.setattr(config_module, "_app_root_dotenv_path", lambda: None)
     return tmp_path
@@ -203,9 +203,9 @@ def test_user_config_default_path_on_linux_or_macos(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(config_module.Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(config_module.sys, "platform", "linux")
 
-    path = config_module._user_config_dotenv_path({})
+    path = config_module.user_database_env_path({})
 
-    assert path == home / ".config" / "neomagi" / ".env"
+    assert path == home / ".config" / "neomagi" / "secrets" / "database.env"
 
 
 def test_user_config_default_path_on_macos(monkeypatch, tmp_path) -> None:
@@ -214,9 +214,9 @@ def test_user_config_default_path_on_macos(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(config_module.Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(config_module.sys, "platform", "darwin")
 
-    path = config_module._user_config_dotenv_path({})
+    path = config_module.user_database_env_path({})
 
-    assert path == home / ".config" / "neomagi" / ".env"
+    assert path == home / ".config" / "neomagi" / "secrets" / "database.env"
 
 
 def test_user_config_path_honors_xdg_config_home(monkeypatch, tmp_path) -> None:
@@ -226,30 +226,30 @@ def test_user_config_path_honors_xdg_config_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(config_module.sys, "platform", "linux")
     custom = tmp_path / "xdg"
 
-    path = config_module._user_config_dotenv_path({"XDG_CONFIG_HOME": str(custom)})
+    path = config_module.user_database_env_path({"XDG_CONFIG_HOME": str(custom)})
 
-    assert path == custom / "neomagi" / ".env"
+    assert path == custom / "neomagi" / "secrets" / "database.env"
 
 
 def test_user_config_path_uses_appdata_on_windows(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(config_module.sys, "platform", "win32")
     appdata = tmp_path / "AppData"
 
-    path = config_module._user_config_dotenv_path({"APPDATA": str(appdata)})
+    path = config_module.user_database_env_path({"APPDATA": str(appdata)})
 
-    assert path == appdata / "neomagi" / ".env"
+    assert path == appdata / "neomagi" / "secrets" / "database.env"
 
 
 def test_user_config_dotenv_resolves_when_present(
     tmp_path,
     monkeypatch,
 ) -> None:
-    user_path = tmp_path / "userconfig" / ".env"
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"
     user_path.parent.mkdir(parents=True)
     _write_env(user_path, host="user-host", port=7777)
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
 
@@ -263,12 +263,12 @@ def test_user_config_dotenv_incomplete_fails_fast(
     tmp_path,
     monkeypatch,
 ) -> None:
-    user_path = tmp_path / "userconfig" / ".env"
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"
     user_path.parent.mkdir(parents=True)
     user_path.write_text("DATABASE_HOST=only-host\n", encoding="utf-8")
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
 
@@ -282,12 +282,12 @@ def test_user_config_dotenv_does_not_pollute_neomagi_env_file(
 ) -> None:
     """NEOMAGI_ENV_FILE is explicit; user config must not silently fill gaps."""
 
-    user_path = tmp_path / "userconfig" / ".env"
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"
     user_path.parent.mkdir(parents=True)
     _write_env(user_path, host="user-host")
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
     pointed = tmp_path / "incomplete.env"
@@ -301,7 +301,7 @@ def test_app_root_dotenv_path_finds_repo_root(tmp_path, monkeypatch) -> None:
     repo = tmp_path / "repo"
     module_dir = repo / "packages" / "neomagi_pi" / "src" / "storage"
     module_dir.mkdir(parents=True)
-    (repo / ".env_template").write_text("DATABASE_HOST=\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text("[project]\nname='neomagi'\n", encoding="utf-8")
     monkeypatch.setattr(config_module, "__file__", str(module_dir / "config.py"))
 
     assert config_module._app_root_dotenv_path() == repo / ".env"
@@ -319,10 +319,10 @@ def test_repo_dotenv_used_when_no_user_config(
     tmp_path,
     monkeypatch,
 ) -> None:
-    user_path = tmp_path / "userconfig" / ".env"  # not present
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"  # not present
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
     repo_env = tmp_path / "repo.env"
@@ -383,12 +383,12 @@ def test_resolve_returns_source_for_explicit_file(
 
 
 def test_describe_returns_source_for_user_config(tmp_path, monkeypatch) -> None:
-    user_path = tmp_path / "userconfig" / ".env"
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"
     user_path.parent.mkdir(parents=True)
     _write_env(user_path)
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
 
@@ -402,12 +402,12 @@ def test_would_fall_back_reports_user_config_when_present(
     tmp_path,
     monkeypatch,
 ) -> None:
-    user_path = tmp_path / "userconfig" / ".env"
+    user_path = tmp_path / "userconfig" / "secrets" / "database.env"
     user_path.parent.mkdir(parents=True)
     _write_env(user_path)
     monkeypatch.setattr(
         config_module,
-        "_user_config_dotenv_path",
+        "user_database_env_path",
         lambda env_values: user_path,
     )
 

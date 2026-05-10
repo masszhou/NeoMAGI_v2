@@ -10,8 +10,8 @@ from tui.app import TUIApp
 
 
 def test_interactive_extension_ui_status_and_notifications(tmp_path) -> None:
-    (tmp_path / ".pi" / "extensions").mkdir(parents=True)
-    (tmp_path / ".pi" / "extensions" / "status.py").write_text(
+    (tmp_path / ".magipi" / "extensions").mkdir(parents=True)
+    (tmp_path / ".magipi" / "extensions" / "status.py").write_text(
         """
 def setup(api):
     def status(ctx):
