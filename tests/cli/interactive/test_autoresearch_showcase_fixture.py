@@ -37,7 +37,7 @@ def test_autoresearch_showcase_fixture_loads_extension_skill_and_prompt(tmp_path
         assert extension_names == ["autoresearch"]
         assert "autoresearch-mini" in skill_names
         assert "autoresearch-next" in prompt_names
-        assert sorted(tool_names) == ["init_experiment", "log_experiment", "run_experiment"]
+        assert sorted(tool_names) == ["init_experiment", "log_experiment", "recover_experiment", "run_experiment"]
         assert expanded_skill is not None and "## Restart Note" in expanded_skill
         assert expanded_prompt is not None and "Optional focus: score" in expanded_prompt
         assert sorted(tool.name for tool in first_runner.get_all_registered_tools()) == sorted(tool_names)
