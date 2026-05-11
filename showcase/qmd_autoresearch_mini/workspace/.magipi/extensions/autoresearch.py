@@ -33,6 +33,7 @@ SECRET_VALUE_RE = re.compile(
     r"github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b"
 )
 VALID_STATUSES = {"baseline", "keep", "discard", "crash", "checks_failed"}
+SUCCESS_STATUSES = {"baseline", "keep", "discard"}
 REVERT_STATUSES = {"discard", "crash", "checks_failed"}
 PRESERVED_DIRS = {".magipi", "autoresearch-artifacts"}
 PRESERVED_FILES = {"autoresearch.md", "autoresearch.sh", "autoresearch.jsonl", "autoresearch.checks.sh"}
@@ -217,6 +218,7 @@ async def _run_experiment(api: Any, args: dict[str, Any]) -> dict[str, Any]:
             "artifact": artifact,
             "checks": _checks_details(checks_result),
         }
+        _write_run_result(workdir, details)
         return _tool_result(f"experiment {trial_id} finished with status {status}", details, is_error=status == "crash")
     except Exception as exc:
         duration_ms = max(0, int((time.monotonic() - started) * 1000))
@@ -241,11 +243,12 @@ def _log_experiment(api: Any, args: dict[str, Any]) -> dict[str, Any]:
     try:
         workdir = _resolve_workdir(api.cwd, args.get("working_dir", "."))
         _assert_no_pending(workdir)
-        run_result = dict(args.get("run_result") or {})
         status = str(args["status"])
         if status not in VALID_STATUSES:
             raise ValueError(f"invalid status: {status}")
 
+        run_result = _resolve_run_result(args, workdir)
+        _validate_log_run_result(status, run_result, explicit="run_result" in args)
         entry = _entry_from_args(args, run_result, status, workdir)
         _assert_unique_trial_id(workdir, entry["trial_id"])
         if status in {"keep", *REVERT_STATUSES}:
@@ -406,6 +409,42 @@ def _entry_from_args(args: dict[str, Any], run_result: dict[str, Any], status: s
             entry["artifact"] = sanitized_artifact
     _validate_entry(entry, final=False)
     return entry
+
+
+def _resolve_run_result(args: dict[str, Any], workdir: Path) -> dict[str, Any]:
+    if "run_result" in args:
+        run_result = args.get("run_result")
+        if not isinstance(run_result, dict):
+            raise ValueError("run_result must be an object")
+        return dict(run_result)
+    trial_id = args.get("trial_id")
+    if trial_id:
+        return _read_run_result(workdir, _validate_trial_id(trial_id))
+    unlogged = _unlogged_run_results(workdir)
+    if len(unlogged) == 1:
+        return unlogged[0]
+    if len(unlogged) > 1:
+        trial_ids = ", ".join(str(result.get("trial_id")) for result in unlogged)
+        raise ValueError(f"trial_id is required because multiple unlogged run results exist: {trial_ids}")
+    return {}
+
+
+def _validate_log_run_result(status: str, run_result: dict[str, Any], *, explicit: bool) -> None:
+    if status not in SUCCESS_STATUSES:
+        if explicit and run_result and str(run_result.get("status") or status) != status:
+            raise ValueError(f"{status} conflicts with run_result.status={run_result.get('status')}")
+        return
+    if not run_result:
+        raise ValueError(f"{status} requires run_result from run_experiment")
+    result_status = str(run_result.get("status") or "")
+    expected = "baseline" if status == "baseline" else "ready"
+    if result_status != expected:
+        raise ValueError(f"{status} requires run_result.status={expected}")
+    metrics = run_result.get("metrics")
+    if not isinstance(metrics, dict) or not metrics:
+        raise ValueError(f"{status} requires non-empty run_result.metrics")
+    if run_result.get("exit_code") != 0:
+        raise ValueError(f"{status} requires run_result.exit_code=0")
 
 
 def _validate_entry(entry: dict[str, Any], *, final: bool) -> None:
@@ -883,6 +922,49 @@ def _append_if_missing(workdir: Path, entry: dict[str, Any]) -> bool:
         return False
     _append_jsonl(workdir / "autoresearch.jsonl", entry)
     return True
+
+
+def _run_result_path(workdir: Path, trial_id: str) -> Path:
+    return workdir / "autoresearch-artifacts" / _validate_trial_id(trial_id) / "run_result.json"
+
+
+def _write_run_result(workdir: Path, details: dict[str, Any]) -> Path:
+    trial_id = _validate_trial_id(details.get("trial_id") or "")
+    path = _run_result_path(workdir, trial_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name("run_result.json.tmp")
+    tmp_path.write_text(
+        json.dumps(details, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, path)
+    return path
+
+
+def _read_run_result(workdir: Path, trial_id: str) -> dict[str, Any]:
+    path = _run_result_path(workdir, trial_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        raise ValueError(f"corrupt run result for {trial_id}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"corrupt run result for {trial_id}: expected object")
+    return data
+
+
+def _unlogged_run_results(workdir: Path) -> list[dict[str, Any]]:
+    root = workdir / "autoresearch-artifacts"
+    if not root.exists():
+        return []
+    logged = {str(entry.get("trial_id")) for entry in _read_jsonl_entries(workdir / "autoresearch.jsonl")}
+    results: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*/run_result.json")):
+        data = _read_run_result(workdir, path.parent.name)
+        if data and str(data.get("trial_id")) not in logged:
+            results.append(data)
+    return results
 
 
 def _abort_entry(planned_entry: dict[str, Any]) -> dict[str, Any]:

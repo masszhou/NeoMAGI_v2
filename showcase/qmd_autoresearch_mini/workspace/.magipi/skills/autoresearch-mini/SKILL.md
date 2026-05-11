@@ -36,6 +36,22 @@ Work with one explicit hypothesis per trial. State what metric should move and w
 - Use `log_experiment` for every baseline, kept trial, discarded trial, crash, or checks failure.
 - Do not keep on `main`, `master`, or a default branch.
 
+## Tool Use Requirements
+- Do not claim that an experiment, baseline, trial, keep, discard, crash, or checks-failed path has completed unless the
+  matching extension tool call has actually run.
+- Use `init_experiment` to create or validate `autoresearch.md`, `autoresearch.sh`, and `autoresearch.jsonl`.
+- Use `run_experiment` for every baseline and trial benchmark. Do not replace it with built-in `bash` for experiment
+  execution.
+- Use `trial_id="baseline"` for the baseline run. Use one explicit non-baseline trial id such as
+  `trial-n-examples-5` for a config trial.
+- Use `log_experiment` to persist every final status. Do not hand-write metrics into `log_experiment`; let it use the
+  `run_experiment` result returned by the tool or the saved run result for that trial. Never persist `ready`; `ready`
+  is only the decision point after a successful non-baseline run.
+- Built-in `read` and `bash` are allowed for context checks such as reading session files or `git log`, but they are not
+  substitutes for the autoresearch transaction tools.
+- If `init_experiment`, `run_experiment`, or `log_experiment` are not visible as tools, stop and report blocked. Do not
+  simulate results, invent metrics, or say the work is done.
+
 ## Benchmark
 Baseline command:
 

@@ -116,6 +116,8 @@ def test_run_experiment_parses_returned_metrics_through_exec(tmp_path: Path) -> 
     assert result["details"]["metrics_source"] == "returned_output"
     assert calls[0][0] == "cd . && bash autoresearch.sh"
     assert calls[0][2]["timeout"] == 5.0
+    saved = json.loads((workspace / "autoresearch-artifacts" / "baseline" / "run_result.json").read_text(encoding="utf-8"))
+    assert saved["metrics"] == {"score": 0.75, "latency_ms": 12}
 
 
 def test_run_experiment_reparses_metrics_from_truncated_artifact(tmp_path: Path) -> None:
@@ -157,6 +159,64 @@ def test_run_experiment_ignores_untrusted_full_output_path(tmp_path: Path) -> No
     assert result["details"]["metrics_source"] == "returned_output"
     assert "fullOutputPath" not in result["details"]["artifact"]
     assert result["details"]["artifact"]["fullOutputPathRejected"] is True
+
+
+def test_log_uses_saved_run_result_when_model_omits_run_result(tmp_path: Path) -> None:
+    workspace = _copy_workspace(tmp_path)
+
+    async def fake_exec(_command: str, _args: list[str], _options: dict[str, Any]) -> dict[str, Any]:
+        return {"output": "METRIC score=0.75\n", "exitCode": 0, "truncated": False}
+
+    run = asyncio.run(
+        _call_tool(workspace, "run_experiment", {"trial_id": "baseline", "command": "bash autoresearch.sh"}, exec_impl=fake_exec)
+    )
+    log = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "baseline", "restart_note": "saved result"}))
+
+    entry = json.loads((workspace / "autoresearch.jsonl").read_text(encoding="utf-8").strip())
+    assert run["details"]["status"] == "baseline"
+    assert log["isError"] is False
+    assert entry["trial_id"] == "baseline"
+    assert entry["metrics"] == {"score": 0.75}
+
+
+def test_log_rejects_success_without_run_result_or_with_incompatible_result(tmp_path: Path) -> None:
+    workspace = _copy_workspace(tmp_path)
+    module = _extension_module()
+    empty = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "baseline", "restart_note": "missing result"}))
+    wrong_status = asyncio.run(
+        _call_tool(
+            workspace,
+            "log_experiment",
+            {
+                "status": "baseline",
+                "restart_note": "wrong status",
+                "run_result": _run_result("trial-1", status="ready", metrics={"score": 0.2}),
+            },
+        )
+    )
+    module._write_run_result(workspace, _run_result("trial-not-baseline", status="ready", metrics={"score": 0.3}))
+    saved_wrong_status = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "baseline", "restart_note": "saved wrong"}))
+    empty_metrics = asyncio.run(
+        _call_tool(
+            workspace,
+            "log_experiment",
+            {
+                "status": "keep",
+                "restart_note": "empty metrics",
+                "run_result": _run_result("trial-2", status="ready", metrics={}),
+            },
+        )
+    )
+
+    assert empty["isError"] is True
+    assert "requires run_result" in empty["content"][0]["text"]
+    assert wrong_status["isError"] is True
+    assert "requires run_result.status=baseline" in wrong_status["content"][0]["text"]
+    assert saved_wrong_status["isError"] is True
+    assert "requires run_result.status=baseline" in saved_wrong_status["content"][0]["text"]
+    assert empty_metrics["isError"] is True
+    assert "requires non-empty run_result.metrics" in empty_metrics["content"][0]["text"]
+    assert not (workspace / "autoresearch.jsonl").exists()
 
 
 def test_run_experiment_maps_check_failure(tmp_path: Path) -> None:
@@ -224,14 +284,13 @@ def test_log_appends_jsonl_and_redacts_secret_values(monkeypatch: pytest.MonkeyP
             {
                 "status": "baseline",
                 "restart_note": "Token was not persisted.",
-                "trial_id": "baseline",
-                "hypothesis": "",
-                "changes": "used hf_" + "A" * 32,
-                "command": "echo $HF_TOKEN",
-                "metrics": {"score": 0.5, "output_tokens": 1234, "tokens_per_sec": 42.5},
-                "metrics_source": "returned_output",
-                "exit_code": 0,
-                "duration_ms": 10,
+                "run_result": _run_result(
+                    "baseline",
+                    status="baseline",
+                    changes="used hf_" + "A" * 32,
+                    command="echo $HF_TOKEN",
+                    metrics={"score": 0.5, "output_tokens": 1234, "tokens_per_sec": 42.5},
+                ),
             },
         )
     )
@@ -257,9 +316,7 @@ def test_log_rejects_ready_status_and_nonfinite_metrics(tmp_path: Path) -> None:
             {
                 "status": "baseline",
                 "restart_note": "bad metric",
-                "trial_id": "baseline",
-                "metrics": {"score": float("inf")},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("baseline", status="baseline", metrics={"score": float("inf")}),
             },
         )
     )
@@ -282,7 +339,7 @@ def test_log_rejects_metrics_and_source_provenance_mismatch(tmp_path: Path) -> N
                 "status": "baseline",
                 "restart_note": "mismatch",
                 "metrics": {"score": 0.1},
-                "run_result": {"trial_id": "baseline", "metrics": {"score": 0.2}, "metrics_source": "returned_output"},
+                "run_result": _run_result("baseline", status="baseline", metrics={"score": 0.2}),
             },
         )
     )
@@ -294,7 +351,7 @@ def test_log_rejects_metrics_and_source_provenance_mismatch(tmp_path: Path) -> N
                 "status": "baseline",
                 "restart_note": "mismatch",
                 "metrics_source": "artifact",
-                "run_result": {"trial_id": "trial-1", "metrics": {"score": 0.2}, "metrics_source": "returned_output"},
+                "run_result": _run_result("baseline", status="baseline", metrics={"score": 0.2}),
             },
         )
     )
@@ -315,10 +372,7 @@ def test_log_rejects_duplicate_trial_id_and_bounds_command(tmp_path: Path) -> No
             {
                 "status": "baseline",
                 "restart_note": "first",
-                "trial_id": "baseline",
-                "command": "x" * 5000,
-                "metrics": {"score": 0.1},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("baseline", status="baseline", command="x" * 5000, metrics={"score": 0.1}),
             },
         )
     )
@@ -329,9 +383,7 @@ def test_log_rejects_duplicate_trial_id_and_bounds_command(tmp_path: Path) -> No
             {
                 "status": "baseline",
                 "restart_note": "duplicate",
-                "trial_id": "baseline",
-                "metrics": {"score": 0.2},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("baseline", status="baseline", metrics={"score": 0.2}),
             },
         )
     )
@@ -355,11 +407,13 @@ def test_log_secret_redaction_ignores_short_test_env_values(monkeypatch: pytest.
             {
                 "status": "baseline",
                 "restart_note": "test text should remain",
-                "trial_id": "baseline",
-                "changes": "normal test text",
-                "command": "echo test",
-                "metrics": {"score": 0.5},
-                "metrics_source": "returned_output",
+                "run_result": _run_result(
+                    "baseline",
+                    status="baseline",
+                    changes="normal test text",
+                    command="echo test",
+                    metrics={"score": 0.5},
+                ),
             },
         )
     )
@@ -384,19 +438,22 @@ def test_log_sanitizes_untrusted_artifact_paths_and_full_output_fields(tmp_path:
             {
                 "status": "baseline",
                 "restart_note": "artifact sanitized",
-                "trial_id": "baseline",
-                "metrics": {"score": 0.5},
-                "metrics_source": "artifact",
-                "artifact": {
-                    "fullOutputPath": str(trusted),
-                    "stdout": "raw full output",
-                    "stderr": "raw error output",
-                    "truncation": {
-                        "fullOutputPath": str(tmp_path / "outside.out"),
-                        "stdout": "nested raw output",
-                        "truncated": True,
+                "run_result": _run_result(
+                    "baseline",
+                    status="baseline",
+                    metrics={"score": 0.5},
+                    metrics_source="artifact",
+                    artifact={
+                        "fullOutputPath": str(trusted),
+                        "stdout": "raw full output",
+                        "stderr": "raw error output",
+                        "truncation": {
+                            "fullOutputPath": str(tmp_path / "outside.out"),
+                            "stdout": "nested raw output",
+                            "truncated": True,
+                        },
                     },
-                },
+                ),
             },
         )
     )
@@ -423,14 +480,13 @@ def test_keep_creates_commit_on_scratch_branch(tmp_path: Path) -> None:
             {
                 "status": "keep",
                 "restart_note": "Kept n_examples increase.",
-                "trial_id": "trial-keep",
-                "hypothesis": "More examples improves score.",
-                "changes": "Increase n_examples.",
-                "command": "bash autoresearch.sh",
-                "metrics": {"score": 0.7},
-                "metrics_source": "returned_output",
-                "exit_code": 0,
-                "duration_ms": 10,
+                "run_result": _run_result(
+                    "trial-keep",
+                    status="ready",
+                    hypothesis="More examples improves score.",
+                    changes="Increase n_examples.",
+                    metrics={"score": 0.7},
+                ),
             },
         )
     )
@@ -445,7 +501,17 @@ def test_keep_rejects_default_branch(tmp_path: Path) -> None:
     _git_init_with_commit(workspace, "main")
     _replace_in_file(workspace / "finetune" / "configs" / "baseline.json", '"n_examples": 4', '"n_examples": 5')
 
-    result = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "keep", "restart_note": "Do not keep on main."}))
+    result = asyncio.run(
+        _call_tool(
+            workspace,
+            "log_experiment",
+            {
+                "status": "keep",
+                "restart_note": "Do not keep on main.",
+                "run_result": _run_result("trial-keep", status="ready"),
+            },
+        )
+    )
 
     assert result["isError"] is True
     assert "refuses default" in result["content"][0]["text"]
@@ -458,7 +524,17 @@ def test_discard_rejects_default_branch_without_removing_untracked_files(tmp_pat
     (workspace / "my_workdir").mkdir()
     (workspace / "my_workdir" / "wip.txt").write_text("keep me too\n", encoding="utf-8")
 
-    result = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "discard", "restart_note": "Do not discard on main."}))
+    result = asyncio.run(
+        _call_tool(
+            workspace,
+            "log_experiment",
+            {
+                "status": "discard",
+                "restart_note": "Do not discard on main.",
+                "run_result": _run_result("trial-discard", status="ready"),
+            },
+        )
+    )
 
     assert result["isError"] is True
     assert "refuses default" in result["content"][0]["text"]
@@ -476,7 +552,17 @@ def test_discard_reverts_non_autoresearch_files_only(tmp_path: Path) -> None:
     (workspace / "scratch_dir" / "scratch.txt").write_text("remove me too\n", encoding="utf-8")
     (workspace / "autoresearch.md").write_text("preserve me\n", encoding="utf-8")
 
-    result = asyncio.run(_call_tool(workspace, "log_experiment", {"status": "discard", "restart_note": "Discarded noisy change."}))
+    result = asyncio.run(
+        _call_tool(
+            workspace,
+            "log_experiment",
+            {
+                "status": "discard",
+                "restart_note": "Discarded noisy change.",
+                "run_result": _run_result("trial-discard", status="ready", metrics={"score": 0.1}),
+            },
+        )
+    )
 
     assert result["isError"] is False
     assert (workspace / "finetune" / "configs" / "baseline.json").read_text(encoding="utf-8") == original_config
@@ -586,9 +672,7 @@ def test_keep_refuses_preexisting_staged_non_preserved_change(tmp_path: Path) ->
             {
                 "status": "keep",
                 "restart_note": "reject staged",
-                "trial_id": "trial-keep",
-                "metrics": {"score": 0.7},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("trial-keep", status="ready", metrics={"score": 0.7}),
             },
         )
     )
@@ -633,9 +717,7 @@ def test_keep_excludes_preserved_checks_file_from_commit(tmp_path: Path) -> None
             {
                 "status": "keep",
                 "restart_note": "kept config only",
-                "trial_id": "trial-keep",
-                "metrics": {"score": 0.7},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("trial-keep", status="ready", metrics={"score": 0.7}),
             },
         )
     )
@@ -659,9 +741,7 @@ def test_discard_unlinks_untracked_symlink_without_following_target(tmp_path: Pa
             {
                 "status": "discard",
                 "restart_note": "discard symlink",
-                "trial_id": "trial-discard",
-                "metrics": {"score": 0.1},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("trial-discard", status="ready", metrics={"score": 0.1}),
             },
         )
     )
@@ -686,9 +766,7 @@ def test_discard_restores_preserved_staged_deletion(tmp_path: Path) -> None:
             {
                 "status": "discard",
                 "restart_note": "restore fact",
-                "trial_id": "trial-discard",
-                "metrics": {"score": 0.1},
-                "metrics_source": "returned_output",
+                "run_result": _run_result("trial-discard", status="ready", metrics={"score": 0.1}),
             },
         )
     )
@@ -948,6 +1026,33 @@ def _planned_entry(trial_id: str, status: str, metrics: dict[str, float]) -> dic
         "exit_code": 0,
         "duration_ms": 10,
         "restart_note": "continue",
+    }
+
+
+def _run_result(
+    trial_id: str,
+    *,
+    status: str,
+    metrics: dict[str, float | int] | None = None,
+    metrics_source: str = "returned_output",
+    hypothesis: str = "",
+    changes: str = "",
+    command: str = "bash autoresearch.sh",
+    exit_code: int | None = 0,
+    duration_ms: int = 10,
+    artifact: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "trial_id": trial_id,
+        "hypothesis": hypothesis,
+        "changes": changes,
+        "command": command,
+        "status": status,
+        "metrics": {"score": 0.7} if metrics is None else metrics,
+        "metrics_source": metrics_source,
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "artifact": {} if artifact is None else artifact,
     }
 
 
