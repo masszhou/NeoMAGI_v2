@@ -224,7 +224,7 @@ wheels = [
 
 [[package]]
 name = "neomagi-pi"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/neomagi_pi" }
 dependencies = [
     { name = "anthropic" },
@@ -247,7 +247,7 @@ requires-dist = [
 
 [[package]]
 name = "neomagi-v2"
-version = "0.1.1"
+version = "0.1.2"
 source = { virtual = "." }
 dependencies = [
     { name = "neomagi-pi" },

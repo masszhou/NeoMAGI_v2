@@ -38,6 +38,7 @@ REVERT_STATUSES = {"discard", "crash", "checks_failed"}
 PRESERVED_DIRS = {".magipi", "autoresearch-artifacts"}
 PRESERVED_FILES = {"autoresearch.md", "autoresearch.sh", "autoresearch.jsonl", "autoresearch.checks.sh"}
 MAX_COMMAND_BYTES = 4096
+MAX_RUN_TIMEOUT_SECONDS = 1500
 
 
 def setup(api: Any) -> None:
@@ -74,8 +75,8 @@ def setup(api: Any) -> None:
                     "changes": {"type": "string"},
                     "command": {"type": "string"},
                     "working_dir": {"type": "string"},
-                    "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
-                    "checks_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
+                    "timeout_seconds": {"type": "number", "minimum": 1, "maximum": MAX_RUN_TIMEOUT_SECONDS},
+                    "checks_timeout_seconds": {"type": "number", "minimum": 1, "maximum": MAX_RUN_TIMEOUT_SECONDS},
                 }
             ),
             "execute": lambda args, _context, _signal, _on_update: _run_experiment(api, args),

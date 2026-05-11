@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neomagi-pi"
-version = "0.1.1"
+version = "0.1.2"
 description = "NeoMAGI Pi-compatible local agent shell"
 readme = "README.md"
 requires-python = ">=3.14"

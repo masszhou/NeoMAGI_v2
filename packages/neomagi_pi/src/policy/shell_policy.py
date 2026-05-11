@@ -11,7 +11,7 @@ from .path_policy import resolve_cwd, resolve_cwd_path
 from .types import PolicyDecision, PolicyRequest
 
 DEFAULT_TIMEOUT_SECONDS = 120
-MAX_TIMEOUT_SECONDS = 600
+MAX_TIMEOUT_SECONDS = 1500
 
 _DESTRUCTIVE_PATTERNS = (
     re.compile(

@@ -54,6 +54,16 @@ def test_metric_parser_accepts_safe_numbers_and_rejects_bad_names() -> None:
     assert metrics == {"score": 2.5, "latency_ms": 125.0}
 
 
+def test_run_experiment_schema_allows_real_qmd_training_timeout() -> None:
+    loaded = asyncio.run(load_extensions([EXTENSION_PATH], cwd=SHOWCASE_WORKSPACE))
+    tool = next(tool for tool in loaded.runtime.extensions[0].tools if tool.name == "run_experiment")
+
+    properties = tool.parameters["properties"]
+
+    assert properties["timeout_seconds"]["maximum"] == 1500
+    assert properties["checks_timeout_seconds"]["maximum"] == 1500
+
+
 def test_init_creates_files_without_overwriting_existing_content(tmp_path: Path) -> None:
     workspace = _copy_workspace(tmp_path)
     _git_init_with_commit(workspace, "scratch/autoresearch-test")

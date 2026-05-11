@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from policy.sandbox import sandbox_environment
-from policy.shell_policy import decide_shell_access
+from policy.shell_policy import MAX_TIMEOUT_SECONDS, decide_shell_access
 from policy.types import PolicyRequest
 
 
@@ -39,6 +39,22 @@ def test_shell_policy_blocks_root_literal(tmp_path: Path) -> None:
 
     assert decision.effect == "block"
     assert decision.resolved_paths["blockedPathLiteral"] == "/"
+
+
+def test_shell_policy_allows_real_qmd_training_timeout(tmp_path: Path) -> None:
+    decision = _decision(tmp_path, "echo training", timeout=1500)
+
+    assert MAX_TIMEOUT_SECONDS == 1500
+    assert decision.effect == "allow"
+    assert decision.normalized_args is not None
+    assert decision.normalized_args["timeout"] == 1500.0
+
+
+def test_shell_policy_blocks_timeout_above_real_qmd_cap(tmp_path: Path) -> None:
+    decision = _decision(tmp_path, "echo too long", timeout=1501)
+
+    assert decision.effect == "block"
+    assert decision.reason == "timeout exceeds hard cap of 1500s"
 
 
 def test_bash_env_allowlist_strips_sensitive_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -97,11 +113,14 @@ def test_sandbox_environment_accepts_explicit_extra_env_without_global_allowlist
     assert granted["BRAVE_API_KEY"] == "granted-secret"
 
 
-def _decision(tmp_path: Path, command: str):
+def _decision(tmp_path: Path, command: str, *, timeout: int | float | None = None):
+    args = {"command": command}
+    if timeout is not None:
+        args["timeout"] = timeout
     return decide_shell_access(
         PolicyRequest(
             toolName="bash",
-            args={"command": command},
+            args=args,
             cwd=str(tmp_path),
             actor="model",
         )
