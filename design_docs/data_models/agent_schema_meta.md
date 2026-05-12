@@ -35,6 +35,6 @@ One row per metadata key.
 
 ## References
 
-- `packages/neomagi_pi/src/storage/schema.py`
+- `packages/magipi/src/storage/schema.py`
 - `design_docs/decisions/0007-database-hard-dependency-fail-fast.md`
 - `design_docs/roadmap/p1_engine_pi.md` § P1-M6: Session Manager

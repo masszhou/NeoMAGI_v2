@@ -41,7 +41,7 @@ doc_id_assigned_at: 2026-04-25T21:28:01+02:00
 
 - M3 extension 开发计划应先实现 `ExtensionManager`、`ExtensionAPI` binding、`.py` loader、handler ordering 和事件 result 应用规则。
 - 第一批事件优先覆盖 `session_start`、`session_shutdown`、`input`、`before_agent_start`、`context`、`tool_call`、`tool_result`、`agent_start`、`agent_end`；流式 UI 事件可随 agent loop 能力补齐。
-- `input`、`tool_call`、`tool_result`、`before_agent_start` 等事件结果必须以 `packages/neomagi_pi/src/cli/extensions/types.py` 和 behavior matrix 为准；例如 `input` 使用 `type` 字段，不引入 `action` 别名作为 contract。
+- `input`、`tool_call`、`tool_result`、`before_agent_start` 等事件结果必须以 `packages/magipi/src/cli/extensions/types.py` 和 behavior matrix 为准；例如 `input` 使用 `type` 字段，不引入 `action` 别名作为 contract。
 - `before_provider_request` 第一版可以允许原地修改 payload；若要支持 handler 返回新 payload dict，必须同步更新 Protocol、behavior matrix 和 fixture。
 - Flag 类型第一版保持 Pi-compatible 的 `boolean | string`；`number` 属于后续 NeoMAGI 扩展，不能混入兼容核心。
 - Path guard 等安全 extension 示例必须使用可靠路径归属判断，例如 `Path.relative_to()`，不能使用字符串 `startswith()` 判断 workspace 边界。

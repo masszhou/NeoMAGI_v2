@@ -10,6 +10,7 @@ doc_id_assigned_at: 2026-05-06T23:14:14+02:00
 - Related: `design_docs/decisions/0008-memory-truth-closure-postgres-with-workspace-projection.md`
 - Related: `design_docs/decisions/0009-pi-cli-product-equivalence-contract.md`
 - Related: `design_docs/decisions/0011-freeze-pi-mono-baseline-at-97a38bf6.md`
+- Amended by: `design_docs/decisions/0022-align-magipi-package-directory-name.md`
 - Architecture: `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Recommended Python package layout / § P2 Memory Adapter Boundary / § P3 Gateway Boundary
 - Roadmap: `design_docs/roadmap/p1_engine_pi.md`
 

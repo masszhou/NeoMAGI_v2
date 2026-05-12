@@ -10,7 +10,7 @@ within a context manager. This module layers on:
   restoring the terminal, so the message isn't lost in raw-mode garbage.
 
 Critical: SIGWINCH stays the property of ``TerminalSession`` (single owner
-per ADR-0015 §影响 `packages/neomagi_pi/src/tui/terminal.py`); this module never touches it.
+per ADR-0015 §影响 `packages/magipi/src/tui/terminal.py`); this module never touches it.
 """
 
 from __future__ import annotations

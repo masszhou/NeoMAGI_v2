@@ -1,7 +1,7 @@
 # NeoMAGI_v2
 
 NeoMAGI v2 is a local-first personal agent CLI. The P1 Pi-compatible shell now
-lives under `packages/neomagi_pi/` as the `neomagi-pi` package.
+lives under `packages/magipi/` as the `neomagi-pi` package.
 
 Development entrypoints:
 

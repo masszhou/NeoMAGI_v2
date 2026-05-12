@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-PACKAGE_SRC = REPO / "packages" / "neomagi_pi" / "src"
+PACKAGE_SRC = REPO / "packages" / "magipi" / "src"
 FORBIDDEN_PROTOCOL_MODULES = (
     "agent_core",
     "cli.core",
@@ -44,4 +44,4 @@ def test_src_tui_does_not_import_agent_or_provider_protocol_modules() -> None:
             for module in _imported_modules(node)
             if _is_forbidden_protocol_import(module)
         )
-    assert not bad, f"packages/neomagi_pi/src/tui imports protocol modules: {bad}"
+    assert not bad, f"packages/magipi/src/tui imports protocol modules: {bad}"

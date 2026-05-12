@@ -45,7 +45,7 @@ doc_id_assigned_at: 2026-04-25T22:30:35+02:00
 
 ## 影响
 
-- `packages/neomagi_pi/src/cli/extensions/types.py` 中本 ADR 覆盖的 Pi `Promise<X>` mirror 必须通过 `inspect.iscoroutinefunction(...)` 验收；同步槽位必须保持非 coroutine function。
+- `packages/magipi/src/cli/extensions/types.py` 中本 ADR 覆盖的 Pi `Promise<X>` mirror 必须通过 `inspect.iscoroutinefunction(...)` 验收；同步槽位必须保持非 coroutine function。
 - `pi_behavior_matrix.md` § D 必须列出 async / sync 分组，作为 M3 runtime 和后续 review 的对照表。
 - M3 实现 `ExtensionAPI` / `ExtensionCommandContext` 时，异步方法必须在内部串接 cancellation、policy/audit、session mutation 和 runtime lifecycle，并返回 await 后的 Pi-compatible result shape。
 - 测试应至少覆盖：

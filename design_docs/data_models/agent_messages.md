@@ -45,6 +45,6 @@ One row per persisted message entry.
 
 ## References
 
-- `packages/neomagi_pi/src/storage/schema.py`
+- `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Durable Session Architecture
 - `design_docs/architecture/pi_behavior_matrix.md` § NeoMAGI strengthened behavior

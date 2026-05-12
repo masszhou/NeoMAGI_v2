@@ -162,7 +162,7 @@ def test_unknown_event_type_raises_runtime_error() -> None:
 # -------------------------------------------------------------------- #
 
 REPO = Path(__file__).resolve().parents[3]
-PACKAGE_SRC = REPO / "packages" / "neomagi_pi" / "src"
+PACKAGE_SRC = REPO / "packages" / "magipi" / "src"
 FORBIDDEN_PROTOCOL_MODULES = ("agent_core", "cli.core", "cli.tools", "policy", "ai_provider")
 
 
@@ -194,7 +194,7 @@ def test_src_tui_does_not_import_protocol_modules() -> None:
             top, second = _top_import_keys(module)
             if top in FORBIDDEN_PROTOCOL_MODULES or second in FORBIDDEN_PROTOCOL_MODULES:
                 bad.append((path, module))
-    assert not bad, f"packages/neomagi_pi/src/tui imports protocol modules: {bad}"
+    assert not bad, f"packages/magipi/src/tui imports protocol modules: {bad}"
 
 
 def _pydantic_base_names(node: ast.ClassDef) -> set[str]:

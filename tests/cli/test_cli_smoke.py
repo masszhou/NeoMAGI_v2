@@ -23,7 +23,7 @@ from cli.__main__ import _resolve_render_mode
 from cli.cli_args import CliOptions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PACKAGE_SRC_ROOT = REPO_ROOT / "packages" / "neomagi_pi" / "src"
+PACKAGE_SRC_ROOT = REPO_ROOT / "packages" / "magipi" / "src"
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "pi_compat"
 
 

@@ -50,6 +50,6 @@ One row per `tool_call_id` execution in a durable session.
 
 ## References
 
-- `packages/neomagi_pi/src/storage/schema.py`
+- `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § NeoMAGI Postgres Schema
 - `design_docs/architecture/pi_behavior_matrix.md` § NeoMAGI strengthened behavior

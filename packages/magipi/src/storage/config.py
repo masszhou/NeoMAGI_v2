@@ -65,7 +65,7 @@ _SCHEMA_KEY = "DATABASE_SCHEMA"
 _ENV_FILE_KEY = "NEOMAGI_ENV_FILE"
 _USER_CONFIG_SUBDIR = "neomagi"
 _REPO_MARKER_FILE = "pyproject.toml"
-_REPO_MARKER_DIR = Path("packages") / "neomagi_pi"
+_REPO_MARKER_DIR = Path("packages") / "magipi"
 _REMEDIATION_HINT = (
     "Run `magipi config init` to write a fresh database.env template to the "
     "user config directory, or `magipi config path` to inspect the active source."

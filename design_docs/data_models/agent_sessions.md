@@ -42,7 +42,7 @@ One row per durable session.
 
 ## References
 
-- `packages/neomagi_pi/src/storage/schema.py`
+- `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Durable Session Architecture
 - `design_docs/roadmap/p1_engine_pi.md` § P1-M6: Session Manager
 - `design_docs/decisions/0009-pi-cli-product-equivalence-contract.md`

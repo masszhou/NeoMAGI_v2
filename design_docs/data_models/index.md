@@ -8,7 +8,7 @@ doc_id_assigned_at: 2026-05-02T14:36:59+02:00
 This directory documents the current NeoMAGI application tables in the configured
 Postgres business schema, normally `neomagi`.
 
-Current schema source: `packages/neomagi_pi/src/storage/schema.py`.
+Current schema source: `packages/magipi/src/storage/schema.py`.
 
 The current M6 schema has **7** `agent_*` tables:
 
@@ -41,7 +41,7 @@ Current non-tables:
 
 ## References
 
-- `packages/neomagi_pi/src/storage/schema.py`
+- `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Durable Session Architecture
 - `design_docs/roadmap/p1_engine_pi.md` § P1-M6: Session Manager
 - `design_docs/decisions/0004-use-postgresql-pgvector-instead-of-sqlite.md`

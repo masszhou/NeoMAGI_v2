@@ -132,7 +132,7 @@ def classify_path(path: Path) -> str | None:
         return "tests"
     if posix_path.startswith("scripts/"):
         return "scripts"
-    if posix_path.startswith("packages/neomagi_pi/src/"):
+    if posix_path.startswith("packages/magipi/src/"):
         return "prod"
     return None
 

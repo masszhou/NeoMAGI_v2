@@ -99,7 +99,7 @@ def test_tui_components_do_not_import_protocol_modules() -> None:
     forbidden = ("agent_core", "cli.core", "ai_provider")
     bad: list[tuple[Path, str]] = []
     for path in (
-        REPO / "packages" / "neomagi_pi" / "src" / "tui" / "components"
+        REPO / "packages" / "magipi" / "src" / "tui" / "components"
     ).rglob("*.py"):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

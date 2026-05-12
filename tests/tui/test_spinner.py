@@ -9,7 +9,7 @@ from tui.components.spinner import PI_FRAMES, Spinner
 from tui.width import strip_ansi, visible_width
 
 REPO = Path(__file__).resolve().parents[2]
-PACKAGE_SRC = REPO / "packages" / "neomagi_pi" / "src"
+PACKAGE_SRC = REPO / "packages" / "magipi" / "src"
 SPINNER_PATH = PACKAGE_SRC / "tui" / "components" / "spinner.py"
 
 

@@ -225,7 +225,7 @@ wheels = [
 [[package]]
 name = "neomagi-pi"
 version = "0.1.2"
-source = { editable = "packages/neomagi_pi" }
+source = { editable = "packages/magipi" }
 dependencies = [
     { name = "anthropic" },
     { name = "jsonschema" },
@@ -261,7 +261,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "neomagi-pi", editable = "packages/neomagi_pi" }]
+requires-dist = [{ name = "neomagi-pi", editable = "packages/magipi" }]
 
 [package.metadata.requires-dev]
 dev = [

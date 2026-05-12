@@ -1,4 +1,4 @@
-"""Stdin parser (ADR-0015 §影响 `packages/neomagi_pi/src/tui/stdin_buffer.py`).
+"""Stdin parser (ADR-0015 §影响 `packages/magipi/src/tui/stdin_buffer.py`).
 
 Turns the raw byte stream coming back from a raw-mode terminal into typed
 events:

@@ -61,10 +61,10 @@ flowchart TB
 
 Recommended Python package layout:
 
-Current P1 implementation lives in `packages/neomagi_pi/src/` as the
+Current P1 implementation lives in `packages/magipi/src/` as the
 `neomagi-pi` package. The first package migration keeps the existing top-level
 Python import names below while moving the distribution/product boundary under
-`packages/neomagi_pi/`.
+`packages/magipi/`.
 
 | Package | Responsibility |
 | --- | --- |

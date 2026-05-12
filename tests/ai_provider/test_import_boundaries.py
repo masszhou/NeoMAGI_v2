@@ -4,11 +4,11 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-PACKAGE_SRC = ROOT / "packages" / "neomagi_pi" / "src"
+PACKAGE_SRC = ROOT / "packages" / "magipi" / "src"
 ALLOWED_SDK_IMPORTERS = {
-    "packages/neomagi_pi/src/ai_provider/providers/anthropic.py",
-    "packages/neomagi_pi/src/ai_provider/providers/openai_responses.py",
-    "packages/neomagi_pi/src/ai_provider/providers/openai_completions.py",
+    "packages/magipi/src/ai_provider/providers/anthropic.py",
+    "packages/magipi/src/ai_provider/providers/openai_responses.py",
+    "packages/magipi/src/ai_provider/providers/openai_completions.py",
 }
 
 

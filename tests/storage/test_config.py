@@ -299,7 +299,7 @@ def test_user_config_dotenv_does_not_pollute_neomagi_env_file(
 
 def test_app_root_dotenv_path_finds_repo_root(tmp_path, monkeypatch) -> None:
     repo = tmp_path / "repo"
-    module_dir = repo / "packages" / "neomagi_pi" / "src" / "storage"
+    module_dir = repo / "packages" / "magipi" / "src" / "storage"
     module_dir.mkdir(parents=True)
     (repo / "pyproject.toml").write_text("[project]\nname='neomagi'\n", encoding="utf-8")
     monkeypatch.setattr(config_module, "__file__", str(module_dir / "config.py"))

@@ -35,5 +35,5 @@ One row per `(session_id, target_pi_export_id)` label target.
 
 ## References
 
-- `packages/neomagi_pi/src/storage/schema.py`
+- `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § NeoMAGI Postgres Schema

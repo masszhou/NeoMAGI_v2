@@ -44,7 +44,7 @@ doc_id_assigned_at: 2026-04-25T22:37:48+02:00
 
 ## 影响
 
-- `packages/neomagi_pi/src/cli/extensions/types.py` 中 `ExtensionUIContext` 的 5 个异步槽位必须通过 `inspect.iscoroutinefunction(...)`；其余 UI 方法必须保持非 coroutine function。
+- `packages/magipi/src/cli/extensions/types.py` 中 `ExtensionUIContext` 的 5 个异步槽位必须通过 `inspect.iscoroutinefunction(...)`；其余 UI 方法必须保持非 coroutine function。
 - `pi_behavior_matrix.md` § D"Async 约定"段必须同时引用 ADR-0013 与本 ADR 作为权威来源；§ D.3 表格必须显式标注 5 个 UI 异步行。
 - M3 实现 UI runtime 时，dialog 方法必须支持 await + cancellation（与 `signal: AbortSignal` 协作），不可在内部用 `asyncio.run` 阻塞主循环。
 - 若未来 pi-mono baseline 升级改变 UI 方法的 `Promise<X>` 状态，按 ADR-0011 走 baseline diff review，并同步更新本 ADR 的影响清单或追加新 ADR。

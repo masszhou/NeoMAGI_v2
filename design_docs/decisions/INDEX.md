@@ -34,7 +34,8 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 
 ## Amendments
 
-- 2026-04-26: ADR-0015 §影响 amended for P1-M1 follow-ups: anchored renderer / DSR ownership, lifecycle cursor placement, late CPR discard, Spinner primitive, and `packages/neomagi_pi/src/tui/components/` substrate primitive boundary.
+- 2026-04-26: ADR-0015 §影响 amended for P1-M1 follow-ups: anchored renderer / DSR ownership, lifecycle cursor placement, late CPR discard, Spinner primitive, and `packages/magipi/src/tui/components/` substrate primitive boundary.
 - 2026-04-30: ADR-0015 §影响 amended for P1-M4 follow-up render modes: `present()` remains the canvas frame entry, while command mode uses `present_live()` / `commit_lines()` / `clear_live_region()` with SGR reset and synchronized live-region output.
 - 2026-05-10: ADR-0019 amended by ADR-0020: the default user database config file is `secrets/database.env`, and the surrounding NeoMAGI user config layout is defined by ADR-0020.
 - 2026-05-10: ADR-0020 amended by ADR-0021: only workspace materialized skills are active runtime skills; skill pool/global skill roots are not provider-visible; `/skill:<name>` is a development/debug shortcut.
+- 2026-05-12: ADR-0018 amended by ADR-0022: the Pi-compatible agent shell source directory is `packages/magipi/`; CLI/import/runtime behavior remains unchanged.

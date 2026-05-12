@@ -17,7 +17,7 @@ from cli.cli_args import parse_args
 from cli.config_commands import _run_init, _run_path, run_config_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PACKAGE_SRC_ROOT = REPO_ROOT / "packages" / "neomagi_pi" / "src"
+PACKAGE_SRC_ROOT = REPO_ROOT / "packages" / "magipi" / "src"
 
 
 def _write_env(path: Path, *, host: str = "explicit-host") -> None:

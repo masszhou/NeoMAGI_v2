@@ -29,7 +29,7 @@ doc_id_assigned_at: 2026-05-08T10:41:31+02:00
    2. Windows：`%APPDATA%\neomagi\secrets\database.env`；
    3. Linux / macOS：`~/.config/neomagi/secrets/database.env`。
 5. repo `.env`：仅当从 `__file__` 向上能找到 NeoMAGI repo marker（`.env_template` 加
-   `packages/neomagi_pi/`）时启用。发布版 wheel / 非 editable install 没有 marker，
+   `packages/magipi/`）时启用。发布版 wheel / 非 editable install 没有 marker，
    直接跳过；editable repo install 仍可命中，作为开发 fallback。
 
 自动文件来源不存在时跳过；文件存在但字段不全时 fail-fast。这样避免临时 export 的
@@ -49,7 +49,7 @@ macOS 上不走 Apple 推荐的 `~/Library/Application Support/`，而是和 Lin
 **`magipi config init`**：把内置 database env 模板写入用户配置目录的
 `secrets/database.env`。
 
-- 模板作为 package resource 打包进 wheel：`packages/neomagi_pi/src/storage/templates/database.env.template`；
+- 模板作为 package resource 打包进 wheel：`packages/magipi/src/storage/templates/database.env.template`；
   运行期用 `importlib.resources` 读取，不依赖 `$REPO`。
 - 默认不覆盖已有 `secrets/database.env`；加 `--force` 才覆盖，并先备份成 `<path>.bak`。
 - Linux/macOS 上目录权限设成 `0700`，文件权限设成 `0600`。Windows 不显式 chmod。
@@ -90,19 +90,19 @@ macOS 上不走 Apple 推荐的 `~/Library/Application Support/`，而是和 Lin
 
 ### 代码
 
-- `packages/neomagi_pi/src/storage/config.py`：
+- `packages/magipi/src/storage/config.py`：
   - 新增 `_user_config_dotenv_path()`：`XDG_CONFIG_HOME` 优先，Windows 用 `APPDATA`，
     其他平台用 `~/.config/neomagi/secrets/database.env`。
   - `_app_root_dotenv_path()` 只在找到 repo marker 时返回 repo `.env`；删除
     `module_path.parent / ".env"` fallback。
   - 解析改为整组取舍：显式来源缺失或不完整时 fail-fast；自动文件不存在时跳过，
     文件存在但不完整时 fail-fast；错误信息列出尝试来源和修复建议。
-- `packages/neomagi_pi/src/storage/templates/database.env.template`：把现有 `.env_template` 复制成
+- `packages/magipi/src/storage/templates/database.env.template`：把现有 `.env_template` 复制成
   package resource，并在 `pyproject.toml` 中声明打包进 wheel；运行期用
   `importlib.resources` 读取。repo 根目录的 `.env_template` 仅供开发参考。
-- `packages/neomagi_pi/src/cli/cli_args.py`：给 `CliOptions` 加 `env_file: Path | None`；
+- `packages/magipi/src/cli/cli_args.py`：给 `CliOptions` 加 `env_file: Path | None`；
   `--env-file` 解析后传给 `load_database_config(env_file=...)`。
-- `packages/neomagi_pi/src/cli/__main__.py`：注册 `magipi config init` / `path`；
+- `packages/magipi/src/cli/__main__.py`：注册 `magipi config init` / `path`；
   `init` 负责不覆盖、`--force` 备份、Unix `0700/0600` 权限。
 - `DatabaseConfigError`：列出查找顺序，并提示 `magipi config init` / `path`。
 

@@ -57,7 +57,7 @@ doc_id_assigned_at: 2026-04-26T23:06:31+02:00
 
 ## 影响
 
-- `packages/neomagi_pi/src/ai_provider` 的 usage model 必须保留 `input/output/cacheRead/cacheWrite/totalTokens/cost` 五维结构。
+- `packages/magipi/src/ai_provider` 的 usage model 必须保留 `input/output/cacheRead/cacheWrite/totalTokens/cost` 五维结构。
 - `Usage.input` 表示非缓存输入 token；`totalTokens` 必须等于 `input + output + cacheRead + cacheWrite`，除非 provider 明确返回更可靠的 total 且 adapter 已记录原因。
 - M2 provider adapter 必须把 prompt cache 字段限制在 provider request boundary 内，不向 session/memory/storage 层暴露 provider cache 内容。
 - `cacheRetention` 统一取值为 `none | short | long`，默认 `short`；`PI_CACHE_RETENTION=long` 可以把默认提升为 `long`；显式 option 优先。
