@@ -30,6 +30,7 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0019 | User config dir as default database secret source | accepted | 2026-05-08 | `design_docs/decisions/0019-user-config-dir-as-default-env-source.md` |
 | 0020 | Magipi workspace and global resource layout | accepted | 2026-05-10 | `design_docs/decisions/0020-magipi-workspace-and-global-resource-layout.md` |
 | 0021 | Workspace materialized skills and env grants | accepted | 2026-05-10 | `design_docs/decisions/0021-workspace-materialized-skills-and-env-grants.md` |
+| 0022 | Align magipi package directory name | accepted | 2026-05-12 | `design_docs/decisions/0022-align-magipi-package-directory-name.md` |
 
 ## Amendments
 
