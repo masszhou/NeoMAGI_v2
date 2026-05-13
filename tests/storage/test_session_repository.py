@@ -42,6 +42,45 @@ class _Conn:
         self.rollbacks += 1
 
 
+class _ReadCursor:
+    def __init__(self):
+        self.queries: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def execute(self, query, _params=()):
+        self.queries.append(query)
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+
+class _ReadConn:
+    def __init__(self):
+        self.cursor_obj = _ReadCursor()
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def _config() -> DatabaseConfig:
+    return DatabaseConfig(
+        host="localhost",
+        port=5432,
+        user="user",
+        password="pw",
+        database="db",
+        schema="neomagi",
+    )
+
+
 def test_postgres_append_entry_rolls_back_when_leaf_update_fails(monkeypatch) -> None:
     payload = {
         "type": "message",
@@ -63,14 +102,7 @@ def test_postgres_append_entry_rolls_back_when_leaf_update_fails(monkeypatch) ->
     conn = _Conn(row)
     repo = PostgresSessionRepository(
         conn,
-        DatabaseConfig(
-            host="localhost",
-            port=5432,
-            user="user",
-            password="pw",
-            database="db",
-            schema="neomagi",
-        ),
+        _config(),
     )
 
     def fail_leaf_update(_cur, _session_id, _entry_id):
@@ -83,3 +115,15 @@ def test_postgres_append_entry_rolls_back_when_leaf_update_fails(monkeypatch) ->
 
     assert conn.commits == 0
     assert conn.rollbacks == 1
+
+
+def test_session_reads_exclude_taskrun_owned_sessions_by_fk() -> None:
+    conn = _ReadConn()
+    repo = PostgresSessionRepository(conn, _config())
+
+    repo.get_session("019e2200-0000-7000-8000-000000000001")
+    repo.list_recent_sessions(cwd="/workspace")
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "FROM \"neomagi\".task_runs tr" in sql
+    assert "tr.agent_session_id = s.id" in sql

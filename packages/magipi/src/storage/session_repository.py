@@ -236,11 +236,14 @@ class PostgresSessionRepository:
         with self._conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT id, parent_session_id, cwd, created_at, updated_at,
-                       current_leaf_entry_id, provider_cache_affinity_id,
-                       display_name, source, deleted_at
-                FROM {self._schema}.agent_sessions
-                WHERE id = %s AND deleted_at IS NULL
+                SELECT s.id, s.parent_session_id, s.cwd, s.created_at, s.updated_at,
+                       s.current_leaf_entry_id, s.provider_cache_affinity_id,
+                       s.display_name, s.source, s.deleted_at
+                FROM {self._schema}.agent_sessions s
+                WHERE s.id = %s
+                  AND s.deleted_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM {self._schema}.task_runs tr
+                                  WHERE tr.agent_session_id = s.id)
                 """,
                 (session_id,),
             )
@@ -254,20 +257,24 @@ class PostgresSessionRepository:
         limit: int = 20,
     ) -> list[SessionRecord]:
         args: list[Any] = []
-        where = "deleted_at IS NULL"
+        where = (
+            "s.deleted_at IS NULL AND NOT EXISTS "
+            f"(SELECT 1 FROM {self._schema}.task_runs tr "
+            "WHERE tr.agent_session_id = s.id)"
+        )
         if cwd is not None:
-            where += " AND cwd = %s"
+            where += " AND s.cwd = %s"
             args.append(cwd)
         args.append(limit)
         with self._conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT id, parent_session_id, cwd, created_at, updated_at,
-                       current_leaf_entry_id, provider_cache_affinity_id,
-                       display_name, source, deleted_at
-                FROM {self._schema}.agent_sessions
+                SELECT s.id, s.parent_session_id, s.cwd, s.created_at, s.updated_at,
+                       s.current_leaf_entry_id, s.provider_cache_affinity_id,
+                       s.display_name, s.source, s.deleted_at
+                FROM {self._schema}.agent_sessions s
                 WHERE {where}
-                ORDER BY updated_at DESC
+                ORDER BY s.updated_at DESC
                 LIMIT %s
                 """,
                 tuple(args),
@@ -786,13 +793,7 @@ def _entry_from_row(row: Any) -> EntryRecord:
     )
 
 __all__ = [
-    "EntryRecord",
-    "PostgresSessionRepository",
-    "SessionAuditEventRecord",
-    "SessionRecord",
-    "SessionRepository",
-    "ToolExecutionRecord",
-    "allocate_entry_payload",
-    "utc_now",
-    "utc_now_iso",
+    "EntryRecord", "PostgresSessionRepository", "SessionAuditEventRecord",
+    "SessionRecord", "SessionRepository", "ToolExecutionRecord",
+    "allocate_entry_payload", "utc_now", "utc_now_iso",
 ]

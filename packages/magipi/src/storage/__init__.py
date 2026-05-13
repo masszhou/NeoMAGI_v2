@@ -25,6 +25,7 @@ from .schema import SchemaBootstrapError, ensure_schema
 from .session_jsonl import SessionJsonlError, export_session_jsonl, import_session_jsonl
 from .in_memory_session_repository import InMemorySessionRepository
 from .session_repository import PostgresSessionRepository
+from .taskrun_repository import PostgresTaskRunRepository
 
 __all__ = [
     "ConfigSource",
@@ -36,6 +37,7 @@ __all__ = [
     "PostgresAuditRepository",
     "PostgresAuditSink",
     "PostgresSessionRepository",
+    "PostgresTaskRunRepository",
     "SchemaBootstrapError",
     "SessionJsonlError",
     "connect_database",

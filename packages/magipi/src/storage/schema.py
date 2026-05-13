@@ -1,4 +1,4 @@
-"""Idempotent Postgres schema bootstrap for P1-M6 durable sessions."""
+"""Idempotent Postgres schema bootstrap for durable sessions and TaskRuns."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from cli.core.session_types import CURRENT_SESSION_VERSION
 from .config import DatabaseConfig
 
 NEOMAGI_SESSION_SCHEMA_VERSION = "1"
+NEOMAGI_TASKRUN_SCHEMA_VERSION = "1"
 
 _SCHEMA_SQL_TEMPLATES = (
     """
@@ -110,19 +111,111 @@ _SCHEMA_SQL_TEMPLATES = (
     """,
 )
 
+_TASKRUN_SCHEMA_SQL_TEMPLATES = (
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.task_runs(
+        id uuid primary key,
+        workspace_root text not null,
+        agent_session_id uuid not null references {schema}.agent_sessions(id),
+        goal text not null,
+        status text not null,
+        permission_profile jsonb not null,
+        budget jsonb not null default '{{}}'::jsonb,
+        stop_conditions jsonb not null default '{{}}'::jsonb,
+        current_step_id uuid null,
+        summary jsonb not null default '{{}}'::jsonb,
+        heartbeat_at timestamptz null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        closed_at timestamptz null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.task_steps(
+        id uuid primary key,
+        task_run_id uuid not null references {schema}.task_runs(id),
+        step_index integer not null,
+        title text not null,
+        status text not null,
+        input jsonb not null default '{{}}'::jsonb,
+        output jsonb not null default '{{}}'::jsonb,
+        conclusion text null,
+        started_at timestamptz null,
+        ended_at timestamptz null,
+        unique(task_run_id, step_index)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.task_events(
+        id uuid primary key,
+        task_run_id uuid not null references {schema}.task_runs(id),
+        step_id uuid null references {schema}.task_steps(id),
+        event_type text not null,
+        payload jsonb not null,
+        occurred_at timestamptz not null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.task_permission_decisions(
+        id uuid primary key,
+        task_run_id uuid not null references {schema}.task_runs(id),
+        step_id uuid null references {schema}.task_steps(id),
+        tool_execution_id uuid null references {schema}.agent_tool_executions(id),
+        policy_request jsonb not null,
+        raw_decision jsonb not null,
+        resolved_decision jsonb not null,
+        profile_name text not null,
+        occurred_at timestamptz not null
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS {schema}.task_experiments(
+        id uuid primary key,
+        task_run_id uuid not null references {schema}.task_runs(id),
+        step_id uuid not null references {schema}.task_steps(id),
+        hypothesis text not null,
+        change jsonb not null default '{{}}'::jsonb,
+        command jsonb not null default '{{}}'::jsonb,
+        metrics jsonb not null default '{{}}'::jsonb,
+        result jsonb not null default '{{}}'::jsonb,
+        decision text not null,
+        diff_ref jsonb not null default '{{}}'::jsonb,
+        created_at timestamptz not null
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS task_runs_workspace_updated_idx
+    ON {schema}.task_runs(workspace_root, updated_at DESC)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS task_runs_one_running_per_workspace_idx
+    ON {schema}.task_runs(workspace_root)
+    WHERE status = 'running'
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS task_steps_task_run_order_idx
+    ON {schema}.task_steps(task_run_id, step_index ASC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS task_events_task_run_order_idx
+    ON {schema}.task_events(task_run_id, occurred_at ASC, id ASC)
+    """,
+)
+
 
 class SchemaBootstrapError(RuntimeError):
     """Raised when schema bootstrap or version validation fails."""
 
 
 def ensure_schema(conn, config: DatabaseConfig) -> None:
-    """Create the M6 minimum table set and verify schema metadata."""
+    """Create the current durable storage table set and verify schema metadata."""
 
     schema = _quote_identifier(config.schema)
     try:
         with conn.cursor() as cur:
             _create_schema_objects(cur, schema)
             _create_current_leaf_constraint(cur, schema)
+            _create_taskrun_current_step_constraint(cur, schema)
             _upsert_meta(
                 cur,
                 schema,
@@ -130,6 +223,12 @@ def ensure_schema(conn, config: DatabaseConfig) -> None:
                 NEOMAGI_SESSION_SCHEMA_VERSION,
             )
             _upsert_meta(cur, schema, "pi_session_version", str(CURRENT_SESSION_VERSION))
+            _upsert_meta(
+                cur,
+                schema,
+                "neomagi_taskrun_schema_version",
+                NEOMAGI_TASKRUN_SCHEMA_VERSION,
+            )
         conn.commit()
     except Exception as exc:  # pragma: no cover - integration path
         try:
@@ -141,7 +240,7 @@ def ensure_schema(conn, config: DatabaseConfig) -> None:
 
 def _create_schema_objects(cur, schema: str) -> None:
     cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-    for template in _SCHEMA_SQL_TEMPLATES:
+    for template in _SCHEMA_SQL_TEMPLATES + _TASKRUN_SCHEMA_SQL_TEMPLATES:
         cur.execute(template.format(schema=schema))
 
 
@@ -160,6 +259,29 @@ def _create_current_leaf_constraint(cur, schema: str) -> None:
                 ADD CONSTRAINT agent_sessions_current_leaf_fk
                 FOREIGN KEY (current_leaf_entry_id)
                 REFERENCES {schema}.agent_session_entries(id)
+                DEFERRABLE INITIALLY DEFERRED;
+            END IF;
+        END
+        $$;
+        """
+    )
+
+
+def _create_taskrun_current_step_constraint(cur, schema: str) -> None:
+    cur.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'task_runs_current_step_fk'
+                  AND conrelid = '{schema}.task_runs'::regclass
+            ) THEN
+                ALTER TABLE {schema}.task_runs
+                ADD CONSTRAINT task_runs_current_step_fk
+                FOREIGN KEY (current_step_id)
+                REFERENCES {schema}.task_steps(id)
                 DEFERRABLE INITIALLY DEFERRED;
             END IF;
         END
@@ -198,4 +320,9 @@ def _quote_identifier(identifier: str) -> str:
     return f'"{identifier}"'
 
 
-__all__ = ["NEOMAGI_SESSION_SCHEMA_VERSION", "SchemaBootstrapError", "ensure_schema"]
+__all__ = [
+    "NEOMAGI_SESSION_SCHEMA_VERSION",
+    "NEOMAGI_TASKRUN_SCHEMA_VERSION",
+    "SchemaBootstrapError",
+    "ensure_schema",
+]

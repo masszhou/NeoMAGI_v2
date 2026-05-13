@@ -164,7 +164,7 @@ archived
 Legal TaskRun transitions:
 
 ```text
-pending -> running
+pending -> running | cancelled
 running -> blocked | completed | failed | cancelled
 running(stale) -> blocked
 blocked -> running | failed | cancelled
@@ -172,6 +172,8 @@ completed -> archived
 failed -> archived
 cancelled -> archived
 ```
+
+`pending -> cancelled` covers explicit close/cancel before the first TaskRun step starts. `completed` is reserved for a TaskRun that has actually executed to completion.
 
 `heartbeat_at` is the stale-running signal for crash recovery. While a TaskRun is `running`, the owning process updates `heartbeat_at`. `taskrun start`, `taskrun status`, and `taskrun resume` must detect stale running TaskRuns in the workspace before enforcing the single-running rule. A stale `running` TaskRun is moved to `blocked` with a task-run-level event; it must not keep the workspace permanently locked.
 
@@ -210,7 +212,9 @@ Projection layout:
   summary.md
 ```
 
-These files are generated from DB and must include a notice that manual edits are not truth.
+These files are generated from DB. `state.json` and `summary.md` must include a notice that manual edits are not truth. `events.jsonl` is a pure `task_events` stream so line-stream consumers do not need to skip non-event rows.
+
+Normal `taskrun status` reads Postgres and reports the current projection path without writing a projection rebuild event. Mutating commands and `taskrun summary` regenerate projection files. Stale-running recovery remains a state repair and records an event even when triggered by status.
 
 ### D2. One TaskRun Uses One Long-Lived AgentSession
 
@@ -229,6 +233,8 @@ TaskRun does not create a new session for every step. A step records a bounded s
 - `task_steps` adds task semantics without duplicating `agent_session_entries`.
 
 While a TaskRun is active, its `agent_session_id` is task-owned. User session commands such as `/new`, `/resume <other>`, `/fork`, and `/clone` create or select normal user sessions; they do not rebind or replace the TaskRun's session. A TaskRun must be affected through explicit TaskRun commands such as `taskrun resume`, `taskrun cancel`, or `taskrun close`.
+
+TaskRun ownership is permanent. A terminal TaskRun keeps its AgentSession hidden from normal session commands; replay, export, or audit access must go through explicit TaskRun-aware paths.
 
 Forking a TaskRun is out of P2 core unless an implementation plan explicitly adds it. If needed later, fork should create a new TaskRun pointing to a forked AgentSession and record parent task lineage.
 
@@ -362,7 +368,7 @@ Base checks:
 Persisted-work checks, any one is sufficient:
 
 - workspace git state matches the TaskRun start snapshot or a recorded clean revert;
-- a user-approved commit, artifact archive, or diff reference is recorded in `task_events`;
+- a user-confirmed commit, artifact archive, or diff reference is recorded in `task_events`;
 - the user explicitly passes an acknowledge-uncommitted option, which is recorded as a task-run-level event.
 
 ### D7. Step Queue Is Owned By TaskRun

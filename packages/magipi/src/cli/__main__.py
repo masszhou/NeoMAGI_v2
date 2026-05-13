@@ -25,6 +25,10 @@ def main(argv: list[str] | None = None) -> int:
         from .config_commands import run_config_command
 
         return run_config_command(raw_argv[1:], prog=_program_name())
+    if raw_argv and raw_argv[0] == "taskrun":
+        from .taskrun_commands import run_taskrun_command
+
+        return run_taskrun_command(raw_argv[1:], prog=_program_name())
 
     opts = parse_args(raw_argv, prog=_program_name())
 
