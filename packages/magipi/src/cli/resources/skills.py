@@ -6,6 +6,7 @@ import html
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .commands import ResourceCommandExpansion
 from .diagnostics import ResourceDiagnostic
@@ -203,67 +204,123 @@ def _load_skill(
 ) -> Skill | None:
     resolved_path = path.resolve()
     if containment_root is not None and not _is_relative_to(resolved_path, containment_root):
-        diagnostics.append(
-            ResourceDiagnostic(
-                type="warning",
-                message="skill SKILL.md resolves outside workspace .magipi/skills; skipping",
-                path=str(resolved_path),
-                resource_type="skill",
-            )
+        _append_skill_diagnostic(
+            diagnostics,
+            diagnostic_type="warning",
+            message="skill SKILL.md resolves outside workspace .magipi/skills; skipping",
+            path=resolved_path,
         )
         return None
-    try:
-        metadata, body = split_frontmatter(resolved_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        diagnostics.append(
-            ResourceDiagnostic(type="error", message=f"failed to read skill: {exc}", path=str(resolved_path), resource_type="skill")
-        )
+    parsed = _read_skill_frontmatter(resolved_path, diagnostics)
+    if parsed is None:
         return None
-    name = str(metadata.get("name") or resolved_path.parent.name)
-    description = metadata.get("description")
-    if not isinstance(description, str) or not description.strip():
-        diagnostics.append(
-            ResourceDiagnostic(type="warning", message="skill description is required", path=str(resolved_path), resource_type="skill", name=name)
-        )
+    metadata, body = parsed
+    header = _validated_skill_header(resolved_path, metadata, diagnostics)
+    if header is None:
         return None
-    for warning in _name_warnings(name, resolved_path.parent.name):
-        diagnostics.append(ResourceDiagnostic(type="warning", message=warning, path=str(resolved_path), resource_type="skill", name=name))
-    if len(description) > MAX_DESCRIPTION_LENGTH:
-        diagnostics.append(
-            ResourceDiagnostic(
-                type="warning",
-                message=f"description exceeds {MAX_DESCRIPTION_LENGTH} characters ({len(description)})",
-                path=str(resolved_path),
-                resource_type="skill",
-                name=name,
-            )
-        )
-    redirects = _policy_incompatible_redirects(body)
-    if redirects:
-        diagnostics.append(
-            ResourceDiagnostic(
-                type="warning",
-                message=(
-                    f"skill body contains policy-incompatible shell redirect(s) "
-                    f"{', '.join(redirects)!s}; bash calls copying these will be "
-                    f"blocked by shell policy. Likely a stale copy — re-sync from showcase."
-                ),
-                path=str(resolved_path),
-                resource_type="skill",
-                name=name,
-            )
-        )
-    display_location = _display_path(resolved_path, display_root)
-    display_base_dir = _display_path(resolved_path.parent, display_root)
+    name, description = header
+    _warn_policy_incompatible_redirects(body, resolved_path, name, diagnostics)
     return Skill(
         name=name,
-        description=description.strip(),
+        description=description,
         path=resolved_path,
         base_dir=resolved_path.parent,
         source=source,
         disable_model_invocation=bool(metadata.get("disable-model-invocation", False)),
-        display_location=display_location,
-        display_base_dir=display_base_dir,
+        display_location=_display_path(resolved_path, display_root),
+        display_base_dir=_display_path(resolved_path.parent, display_root),
+    )
+
+
+def _validated_skill_header(
+    resolved_path: Path,
+    metadata: dict[str, Any],
+    diagnostics: list[ResourceDiagnostic],
+) -> tuple[str, str] | None:
+    name = str(metadata.get("name") or resolved_path.parent.name)
+    description = metadata.get("description")
+    if not isinstance(description, str) or not description.strip():
+        _append_skill_diagnostic(
+            diagnostics,
+            diagnostic_type="warning",
+            message="skill description is required",
+            path=resolved_path,
+            name=name,
+        )
+        return None
+    description = description.strip()
+    for warning in _name_warnings(name, resolved_path.parent.name):
+        _append_skill_diagnostic(
+            diagnostics,
+            diagnostic_type="warning",
+            message=warning,
+            path=resolved_path,
+            name=name,
+        )
+    if len(description) > MAX_DESCRIPTION_LENGTH:
+        _append_skill_diagnostic(
+            diagnostics,
+            diagnostic_type="warning",
+            message=f"description exceeds {MAX_DESCRIPTION_LENGTH} characters ({len(description)})",
+            path=resolved_path,
+            name=name,
+        )
+    return name, description
+
+
+def _warn_policy_incompatible_redirects(
+    body: str,
+    resolved_path: Path,
+    name: str,
+    diagnostics: list[ResourceDiagnostic],
+) -> None:
+    redirects = _policy_incompatible_redirects(body)
+    if redirects:
+        _append_skill_diagnostic(
+            diagnostics,
+            diagnostic_type="warning",
+            message=(
+                f"skill body contains policy-incompatible shell redirect(s) "
+                f"{', '.join(redirects)!s}; bash calls copying these will be "
+                f"blocked by shell policy. Likely a stale copy — re-sync from showcase."
+            ),
+            path=resolved_path,
+            name=name,
+        )
+
+
+def _read_skill_frontmatter(
+    resolved_path: Path,
+    diagnostics: list[ResourceDiagnostic],
+) -> tuple[dict[str, Any], str] | None:
+    try:
+        return split_frontmatter(resolved_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _append_skill_diagnostic(
+            diagnostics,
+            diagnostic_type="error",
+            message=f"failed to read skill: {exc}",
+            path=resolved_path,
+        )
+        return None
+
+
+def _append_skill_diagnostic(
+    diagnostics: list[ResourceDiagnostic],
+    *,
+    diagnostic_type: str,
+    message: str,
+    path: Path,
+    name: str | None = None,
+) -> None:
+    diagnostics.append(
+        ResourceDiagnostic(
+            type=diagnostic_type,
+            message=message,
+            path=str(path),
+            resource_type="skill",
+            name=name,
+        )
     )
 
 

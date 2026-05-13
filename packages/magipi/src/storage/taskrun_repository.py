@@ -171,66 +171,95 @@ class PostgresTaskRunRepository:
         task_run_id = request.task_run_id or new_db_uuid()
         agent_session_id = request.agent_session_id or new_db_uuid()
         now = request.created_at or utc_now_iso()
-        provider_cache_affinity_id = provider_cache_affinity_for_session(agent_session_id)
-        source = {
-            "taskRunOwned": True,
-            "taskRunId": task_run_id,
-        }
         try:
             with self._conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {self._schema}.agent_sessions(
-                        id, parent_session_id, cwd, created_at, updated_at,
-                        provider_cache_affinity_id, source
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        agent_session_id,
-                        None,
-                        request.workspace_root,
-                        now,
-                        now,
-                        provider_cache_affinity_id,
-                        _jsonb(source),
-                    ),
+                self._insert_owned_session_tx(
+                    cur,
+                    request=request,
+                    task_run_id=task_run_id,
+                    agent_session_id=agent_session_id,
+                    now=now,
                 )
-                cur.execute(
-                    f"""
-                    INSERT INTO {self._schema}.task_runs(
-                        id, workspace_root, agent_session_id, goal, status,
-                        permission_profile, budget, stop_conditions, summary,
-                        heartbeat_at, created_at, updated_at, closed_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id, workspace_root, agent_session_id, goal, status,
-                              permission_profile, budget, stop_conditions,
-                              current_step_id, summary, heartbeat_at, created_at,
-                              updated_at, closed_at
-                    """,
-                    (
-                        task_run_id,
-                        request.workspace_root,
-                        agent_session_id,
-                        request.goal,
-                        request.status,
-                        _jsonb(_dump_json(dict(request.permission_profile))),
-                        _jsonb(_dump_json(dict(request.budget or {}))),
-                        _jsonb(_dump_json(dict(request.stop_conditions or {}))),
-                        _jsonb(_dump_json(dict(request.summary or {}))),
-                        None,
-                        now,
-                        now,
-                        None,
-                    ),
+                row = self._insert_task_run_tx(
+                    cur,
+                    request=request,
+                    task_run_id=task_run_id,
+                    agent_session_id=agent_session_id,
+                    now=now,
                 )
-                row = cur.fetchone()
             self._conn.commit()
         except Exception:
             self._conn.rollback()
             raise
         return _task_run_from_row(row)
+
+    def _insert_owned_session_tx(
+        self,
+        cur,
+        *,
+        request: TaskRunCreateRequest,
+        task_run_id: str,
+        agent_session_id: str,
+        now: str,
+    ) -> None:
+        cur.execute(
+            f"""
+            INSERT INTO {self._schema}.agent_sessions(
+                id, parent_session_id, cwd, created_at, updated_at,
+                provider_cache_affinity_id, source
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                agent_session_id,
+                None,
+                request.workspace_root,
+                now,
+                now,
+                provider_cache_affinity_for_session(agent_session_id),
+                _jsonb({"taskRunOwned": True, "taskRunId": task_run_id}),
+            ),
+        )
+
+    def _insert_task_run_tx(
+        self,
+        cur,
+        *,
+        request: TaskRunCreateRequest,
+        task_run_id: str,
+        agent_session_id: str,
+        now: str,
+    ):
+        cur.execute(
+            f"""
+            INSERT INTO {self._schema}.task_runs(
+                id, workspace_root, agent_session_id, goal, status,
+                permission_profile, budget, stop_conditions, summary,
+                heartbeat_at, created_at, updated_at, closed_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, workspace_root, agent_session_id, goal, status,
+                      permission_profile, budget, stop_conditions,
+                      current_step_id, summary, heartbeat_at, created_at,
+                      updated_at, closed_at
+            """,
+            (
+                task_run_id,
+                request.workspace_root,
+                agent_session_id,
+                request.goal,
+                request.status,
+                _jsonb(_dump_json(dict(request.permission_profile))),
+                _jsonb(_dump_json(dict(request.budget or {}))),
+                _jsonb(_dump_json(dict(request.stop_conditions or {}))),
+                _jsonb(_dump_json(dict(request.summary or {}))),
+                None,
+                now,
+                now,
+                None,
+            ),
+        )
+        return cur.fetchone()
 
     def get_task_run(self, task_run_id: str) -> TaskRunRecord | None:
         if not is_db_uuid(task_run_id):
