@@ -14,7 +14,7 @@ from .profiles import (
     create_read_only_tools,
 )
 from .shell import RuntimeArtifactStore
-from .wrapper import ToolRuntime, wrap_tool_definition
+from .wrapper import TaskRunPermissionContext, ToolRuntime, wrap_tool_definition
 
 __all__ = [
     "ALL_TOOLS",
@@ -22,6 +22,7 @@ __all__ = [
     "READ_ONLY_PROFILE",
     "RuntimeArtifactStore",
     "SkillEnvGrant",
+    "TaskRunPermissionContext",
     "ToolDefinition",
     "ToolExecutionContext",
     "ToolName",

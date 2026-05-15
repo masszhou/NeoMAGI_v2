@@ -81,6 +81,19 @@ class TaskEventRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskPermissionDecisionRecord:
+    id: str
+    task_run_id: str
+    policy_request: dict[str, Any]
+    raw_decision: dict[str, Any]
+    resolved_decision: dict[str, Any]
+    profile_name: str
+    occurred_at: str
+    step_id: str | None = None
+    tool_execution_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TaskRunCreateRequest:
     workspace_root: str
     goal: str
@@ -155,6 +168,27 @@ class TaskRunRepository(Protocol):
         ...
 
     def list_events(self, task_run_id: str) -> list[TaskEventRecord]:
+        ...
+
+    def append_permission_decision(
+        self,
+        *,
+        task_run_id: str,
+        policy_request: Mapping[str, Any],
+        raw_decision: Mapping[str, Any],
+        resolved_decision: Mapping[str, Any],
+        profile_name: str,
+        step_id: str | None = None,
+        tool_execution_id: str | None = None,
+        occurred_at: str | None = None,
+        decision_id: str | None = None,
+    ) -> TaskPermissionDecisionRecord:
+        ...
+
+    def list_permission_decisions(
+        self,
+        task_run_id: str,
+    ) -> list[TaskPermissionDecisionRecord]:
         ...
 
     def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
@@ -473,6 +507,79 @@ class PostgresTaskRunRepository:
             rows = cur.fetchall()
         return [_task_event_from_row(row) for row in rows]
 
+    def append_permission_decision(
+        self,
+        *,
+        task_run_id: str,
+        policy_request: Mapping[str, Any],
+        raw_decision: Mapping[str, Any],
+        resolved_decision: Mapping[str, Any],
+        profile_name: str,
+        step_id: str | None = None,
+        tool_execution_id: str | None = None,
+        occurred_at: str | None = None,
+        decision_id: str | None = None,
+    ) -> TaskPermissionDecisionRecord:
+        _validate_uuid("task_run_id", task_run_id)
+        if step_id is not None:
+            _validate_uuid("step_id", step_id)
+        if tool_execution_id is not None:
+            _validate_uuid("tool_execution_id", tool_execution_id)
+        decision_id = decision_id or new_db_uuid()
+        occurred_at = occurred_at or utc_now_iso()
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {self._schema}.task_permission_decisions(
+                        id, task_run_id, step_id, tool_execution_id,
+                        policy_request, raw_decision, resolved_decision,
+                        profile_name, occurred_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, task_run_id, step_id, tool_execution_id,
+                              policy_request, raw_decision, resolved_decision,
+                              profile_name, occurred_at
+                    """,
+                    (
+                        decision_id,
+                        task_run_id,
+                        step_id,
+                        tool_execution_id,
+                        _jsonb(_dump_json(dict(policy_request))),
+                        _jsonb(_dump_json(dict(raw_decision))),
+                        _jsonb(_dump_json(dict(resolved_decision))),
+                        profile_name,
+                        occurred_at,
+                    ),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return _task_permission_decision_from_row(row)
+
+    def list_permission_decisions(
+        self,
+        task_run_id: str,
+    ) -> list[TaskPermissionDecisionRecord]:
+        _validate_uuid("task_run_id", task_run_id)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, task_run_id, step_id, tool_execution_id,
+                       policy_request, raw_decision, resolved_decision,
+                       profile_name, occurred_at
+                FROM {self._schema}.task_permission_decisions
+                WHERE task_run_id = %s
+                ORDER BY occurred_at ASC, id ASC
+                """,
+                (task_run_id,),
+            )
+            rows = cur.fetchall()
+        return [_task_permission_decision_from_row(row) for row in rows]
+
     def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
         with self._conn.cursor() as cur:
             cur.execute(
@@ -497,6 +604,11 @@ def _validate_taskrun_status(status: str) -> None:
 def _validate_taskstep_status(status: str) -> None:
     if status not in TASKSTEP_STATUSES:
         raise ValueError(f"invalid TaskStep status: {status}")
+
+
+def _validate_uuid(label: str, value: str) -> None:
+    if not is_db_uuid(value):
+        raise ValueError(f"invalid {label}: {value}")
 
 
 def _task_run_from_row(row: Any) -> TaskRunRecord:
@@ -546,12 +658,27 @@ def _task_event_from_row(row: Any) -> TaskEventRecord:
     )
 
 
+def _task_permission_decision_from_row(row: Any) -> TaskPermissionDecisionRecord:
+    return TaskPermissionDecisionRecord(
+        id=str(row[0]),
+        task_run_id=str(row[1]),
+        step_id=str(row[2]) if row[2] is not None else None,
+        tool_execution_id=str(row[3]) if row[3] is not None else None,
+        policy_request=dict(row[4] or {}),
+        raw_decision=dict(row[5] or {}),
+        resolved_decision=dict(row[6] or {}),
+        profile_name=row[7],
+        occurred_at=_iso(row[8]),
+    )
+
+
 __all__ = [
     "PostgresTaskRunRepository",
     "TASKRUN_STATUSES",
     "TASKSTEP_STATUSES",
     "TERMINAL_TASKRUN_STATUSES",
     "TaskEventRecord",
+    "TaskPermissionDecisionRecord",
     "TaskRunCreateRequest",
     "TaskRunRecord",
     "TaskRunRepository",

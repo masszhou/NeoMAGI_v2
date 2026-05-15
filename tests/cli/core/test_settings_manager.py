@@ -50,6 +50,50 @@ def test_settings_manager_merges_global_project_and_preserves_unknown_on_save(
     assert (cwd / ".magipi" / ".gitignore").read_text(encoding="utf-8") == "secrets/\n"
 
 
+def test_settings_manager_merges_taskrun_permission_profiles(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    cwd = tmp_path / "repo"
+    agent_dir.mkdir()
+    (cwd / ".magipi").mkdir(parents=True)
+    (agent_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "taskrun": {
+                    "permissionProfiles": {
+                        "guarded": {
+                            "paths": {"allow": ["$WORKSPACE/**"]},
+                            "commands": {"allow": ["pytest"]},
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (cwd / ".magipi" / "settings.json").write_text(
+        json.dumps(
+            {
+                "taskrun": {
+                    "permissionProfiles": {
+                        "guarded": {
+                            "commands": {"allow": ["pytest", "python"]},
+                            "network": {"mode": "deny"},
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = SettingsManager(cwd=cwd, agent_dir=agent_dir).load()
+
+    guarded = loaded.settings.taskrun.permission_profiles["guarded"]
+    assert guarded.paths.allow == ["$WORKSPACE/**"]
+    assert guarded.commands.allow == ["pytest", "python"]
+    assert guarded.network.mode == "deny"
+
+
 def test_settings_manager_defaults_to_neomagi_magipi_paths(
     tmp_path: Path,
     monkeypatch,

@@ -6,11 +6,16 @@ import subprocess
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from cli.core.taskrun_projection import (
     TaskRunProjectionResult,
     TaskRunProjectionWriter,
+)
+from policy.permission_profiles import (
+    PermissionProfileError,
+    build_permission_profile_snapshot,
+    normalize_permission_profile_snapshot,
 )
 from storage.ids import is_db_uuid
 from storage.taskrun_repository import (
@@ -24,7 +29,7 @@ from storage.taskrun_repository import (
 
 
 STALE_RUNNING_THRESHOLD = timedelta(minutes=30)
-DEFAULT_PERMISSION_PROFILE = {"name": "interactive"}
+DEFAULT_PERMISSION_PROFILE = build_permission_profile_snapshot("interactive")
 DEFAULT_NEXT_ACTION = "step execution is not implemented until P2-M3"
 
 
@@ -58,17 +63,29 @@ class TaskRunService:
         self.clock = clock or (lambda: datetime.now(UTC))
         self.stale_threshold = stale_threshold
 
-    def start(self, goal: str, cwd: str | Path) -> TaskRunResult:
+    def start(
+        self,
+        goal: str,
+        cwd: str | Path,
+        *,
+        permission_profile: Mapping[str, Any] | None = None,
+    ) -> TaskRunResult:
         goal = goal.strip()
         if not goal:
             raise TaskRunServiceError("TaskRun goal must not be empty")
         workspace_root = _workspace_root(cwd)
+        try:
+            profile_snapshot = normalize_permission_profile_snapshot(
+                permission_profile or DEFAULT_PERMISSION_PROFILE
+            )
+        except PermissionProfileError as exc:
+            raise TaskRunServiceError(str(exc)) from exc
         self.recover_stale_running(workspace_root)
         record = self.repository.create_task_run(
             TaskRunCreateRequest(
                 workspace_root=workspace_root,
                 goal=goal,
-                permission_profile=DEFAULT_PERMISSION_PROFILE,
+                permission_profile=profile_snapshot,
             )
         )
         self.repository.append_event(
@@ -79,6 +96,7 @@ class TaskRunService:
                 "status": record.status,
                 "workspace_root": record.workspace_root,
                 "agent_session_id": record.agent_session_id,
+                "permission_profile": record.permission_profile,
             },
         )
         return self._summarize_and_project(record)

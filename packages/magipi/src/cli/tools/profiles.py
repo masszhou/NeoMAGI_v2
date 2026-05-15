@@ -8,6 +8,7 @@ from typing import Any
 
 from agent_core.runtime_types import RuntimeAgentTool
 from policy.audit import AuditSink
+from policy.permission_profiles import PermissionProfileResolver
 
 from .bash import create_bash_tool_definition
 from .definitions import SkillEnvGrant, ToolDefinition, ToolName
@@ -17,7 +18,7 @@ from .grep import create_grep_tool_definition
 from .ls import create_ls_tool_definition
 from .read import create_read_tool_definition
 from .shell import RuntimeArtifactStore
-from .wrapper import PolicyDecider, ToolRuntime, wrap_tool_definition
+from .wrapper import PolicyDecider, TaskRunPermissionContext, ToolRuntime, wrap_tool_definition
 from .write import create_write_tool_definition
 
 CODING_PROFILE: tuple[ToolName, ...] = ("read", "bash", "edit", "write")
@@ -65,6 +66,8 @@ def create_coding_tools(
     run_id_provider: Callable[[], str | None] | None = None,
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
+    permission_resolver: PermissionProfileResolver | None = None,
+    taskrun_permission_context: TaskRunPermissionContext | None = None,
     artifact_store: RuntimeArtifactStore | None = None,
     skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
 ) -> list[RuntimeAgentTool]:
@@ -76,6 +79,8 @@ def create_coding_tools(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        permission_resolver=permission_resolver,
+        taskrun_permission_context=taskrun_permission_context,
         skill_env_grant_provider=skill_env_grant_provider,
     )
 
@@ -88,6 +93,8 @@ def create_read_only_tools(
     run_id_provider: Callable[[], str | None] | None = None,
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
+    permission_resolver: PermissionProfileResolver | None = None,
+    taskrun_permission_context: TaskRunPermissionContext | None = None,
 ) -> list[RuntimeAgentTool]:
     return _wrap_definitions(
         create_read_only_tool_definitions(cwd),
@@ -97,6 +104,8 @@ def create_read_only_tools(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        permission_resolver=permission_resolver,
+        taskrun_permission_context=taskrun_permission_context,
     )
 
 
@@ -108,6 +117,8 @@ def create_all_tools(
     run_id_provider: Callable[[], str | None] | None = None,
     audit_sink: AuditSink | None = None,
     policy_decider: PolicyDecider | None = None,
+    permission_resolver: PermissionProfileResolver | None = None,
+    taskrun_permission_context: TaskRunPermissionContext | None = None,
     artifact_store: RuntimeArtifactStore | None = None,
     skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
 ) -> dict[ToolName, RuntimeAgentTool]:
@@ -119,6 +130,8 @@ def create_all_tools(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        permission_resolver=permission_resolver,
+        taskrun_permission_context=taskrun_permission_context,
         skill_env_grant_provider=skill_env_grant_provider,
     )
     return {name: wrap_tool_definition(definition, runtime) for name, definition in definitions.items()}
@@ -133,6 +146,8 @@ def _wrap_definitions(
     run_id_provider: Callable[[], str | None] | None,
     audit_sink: AuditSink | None,
     policy_decider: PolicyDecider | None,
+    permission_resolver: PermissionProfileResolver | None,
+    taskrun_permission_context: TaskRunPermissionContext | None,
     skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
 ) -> list[RuntimeAgentTool]:
     runtime = ToolRuntime(
@@ -142,6 +157,8 @@ def _wrap_definitions(
         run_id_provider=run_id_provider,
         audit_sink=audit_sink,
         policy_decider=policy_decider,
+        permission_resolver=permission_resolver,
+        taskrun_permission_context=taskrun_permission_context,
         skill_env_grant_provider=skill_env_grant_provider,
     )
     return [wrap_tool_definition(definition, runtime) for definition in definitions]

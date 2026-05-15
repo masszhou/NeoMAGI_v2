@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ai_provider.types import CacheRetention, ThinkingLevel
+from policy.permission_profiles import PermissionProfileName, PermissionProfileScope
 
 SettingsScope = Literal["global", "project"]
 
@@ -84,6 +85,15 @@ class SkillEnvSettings(BaseModel):
         return value
 
 
+class TaskRunProductSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    permission_profiles: dict[PermissionProfileName, PermissionProfileScope] = Field(
+        default_factory=dict,
+        alias="permissionProfiles",
+    )
+
+
 class ModelOverride(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -123,6 +133,7 @@ class ProductSettings(BaseModel):
     retry: dict[str, Any] = Field(default_factory=dict)
     compaction: dict[str, Any] = Field(default_factory=dict)
     branch_summary: dict[str, Any] = Field(default_factory=dict, alias="branchSummary")
+    taskrun: TaskRunProductSettings = Field(default_factory=TaskRunProductSettings)
 
 
 @dataclass(frozen=True, slots=True)
@@ -487,4 +498,5 @@ __all__ = [
     "SettingsManager",
     "SettingsScope",
     "SkillEnvSettings",
+    "TaskRunProductSettings",
 ]

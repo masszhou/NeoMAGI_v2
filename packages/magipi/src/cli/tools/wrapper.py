@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping
 
 from ai_provider.tools import validate_tool_arguments
 from ai_provider.types import Tool
@@ -18,12 +19,36 @@ from policy.redaction import (
     redact_secret_keys as _redact_secrets,
     redacted_command_preview as _redacted_command_preview,
 )
+from policy.permission_profiles import (
+    PermissionBudgetState,
+    PermissionProfileResolver,
+)
 from policy.shell_policy import decide_shell_access
 from policy.types import PolicyActor, PolicyDecision, PolicyRequest
 
 from .definitions import SkillEnvGrant, ToolDefinition, ToolExecutionContext
 
 PolicyDecider = Callable[[PolicyRequest], PolicyDecision | Awaitable[PolicyDecision]]
+TaskPermissionDecisionRecorder = Callable[..., None | Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRunPermissionContext:
+    task_run_id: str
+    permission_profile: Mapping[str, Any]
+    budget: Mapping[str, Any] | None = None
+    budget_state: PermissionBudgetState = field(default_factory=PermissionBudgetState)
+    step_id: str | None = None
+    tool_execution_id: str | None = None
+    ui_available: bool = False
+    record_permission_decision: TaskPermissionDecisionRecorder | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedPolicy:
+    raw: PolicyDecision
+    resolved: PolicyDecision
+    permission_profile: dict[str, Any] | None = None
 
 
 class ToolRuntime:
@@ -37,6 +62,8 @@ class ToolRuntime:
         actor: PolicyActor = "model",
         audit_sink: AuditSink | None = None,
         policy_decider: PolicyDecider | None = None,
+        permission_resolver: PermissionProfileResolver | None = None,
+        taskrun_permission_context: TaskRunPermissionContext | None = None,
         skill_env_grant_provider: Callable[[], SkillEnvGrant | None] | None = None,
     ) -> None:
         self.cwd = cwd
@@ -46,6 +73,8 @@ class ToolRuntime:
         self.actor = actor
         self.audit_sink = audit_sink or InMemoryAuditSink()
         self.policy_decider = policy_decider or default_policy_decider
+        self.permission_resolver = permission_resolver
+        self.taskrun_permission_context = taskrun_permission_context
         self.skill_env_grant_provider = skill_env_grant_provider
 
     @property
@@ -97,6 +126,9 @@ async def _execute_governed(
     start_monotonic = time.monotonic()
     run_id = runtime.current_run_id
     decision = PolicyDecision.block("policy did not run")
+    raw_decision: PolicyDecision | None = None
+    request: PolicyRequest | None = None
+    permission_profile: dict[str, Any] | None = None
     result: AgentToolResult | None = None
     exception: Exception | None = None
     try:
@@ -104,10 +136,13 @@ async def _execute_governed(
         if validation_error is not None:
             decision = PolicyDecision.block("schema validation failed", audit_tags=["schema:block"])
             result = _error_result(validation_error, is_error=True)
-            result = _with_common_details(result, decision, run_id, started, start_monotonic)
+            result = _with_common_details(result, decision, raw_decision, permission_profile, run_id, started, start_monotonic)
             return result
         request = _policy_request(definition, runtime, tool_call_id, args, run_id)
-        decision = await _resolve_policy_decision(runtime, request)
+        resolved = await _resolve_policy_decision(runtime, request)
+        raw_decision = resolved.raw
+        decision = resolved.resolved
+        permission_profile = resolved.permission_profile
         result = await _run_or_block_tool(
             definition,
             runtime,
@@ -118,16 +153,86 @@ async def _execute_governed(
             signal,
             on_update,
         )
-        result = _with_common_details(result, decision, run_id, started, start_monotonic)
+        result = _with_common_details(result, decision, raw_decision, permission_profile, run_id, started, start_monotonic)
         return result
     except Exception as exc:  # convert all tool exceptions into structured results
         exception = exc
         result = _error_result(str(exc), is_error=True)
-        result = _with_common_details(result, decision, run_id, started, start_monotonic, exception=exc)
+        result = _with_common_details(result, decision, raw_decision, permission_profile, run_id, started, start_monotonic, exception=exc)
         return result
     finally:
         if result is not None:
-            await _audit(runtime, definition, tool_call_id, args, decision, result, run_id, started, start_monotonic, exception)
+            finalize_errors = await _finalize_governed_execution(
+                runtime, definition, tool_call_id, args, request,
+                raw_decision, decision, permission_profile, result,
+                run_id, started, start_monotonic, exception,
+            )
+            if finalize_errors:
+                _attach_finalize_errors(result, finalize_errors)
+
+
+async def _finalize_governed_execution(
+    runtime: ToolRuntime,
+    definition: ToolDefinition,
+    tool_call_id: str,
+    args: dict[str, Any],
+    request: PolicyRequest | None,
+    raw_decision: PolicyDecision | None,
+    decision: PolicyDecision,
+    permission_profile: dict[str, Any] | None,
+    result: AgentToolResult,
+    run_id: str | None,
+    started: str,
+    start_monotonic: float,
+    exception: Exception | None,
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    try:
+        await _record_task_permission_decision(
+            runtime,
+            request,
+            raw_decision,
+            decision,
+            permission_profile,
+            started,
+        )
+    except Exception as exc:
+        errors.append(_finalize_error("task_permission_decision", exc))
+    try:
+        await _audit(
+            runtime,
+            definition,
+            tool_call_id,
+            args,
+            decision,
+            raw_decision,
+            permission_profile,
+            result,
+            run_id,
+            started,
+            start_monotonic,
+            exception,
+        )
+    except Exception as exc:
+        errors.append(_finalize_error("audit", exc))
+    return errors
+
+
+def _finalize_error(sink: str, exc: Exception) -> dict[str, str]:
+    return {
+        "sink": sink,
+        "exceptionClass": type(exc).__name__,
+        "message": str(exc),
+    }
+
+
+def _attach_finalize_errors(
+    result: AgentToolResult,
+    errors: list[dict[str, str]],
+) -> None:
+    details = result.details if isinstance(result.details, dict) else {}
+    details["toolFinalizeErrors"] = errors
+    result.details = details
 
 
 def _policy_request(
@@ -160,19 +265,73 @@ def _input_origin(actor: PolicyActor) -> str:
     return "extension"
 
 
-async def _resolve_policy_decision(runtime: ToolRuntime, request: PolicyRequest) -> PolicyDecision:
+async def _resolve_policy_decision(runtime: ToolRuntime, request: PolicyRequest) -> _ResolvedPolicy:
     decision = await maybe_await(runtime.policy_decider(request))
     if not isinstance(decision, PolicyDecision):
         decision = PolicyDecision.model_validate(decision)
-    if decision.effect == "confirm":
-        return decision.model_copy(
-            update={
-                "effect": "block",
-                "reason": decision.reason or "confirmation denied in M5",
-                "audit_tags": [*decision.audit_tags, "confirm:denied"],
-            }
+    if runtime.taskrun_permission_context is not None:
+        context = runtime.taskrun_permission_context
+        resolver = runtime.permission_resolver or PermissionProfileResolver()
+        resolution = resolver.resolve(
+            request,
+            decision,
+            context.permission_profile,
+            ui_available=context.ui_available,
+            budget=context.budget,
+            budget_state=context.budget_state,
         )
-    return decision
+        return _ResolvedPolicy(
+            raw=resolution.raw_decision,
+            resolved=resolution.resolved_decision,
+            permission_profile=resolution.metadata,
+        )
+    if decision.effect == "confirm":
+        return _ResolvedPolicy(
+            raw=decision,
+            resolved=decision.model_copy(
+                update={
+                    "effect": "block",
+                    "reason": decision.reason or "confirmation denied in M5",
+                    "audit_tags": [*decision.audit_tags, "confirm:denied"],
+                }
+            ),
+        )
+    return _ResolvedPolicy(raw=decision, resolved=decision)
+
+
+async def _record_task_permission_decision(
+    runtime: ToolRuntime,
+    request: PolicyRequest | None,
+    raw_decision: PolicyDecision | None,
+    resolved_decision: PolicyDecision,
+    permission_profile: dict[str, Any] | None,
+    occurred_at: str,
+) -> None:
+    context = runtime.taskrun_permission_context
+    if (
+        context is None
+        or context.record_permission_decision is None
+        or request is None
+        or raw_decision is None
+    ):
+        return
+    profile_name = (
+        str(permission_profile.get("name"))
+        if isinstance(permission_profile, dict) and permission_profile.get("name")
+        else str(context.permission_profile.get("name", "unknown"))
+    )
+    await maybe_await(
+        context.record_permission_decision(
+            task_run_id=context.task_run_id,
+            step_id=context.step_id,
+            tool_execution_id=context.tool_execution_id,
+            policy_request=request.model_dump(by_alias=True, exclude_none=True),
+            raw_decision=raw_decision.model_dump(by_alias=True, exclude_none=True),
+            resolved_decision=resolved_decision.model_dump(by_alias=True, exclude_none=True),
+            profile_name=profile_name,
+            occurred_at=occurred_at,
+        )
+    )
 
 
 async def _run_or_block_tool(
@@ -185,7 +344,7 @@ async def _run_or_block_tool(
     signal: AbortSignal | None,
     on_update: ToolUpdateCallback | None,
 ) -> AgentToolResult:
-    if decision.effect == "block":
+    if decision.effect != "allow":
         return _error_result(decision.reason or "tool execution blocked by policy", is_error=True)
     context = ToolExecutionContext(
         tool_call_id=tool_call_id,
@@ -235,6 +394,8 @@ def default_policy_decider(request: PolicyRequest) -> PolicyDecision:
 def _with_common_details(
     result: AgentToolResult,
     decision: PolicyDecision,
+    raw_decision: PolicyDecision | None,
+    permission_profile: dict[str, Any] | None,
     run_id: str | None,
     started: str,
     start_monotonic: float,
@@ -252,6 +413,9 @@ def _with_common_details(
         "startedAt": started,
         "endedAt": ended,
     }
+    if raw_decision is not None and permission_profile is not None:
+        details["rawPolicyDecision"] = _decision_details(raw_decision, run_id)
+        details["permissionProfile"] = dict(permission_profile)
     if exception is not None:
         details["exceptionClass"] = type(exception).__name__
         details["exceptionMessage"] = str(exception)
@@ -264,6 +428,8 @@ async def _audit(
     tool_call_id: str,
     args: dict[str, Any],
     decision: PolicyDecision,
+    raw_decision: PolicyDecision | None,
+    permission_profile: dict[str, Any] | None,
     result: AgentToolResult,
     run_id: str | None,
     started: str,
@@ -295,6 +461,12 @@ async def _audit(
         toolCallId=tool_call_id,
         args=audit_args,
         policyDecision=_audit_policy_decision(decision),
+        rawPolicyDecision=(
+            _audit_policy_decision(raw_decision).model_dump(by_alias=True, exclude_none=True)
+            if raw_decision is not None and permission_profile is not None
+            else None
+        ),
+        permissionProfile=dict(permission_profile) if permission_profile is not None else None,
         startedAt=started,
         endedAt=ended,
         durationMs=duration if isinstance(duration, int) else int((time.monotonic() - start_monotonic) * 1000),
@@ -453,6 +625,8 @@ def _now_iso() -> str:
 
 __all__ = [
     "PolicyDecider",
+    "TaskPermissionDecisionRecorder",
+    "TaskRunPermissionContext",
     "ToolRuntime",
     "default_policy_decider",
     "wrap_tool_definition",

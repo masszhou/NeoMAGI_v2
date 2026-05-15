@@ -8,6 +8,7 @@ from storage.taskrun_repository import PostgresTaskRunRepository, TaskRunCreateR
 
 TASK_ID = "019e2200-0000-7000-8000-000000000001"
 SESSION_ID = "019e2200-0000-7000-8000-000000000002"
+PERMISSION_ID = "019e2200-0000-7000-8000-000000000003"
 
 
 class _Cursor:
@@ -15,6 +16,7 @@ class _Cursor:
         self.fail_task_insert = fail_task_insert
         self.queries: list[str] = []
         self._last_query = ""
+        self._last_params: tuple[object, ...] = ()
 
     def __enter__(self):
         return self
@@ -25,10 +27,23 @@ class _Cursor:
     def execute(self, query: str, _params: tuple[object, ...] = ()) -> None:
         self.queries.append(query)
         self._last_query = query
+        self._last_params = _params
         if self.fail_task_insert and "INSERT INTO \"neomagi\".task_runs" in query:
             raise RuntimeError("injected task insert failure")
 
     def fetchone(self):
+        if "RETURNING id, task_run_id, step_id, tool_execution_id" in self._last_query:
+            return (
+                PERMISSION_ID,
+                TASK_ID,
+                None,
+                None,
+                {"toolName": "read"},
+                {"effect": "confirm", "auditTags": ["policy:confirm"]},
+                {"effect": "block", "auditTags": ["policy:confirm", "permission:guarded:block"]},
+                "guarded",
+                "2026-05-13T00:00:00+00:00",
+            )
         if "RETURNING id, workspace_root" not in self._last_query:
             return None
         return (
@@ -47,6 +62,23 @@ class _Cursor:
             "2026-05-13T00:00:00+00:00",
             None,
         )
+
+    def fetchall(self):
+        if "FROM \"neomagi\".task_permission_decisions" in self._last_query:
+            return [
+                (
+                    PERMISSION_ID,
+                    TASK_ID,
+                    None,
+                    None,
+                    {"toolName": "read"},
+                    {"effect": "confirm", "normalizedArgs": {"path": "a.txt"}},
+                    {"effect": "block", "auditTags": ["permission:guarded:block"]},
+                    "guarded",
+                    "2026-05-13T00:00:00+00:00",
+                )
+            ]
+        return []
 
 
 class _Conn:
@@ -120,3 +152,54 @@ def test_create_task_run_rolls_back_owned_session_on_task_insert_failure() -> No
 
     assert conn.commits == 0
     assert conn.rollbacks == 1
+
+
+def test_append_permission_decision_allows_null_tool_execution_id() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    record = repo.append_permission_decision(
+        task_run_id=TASK_ID,
+        step_id=None,
+        tool_execution_id=None,
+        policy_request={"toolName": "read"},
+        raw_decision={"effect": "confirm", "auditTags": ["policy:confirm"]},
+        resolved_decision={
+            "effect": "block",
+            "auditTags": ["policy:confirm", "permission:guarded:block"],
+        },
+        profile_name="guarded",
+        decision_id=PERMISSION_ID,
+        occurred_at="2026-05-13T00:00:00+00:00",
+    )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert record.id == PERMISSION_ID
+    assert record.tool_execution_id is None
+    assert record.raw_decision["auditTags"] == ["policy:confirm"]
+    assert "INSERT INTO \"neomagi\".task_permission_decisions" in sql
+    assert conn.commits == 1
+
+
+def test_list_permission_decisions_preserves_alias_json() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    records = repo.list_permission_decisions(TASK_ID)
+
+    assert len(records) == 1
+    assert records[0].raw_decision["normalizedArgs"] == {"path": "a.txt"}
+    assert records[0].resolved_decision["auditTags"] == ["permission:guarded:block"]
+
+
+def test_append_permission_decision_rejects_invalid_task_run_id() -> None:
+    repo = _repo(_Conn())
+
+    with pytest.raises(ValueError, match="invalid task_run_id"):
+        repo.append_permission_decision(
+            task_run_id="not-a-uuid",
+            policy_request={"toolName": "read"},
+            raw_decision={"effect": "allow"},
+            resolved_decision={"effect": "allow"},
+            profile_name="guarded",
+        )

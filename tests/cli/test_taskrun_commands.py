@@ -22,10 +22,16 @@ class _Conn:
 class _FakeService:
     def __init__(self, result: TaskRunResult) -> None:
         self.result = result
-        self.calls: list[tuple[str, object, Path]] = []
+        self.calls: list[tuple[object, ...]] = []
 
-    def start(self, goal: str, cwd: Path) -> TaskRunResult:
-        self.calls.append(("start", goal, cwd))
+    def start(
+        self,
+        goal: str,
+        cwd: Path,
+        *,
+        permission_profile: object | None = None,
+    ) -> TaskRunResult:
+        self.calls.append(("start", goal, cwd, permission_profile))
         return self.result
 
     def status(self, task_id: str | None, cwd: Path) -> TaskRunResult:
@@ -75,6 +81,18 @@ def _stub_runtime(monkeypatch, service: _FakeService) -> _Conn:
     monkeypatch.setattr(taskrun_commands, "ensure_schema", lambda _conn, _config: None)
     monkeypatch.setattr(
         taskrun_commands,
+        "_load_permission_profile_snapshot",
+        lambda name, _cwd: {
+            "name": name,
+            "nonInteractive": name != "interactive",
+            "scope": {},
+            "sources": ["builtin"],
+            "explicitScope": False,
+            "explicitScopeKeys": [],
+        },
+    )
+    monkeypatch.setattr(
+        taskrun_commands,
         "PostgresTaskRunRepository",
         lambda _conn, _config: object(),
     )
@@ -102,6 +120,23 @@ def test_taskrun_start_prints_full_id_and_status(
     assert service.calls[0][0] == "start"
     assert service.calls[0][1] == "Analyze this repo"
     assert conn.closed is True
+
+
+def test_taskrun_start_passes_permission_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(
+        ["start", "--permission", "guarded", "Analyze", "this", "repo"],
+        prog="magipi",
+    )
+
+    assert rc == 0
+    assert service.calls[0][0] == "start"
+    assert service.calls[0][3]["name"] == "guarded"
 
 
 def test_taskrun_status_passes_optional_id(
@@ -160,6 +195,41 @@ def test_taskrun_unknown_subcommand_exits_2() -> None:
         taskrun_commands.run_taskrun_command(["unknown"], prog="magipi")
 
     assert exc.value.code == 2
+
+
+def test_taskrun_unknown_permission_profile_exits_2() -> None:
+    with pytest.raises(SystemExit) as exc:
+        taskrun_commands.run_taskrun_command(
+            ["start", "--permission", "custom", "Analyze"],
+            prog="magipi",
+        )
+
+    assert exc.value.code == 2
+
+
+def test_taskrun_full_without_explicit_scope_fails_before_db(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(
+        taskrun_commands,
+        "load_database_config",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("db should not load")),
+    )
+
+    rc = taskrun_commands.run_taskrun_command(
+        ["start", "--permission", "full", "Analyze"],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "requires explicit" in captured.err
 
 
 def test_taskrun_start_does_not_swallow_late_env_file_flag() -> None:

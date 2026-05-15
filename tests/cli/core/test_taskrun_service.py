@@ -10,6 +10,7 @@ import pytest
 
 from cli.core.taskrun_projection import PROJECTION_NOTICE, TaskRunProjectionWriter
 from cli.core.taskrun_service import TaskRunService, TaskRunServiceError
+from policy.permission_profiles import build_permission_profile_snapshot
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
@@ -205,7 +206,8 @@ def test_start_creates_pending_taskrun_summary_and_projection(tmp_path: Path) ->
     assert result.task_run.status == "pending"
     assert result.task_run.agent_session_id
     assert result.summary["goal"] == "Analyze this repo"
-    assert result.summary["permission_profile"] == {"name": "interactive"}
+    assert result.summary["permission_profile"]["name"] == "interactive"
+    assert result.summary["permission_profile"]["sources"] == ["builtin"]
     assert result.summary["current_step"] is None
     assert (result.projection.path / "state.json").is_file()
     assert (result.projection.path / "events.jsonl").is_file()
@@ -317,3 +319,21 @@ def test_summary_regenerates_and_overwrites_projection(tmp_path: Path) -> None:
     body = (regenerated.projection.path / "summary.md").read_text(encoding="utf-8")
     assert "USER EDIT" not in body
     assert PROJECTION_NOTICE in body
+
+
+def test_start_persists_explicit_permission_profile_snapshot(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    service = _service(repo)
+    profile = build_permission_profile_snapshot(
+        "guarded",
+        {"paths": {"allow": ["$WORKSPACE/**"]}},
+        sources=["builtin", "project"],
+        explicit_scope=True,
+        explicit_scope_keys=["paths"],
+    )
+
+    result = service.start("Analyze this repo", tmp_path, permission_profile=profile)
+
+    assert result.task_run.permission_profile["name"] == "guarded"
+    assert result.task_run.permission_profile["sources"] == ["builtin", "project"]
+    assert result.summary["permission_profile"]["name"] == "guarded"

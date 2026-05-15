@@ -25,8 +25,14 @@ from cli.tools import (
 from cli.tools.context import convert_coding_messages_to_llm
 from cli.tools.definitions import SkillEnvGrant, ToolDefinition, object_schema
 from cli.tools.edit import prepare_edit_arguments
-from cli.tools.wrapper import ToolRuntime, default_policy_decider, wrap_tool_definition
+from cli.tools.wrapper import (
+    TaskRunPermissionContext,
+    ToolRuntime,
+    default_policy_decider,
+    wrap_tool_definition,
+)
 from policy.audit import InMemoryAuditSink
+from policy.permission_profiles import build_permission_profile_snapshot
 from policy.shell_policy import decide_shell_access
 from policy.types import PolicyDecision, PolicyRequest
 from storage.in_memory_session_repository import InMemorySessionRepository
@@ -621,6 +627,192 @@ def test_confirm_decision_becomes_denied_result(tmp_path: Path) -> None:
         assert result.details["policyDecision"]["effect"] == "block"
         assert "confirm:denied" in result.details["auditTags"]
         assert audit.records[0].policy_decision.effect == "block"
+
+    asyncio.run(run())
+
+
+def test_taskrun_confirm_uses_permission_resolver_and_records_decision(tmp_path: Path) -> None:
+    async def run() -> None:
+        audit = InMemoryAuditSink()
+        records: list[dict[str, Any]] = []
+
+        def confirm_policy(_request: Any) -> PolicyDecision:
+            return PolicyDecision.confirm("needs approval")
+
+        read = _tool_map(
+            create_coding_tools(
+                tmp_path,
+                audit_sink=audit,
+                policy_decider=confirm_policy,
+                taskrun_permission_context=TaskRunPermissionContext(
+                    task_run_id="019e2200-0000-7000-8000-000000000001",
+                    permission_profile=build_permission_profile_snapshot("guarded"),
+                    record_permission_decision=lambda **kwargs: records.append(dict(kwargs)),
+                ),
+            )
+        )["read"]
+        result = await read.execute("confirm", {"path": "a.txt"}, None, None)
+
+        reason = result.details["policyDecision"]["reason"]
+        assert result.is_error is True
+        assert result.details["rawPolicyDecision"]["effect"] == "confirm"
+        assert result.details["policyDecision"]["effect"] == "block"
+        assert result.details["permissionProfile"]["name"] == "guarded"
+        assert "confirmation denied in M5" not in reason
+        assert "guarded" in reason
+        assert records[0]["raw_decision"]["effect"] == "confirm"
+        assert records[0]["resolved_decision"]["effect"] == "block"
+        assert records[0]["profile_name"] == "guarded"
+        assert audit.records[0].policy_decision.effect == "block"
+        assert audit.records[0].model_extra["rawPolicyDecision"]["effect"] == "confirm"
+
+    asyncio.run(run())
+
+
+def test_taskrun_full_profile_can_auto_resolve_confirm_inside_scope(tmp_path: Path) -> None:
+    async def run() -> None:
+        (tmp_path / "a.txt").write_text("one", encoding="utf-8")
+        records: list[dict[str, Any]] = []
+        profile = build_permission_profile_snapshot(
+            "full",
+            {"paths": {"allow": ["$WORKSPACE/**"]}},
+            sources=["builtin", "project"],
+            explicit_scope=True,
+            explicit_scope_keys=["paths"],
+        )
+        read = _tool_map(
+            create_coding_tools(
+                tmp_path,
+                policy_decider=lambda _request: PolicyDecision.confirm("needs approval"),
+                taskrun_permission_context=TaskRunPermissionContext(
+                    task_run_id="019e2200-0000-7000-8000-000000000001",
+                    permission_profile=profile,
+                    record_permission_decision=lambda **kwargs: records.append(dict(kwargs)),
+                ),
+            )
+        )["read"]
+
+        result = await read.execute("confirm", {"path": "a.txt"}, None, None)
+
+        assert result.is_error is False
+        assert result.details["policyDecision"]["effect"] == "allow"
+        assert result.details["rawPolicyDecision"]["effect"] == "confirm"
+        assert records[0]["raw_decision"]["effect"] == "confirm"
+        assert records[0]["resolved_decision"]["effect"] == "allow"
+
+    asyncio.run(run())
+
+
+def test_taskrun_interactive_headless_blocks_before_tool_execution(tmp_path: Path) -> None:
+    async def run() -> None:
+        calls = 0
+
+        async def execute(
+            _args: dict[str, Any],
+            _context: Any,
+            _signal: Any,
+            _on_update: Any,
+        ) -> AgentToolResult:
+            nonlocal calls
+            calls += 1
+            return AgentToolResult(content=[{"type": "text", "text": "ran"}])
+
+        tool = wrap_tool_definition(
+            ToolDefinition(
+                name="read",
+                label="read",
+                description="headless gate test",
+                parameters=object_schema({}),
+                execute=execute,
+            ),
+            ToolRuntime(
+                cwd=str(tmp_path),
+                policy_decider=lambda _request: PolicyDecision.allow(),
+                taskrun_permission_context=TaskRunPermissionContext(
+                    task_run_id="019e2200-0000-7000-8000-000000000001",
+                    permission_profile=build_permission_profile_snapshot("interactive"),
+                ),
+            ),
+        )
+
+        result = await tool.execute("headless", {}, None, None)
+
+        assert calls == 0
+        assert result.is_error is True
+        assert "cannot run headless" in result.details["policyDecision"]["reason"]
+
+    asyncio.run(run())
+
+
+def test_taskrun_permission_sink_failure_does_not_replace_tool_result(tmp_path: Path) -> None:
+    async def run() -> None:
+        (tmp_path / "a.txt").write_text("one", encoding="utf-8")
+        audit = InMemoryAuditSink()
+
+        def fail_permission_record(**_kwargs: Any) -> None:
+            raise RuntimeError("permission sink down")
+
+        read = _tool_map(
+            create_coding_tools(
+                tmp_path,
+                audit_sink=audit,
+                taskrun_permission_context=TaskRunPermissionContext(
+                    task_run_id="019e2200-0000-7000-8000-000000000001",
+                    permission_profile=build_permission_profile_snapshot("guarded"),
+                    record_permission_decision=fail_permission_record,
+                ),
+            )
+        )["read"]
+
+        result = await read.execute("read", {"path": "a.txt"}, None, None)
+
+        assert result.is_error is False
+        assert result.content[0]["text"] == "one"
+        assert result.details["toolFinalizeErrors"] == [
+            {
+                "sink": "task_permission_decision",
+                "exceptionClass": "RuntimeError",
+                "message": "permission sink down",
+            }
+        ]
+        assert audit.records[0].tool_name == "read"
+
+    asyncio.run(run())
+
+
+def test_taskrun_audit_sink_failure_does_not_replace_tool_result(tmp_path: Path) -> None:
+    async def run() -> None:
+        (tmp_path / "a.txt").write_text("one", encoding="utf-8")
+        permission_records: list[dict[str, Any]] = []
+
+        class FailingAuditSink:
+            def record(self, _record: Any) -> None:
+                raise RuntimeError("audit sink down")
+
+        read = _tool_map(
+            create_coding_tools(
+                tmp_path,
+                audit_sink=FailingAuditSink(),
+                taskrun_permission_context=TaskRunPermissionContext(
+                    task_run_id="019e2200-0000-7000-8000-000000000001",
+                    permission_profile=build_permission_profile_snapshot("guarded"),
+                    record_permission_decision=lambda **kwargs: permission_records.append(dict(kwargs)),
+                ),
+            )
+        )["read"]
+
+        result = await read.execute("read", {"path": "a.txt"}, None, None)
+
+        assert result.is_error is False
+        assert result.content[0]["text"] == "one"
+        assert result.details["toolFinalizeErrors"] == [
+            {
+                "sink": "audit",
+                "exceptionClass": "RuntimeError",
+                "message": "audit sink down",
+            }
+        ]
+        assert permission_records[0]["resolved_decision"]["effect"] == "allow"
 
     asyncio.run(run())
 
