@@ -31,6 +31,7 @@ One row per durable session.
 - `parent_session_id` references `agent_sessions.id`.
 - `current_leaf_entry_id` references `agent_session_entries.id`.
 - Child tables reference `agent_sessions.id` through `session_id`.
+- `task_runs.agent_session_id` references this table for TaskRun-owned sessions.
 
 ## Notes
 
@@ -39,10 +40,14 @@ One row per durable session.
 - `cwd` is used when the CLI chooses the most recent session for the current
   workspace.
 - Fork/clone mint a new session and preserve lineage through `parent_session_id`.
+- TaskRun-owned sessions are hidden from ordinary recent-session selection;
+  `task_runs.agent_session_id` is the authoritative ownership signal and
+  `source.taskRunOwned` is only a diagnostic hint.
 
 ## References
 
 - `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Durable Session Architecture
+- `design_docs/architecture/p2_taskrun_architecture.md`
 - `design_docs/roadmap/p1_engine_pi.md` § P1-M6: Session Manager
 - `design_docs/decisions/0009-pi-cli-product-equivalence-contract.md`

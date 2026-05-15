@@ -25,6 +25,7 @@ One row per metadata key.
 | --- | --- |
 | `neomagi_session_schema_version` | NeoMAGI durable session schema version. |
 | `pi_session_version` | Pi-compatible JSONL session format version. |
+| `neomagi_taskrun_schema_version` | NeoMAGI TaskRun schema version. |
 
 ## Notes
 
@@ -38,3 +39,4 @@ One row per metadata key.
 - `packages/magipi/src/storage/schema.py`
 - `design_docs/decisions/0007-database-hard-dependency-fail-fast.md`
 - `design_docs/roadmap/p1_engine_pi.md` § P1-M6: Session Manager
+- `design_docs/architecture/p2_taskrun_architecture.md`

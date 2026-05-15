@@ -10,7 +10,10 @@ Postgres business schema, normally `neomagi`.
 
 Current schema source: `packages/magipi/src/storage/schema.py`.
 
-The current M6 schema has **7** `agent_*` tables:
+The current schema has **12** business tables: **7** `agent_*` session/runtime
+tables and **5** `task_*` TaskRun tables.
+
+Session/runtime tables:
 
 | Table | Purpose |
 | --- | --- |
@@ -22,6 +25,16 @@ The current M6 schema has **7** `agent_*` tables:
 | `agent_audit_events` | Policy/audit event ledger for governed actions. |
 | `agent_session_labels` | Mutable labels attached to session entries. |
 
+TaskRun tables:
+
+| Table | Purpose |
+| --- | --- |
+| `task_runs` | Workspace-scoped TaskRun root records and lifecycle state. |
+| `task_steps` | Ordered semantic steps inside a TaskRun. |
+| `task_events` | TaskRun event ledger and projection event source. |
+| `task_permission_decisions` | Task-scoped permission decision audit records. |
+| `task_experiments` | Durable experiment records attached to TaskRun steps. |
+
 Table docs:
 
 - `design_docs/data_models/agent_schema_meta.md`
@@ -31,6 +44,11 @@ Table docs:
 - `design_docs/data_models/agent_tool_executions.md`
 - `design_docs/data_models/agent_audit_events.md`
 - `design_docs/data_models/agent_session_labels.md`
+- `design_docs/data_models/task_runs.md`
+- `design_docs/data_models/task_steps.md`
+- `design_docs/data_models/task_events.md`
+- `design_docs/data_models/task_permission_decisions.md`
+- `design_docs/data_models/task_experiments.md`
 
 Current non-tables:
 
@@ -43,7 +61,9 @@ Current non-tables:
 
 - `packages/magipi/src/storage/schema.py`
 - `design_docs/architecture/p1_pi_cli_technical_architecture.md` § Durable Session Architecture
+- `design_docs/architecture/p2_taskrun_architecture.md`
 - `design_docs/roadmap/p1_engine_pi.md` § P1-M6: Session Manager
+- `design_docs/roadmap/p2_taskrun.md`
 - `design_docs/decisions/0004-use-postgresql-pgvector-instead-of-sqlite.md`
 - `design_docs/decisions/0006-database-schema-default-neomagi.md`
 - `design_docs/decisions/0007-database-hard-dependency-fail-fast.md`
