@@ -165,7 +165,7 @@ Legal TaskRun transitions:
 
 ```text
 pending -> running | cancelled
-running -> blocked | completed | failed | cancelled
+running -> pending | blocked | completed | failed | cancelled
 running(stale) -> blocked
 blocked -> running | failed | cancelled
 completed -> archived
@@ -173,9 +173,9 @@ failed -> archived
 cancelled -> archived
 ```
 
-`pending -> cancelled` covers explicit close/cancel before the first TaskRun step starts. `completed` is reserved for a TaskRun that has actually executed to completion.
+`pending -> cancelled` covers explicit close/cancel before the first TaskRun step starts. `running -> pending` covers a successful manual step that leaves the TaskRun open for the next explicit step. `completed` is reserved for a TaskRun that has actually executed to completion.
 
-`heartbeat_at` is the stale-running signal for crash recovery. While a TaskRun is `running`, the owning process updates `heartbeat_at`. `taskrun start`, `taskrun status`, and `taskrun resume` must detect stale running TaskRuns in the workspace before enforcing the single-running rule. A stale `running` TaskRun is moved to `blocked` with a task-run-level event; it must not keep the workspace permanently locked.
+`heartbeat_at` is the stale-running signal for crash recovery. While a TaskRun is `running`, the owning process updates `heartbeat_at`. `taskrun start`, `taskrun status`, `taskrun step`, and `taskrun resume` must detect stale running TaskRuns in the workspace before enforcing the single-running rule. A stale `running` TaskRun is moved to `blocked` with a task-run-level event; it must not keep the workspace permanently locked.
 
 `taskrun resume <id>` only transitions `blocked -> running`. It may resume a TaskRun that was first moved from stale `running` to `blocked`; it must fail fast for `completed`, `failed`, `cancelled`, and `archived` TaskRuns.
 

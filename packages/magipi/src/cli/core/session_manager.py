@@ -76,8 +76,14 @@ class SessionManagerError(RuntimeError):
 
 
 class SessionManager:
-    def __init__(self, repository: SessionRepository) -> None:
+    def __init__(
+        self,
+        repository: SessionRepository,
+        *,
+        include_taskrun_owned: bool = False,
+    ) -> None:
         self.repository = repository
+        self.include_taskrun_owned = include_taskrun_owned
 
     def start_or_create(
         self,
@@ -107,7 +113,12 @@ class SessionManager:
     def resume_session(self, session_id: str) -> SessionRecord:
         session_ref = session_id.strip()
         session = (
-            self.repository.get_session(session_ref) if is_db_uuid(session_ref) else None
+            self.repository.get_session(
+                session_ref,
+                include_taskrun_owned=self.include_taskrun_owned,
+            )
+            if is_db_uuid(session_ref)
+            else None
         )
         if session is None:
             session = self._resolve_session_prefix(session_ref)

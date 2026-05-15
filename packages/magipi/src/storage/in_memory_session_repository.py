@@ -59,7 +59,13 @@ class InMemorySessionRepository(SessionRepository):
         self.entries[session_id] = []
         return record
 
-    def get_session(self, session_id: str) -> SessionRecord | None:
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        include_taskrun_owned: bool = False,
+    ) -> SessionRecord | None:
+        _ = include_taskrun_owned
         record = self.sessions.get(session_id)
         if record is None or record.deleted_at is not None:
             return None

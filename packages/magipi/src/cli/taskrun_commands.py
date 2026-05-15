@@ -9,8 +9,18 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ai_provider.model_registry import canonical_model_ref, resolve_model, validate_thinking_level_for_model
+from cli.cli_args import CACHE_RETENTIONS, DEFAULT_MODEL_REF, THINKING_LEVELS
+from cli.core.model_settings import apply_settings_models
 from cli.core.settings import LoadedSettings, SettingsManager
-from cli.core.taskrun_service import TaskRunResult, TaskRunService, TaskRunServiceError
+from cli.core.taskrun_runner import TaskRunHeadlessRunner
+from cli.core.session_manager import SessionManager
+from cli.core.taskrun_service import (
+    TaskRunResult,
+    TaskRunRuntimeOptions,
+    TaskRunService,
+    TaskRunServiceError,
+)
 from policy.permission_profiles import (
     BUILTIN_PERMISSION_PROFILE_NAMES,
     PermissionProfileError,
@@ -18,6 +28,8 @@ from policy.permission_profiles import (
     profile_explicit_scope_keys,
 )
 from storage import (
+    PostgresAuditRepository,
+    PostgresSessionRepository,
     PostgresTaskRunRepository,
     connect_database,
     ensure_schema,
@@ -35,17 +47,43 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
             if args.cmd == "start"
             else None
         )
+        runtime_options = _load_runtime_options(args, cwd) if args.cmd == "step" else None
         db_config = load_database_config(env_file=args.env_file)
         conn = connect_database(db_config)
         try:
             ensure_schema(conn, db_config)
-            service = TaskRunService(PostgresTaskRunRepository(conn, db_config))
-            result = _dispatch(args, service, cwd=cwd, permission_profile=permission_profile)
+            task_repository = PostgresTaskRunRepository(conn, db_config)
+            service = TaskRunService(task_repository)
+            runner = (
+                TaskRunHeadlessRunner(
+                    session_manager=SessionManager(
+                        PostgresSessionRepository(conn, db_config),
+                        include_taskrun_owned=True,
+                    ),
+                    task_repository=task_repository,
+                    cwd=cwd,
+                    audit_sink_factory=lambda session_id: _postgres_audit_sink(
+                        conn,
+                        db_config,
+                        session_id,
+                    ),
+                )
+                if args.cmd == "step"
+                else None
+            )
+            result = _dispatch(
+                args,
+                service,
+                cwd=cwd,
+                permission_profile=permission_profile,
+                runtime_options=runtime_options,
+                runner=runner,
+            )
         finally:
             close = getattr(conn, "close", None)
             if callable(close):
                 close()
-    except (TaskRunServiceError, KeyError) as exc:
+    except (TaskRunServiceError, KeyError, ValueError) as exc:
         sys.stderr.write(f"{prog} taskrun: {exc}\n")
         return 1
     except Exception as exc:
@@ -53,7 +91,7 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
         return 2
 
     _print_result(result, include_summary=args.cmd == "summary")
-    return 0
+    return result.exit_code
 
 
 def _build_parser(prog: str) -> argparse.ArgumentParser:
@@ -87,6 +125,27 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     summary = sub.add_parser("summary", help="Regenerate and print TaskRun summary.")
     summary.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
 
+    step = sub.add_parser("step", help="Execute exactly one manual TaskRun step.")
+    step.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    step.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_REF,
+        metavar="VENDOR/AUTH/MODEL",
+        help="Runtime model override for this manual step.",
+    )
+    step.add_argument(
+        "--thinking-level",
+        choices=THINKING_LEVELS,
+        default="off",
+        help="Runtime thinking level for this manual step.",
+    )
+    step.add_argument(
+        "--cache-retention",
+        choices=CACHE_RETENTIONS,
+        default=None,
+        help="Provider prompt-cache retention override.",
+    )
+
     close = sub.add_parser("close", help="Close an unexecuted TaskRun as cancelled.")
     close.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
     return parser
@@ -98,6 +157,8 @@ def _dispatch(
     *,
     cwd: Path,
     permission_profile: Mapping[str, Any] | None,
+    runtime_options: TaskRunRuntimeOptions | None,
+    runner: TaskRunHeadlessRunner | None,
 ) -> TaskRunResult:
     if args.cmd == "start":
         goal = " ".join(args.goal).strip()
@@ -106,6 +167,15 @@ def _dispatch(
         return service.status(args.id, cwd)
     if args.cmd == "summary":
         return service.summary(args.id, cwd)
+    if args.cmd == "step":
+        if runner is None:
+            raise TaskRunServiceError("taskrun step runner is unavailable")
+        return service.step(
+            args.id,
+            cwd,
+            runtime_options=runtime_options,
+            runner=runner,
+        )
     if args.cmd == "close":
         return service.close(args.id, cwd)
     raise AssertionError(f"unhandled taskrun command: {args.cmd}")
@@ -124,6 +194,26 @@ def _load_permission_profile_snapshot(name: str, cwd: Path) -> dict[str, Any]:
         )
     except PermissionProfileError as exc:
         raise TaskRunServiceError(str(exc)) from exc
+
+
+def _load_runtime_options(args: argparse.Namespace, cwd: Path) -> TaskRunRuntimeOptions:
+    apply_settings_models(SettingsManager(cwd=cwd).load().settings)
+    model = resolve_model(args.model)
+    thinking_level = validate_thinking_level_for_model(model, args.thinking_level)
+    return TaskRunRuntimeOptions(
+        model_ref=canonical_model_ref(model),
+        thinking_level=thinking_level,
+        cache_retention=args.cache_retention,
+    )
+
+
+def _postgres_audit_sink(conn: Any, db_config: Any, session_id: str):
+    from storage.audit_sink import PostgresAuditSink
+
+    return PostgresAuditSink(
+        repository=PostgresAuditRepository(conn, db_config),
+        session_id_provider=lambda: session_id,
+    )
 
 
 def _selected_profile_config(
@@ -173,6 +263,10 @@ def _print_result(result: TaskRunResult, *, include_summary: bool) -> None:
     sys.stdout.write(f"status: {task_run.status}\n")
     sys.stdout.write(f"goal: {_goal_preview(task_run.goal)}\n")
     sys.stdout.write(f"agent_session_id: {task_run.agent_session_id}\n")
+    if result.step is not None:
+        sys.stdout.write(f"step_id: {result.step.id}\n")
+        sys.stdout.write(f"step_status: {result.step.status}\n")
+        sys.stdout.write(f"conclusion: {result.step.conclusion or ''}\n")
     sys.stdout.write(f"projection_path: {result.projection.path}\n")
     sys.stdout.write(f"next_action: {summary.get('next_action', '')}\n")
     if include_summary:

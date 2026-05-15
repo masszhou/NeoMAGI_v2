@@ -12,6 +12,13 @@ from cli.core.taskrun_projection import (
     TaskRunProjectionResult,
     TaskRunProjectionWriter,
 )
+from cli.core.taskrun_step import (
+    STEP_INSTRUCTION,
+    TaskRunRuntimeOptions,
+    TaskRunStepContext,
+    TaskRunStepOutcome,
+    TaskRunStepRunner,
+)
 from policy.permission_profiles import (
     PermissionProfileError,
     build_permission_profile_snapshot,
@@ -30,7 +37,7 @@ from storage.taskrun_repository import (
 
 STALE_RUNNING_THRESHOLD = timedelta(minutes=30)
 DEFAULT_PERMISSION_PROFILE = build_permission_profile_snapshot("interactive")
-DEFAULT_NEXT_ACTION = "step execution is not implemented until P2-M3"
+DEFAULT_NEXT_ACTION = "Run `magipi taskrun step` to execute the next manual step."
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +46,8 @@ class TaskRunResult:
     projection: TaskRunProjectionResult
     events: list[TaskEventRecord]
     steps: list[TaskStepRecord]
+    step: TaskStepRecord | None = None
+    exit_code: int = 0
 
     @property
     def summary(self) -> dict[str, object]:
@@ -117,6 +126,36 @@ class TaskRunService:
         record = self._select_task_run(workspace_root, id_or_prefix)
         return self._summarize_and_project(record)
 
+    def step(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+        *,
+        runtime_options: TaskRunRuntimeOptions | None = None,
+        runner: TaskRunStepRunner,
+    ) -> TaskRunResult:
+        workspace_root = _workspace_root(cwd)
+        runtime_options = runtime_options or TaskRunRuntimeOptions()
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run_for_step(workspace_root, id_or_prefix)
+        self._validate_step_ready(record, workspace_root, explicit=bool(id_or_prefix))
+        pre_summary, task_run, step = self._start_step(record, runtime_options)
+        outcome = self._run_step_runner(
+            runner,
+            task_run=task_run,
+            step=step,
+            summary=pre_summary,
+            runtime_options=runtime_options,
+            workspace_root=workspace_root,
+        )
+        return self._finalize_step(
+            task_run=task_run,
+            step=step,
+            previous_status=record.status,
+            outcome=outcome,
+            runtime_options=runtime_options,
+        )
+
     def close(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunResult:
         workspace_root = _workspace_root(cwd)
         self.recover_stale_running(workspace_root)
@@ -164,9 +203,22 @@ class TaskRunService:
                 continue
             recovered_at = _datetime_iso(now_dt)
             last_heartbeat = record.heartbeat_at
-            blocked = self.repository.update_task_run_status(
+            if record.current_step_id is not None:
+                self.repository.update_step_status(
+                    record.current_step_id,
+                    status="blocked",
+                    output={
+                        "reason": "running heartbeat exceeded stale threshold",
+                        "last_heartbeat": last_heartbeat,
+                        "recovery_time": recovered_at,
+                    },
+                    conclusion="stale running step blocked by recovery",
+                    ended_at=recovered_at,
+                )
+            blocked = self.repository.update_task_run_step_state(
                 record.id,
                 status="blocked",
+                current_step_id=None,
                 heartbeat_at=last_heartbeat,
                 updated_at=recovered_at,
             )
@@ -221,6 +273,171 @@ class TaskRunService:
                 _ambiguous_message("multiple non-terminal TaskRuns in this workspace", candidates)
             )
         return candidates[0]
+
+    def _select_task_run_for_step(
+        self,
+        workspace_root: str,
+        id_or_prefix: str | None,
+    ) -> TaskRunRecord:
+        if id_or_prefix:
+            return self._select_task_run(workspace_root, id_or_prefix)
+        candidates = [
+            record
+            for record in self.repository.list_task_runs_for_workspace(
+                workspace_root,
+                include_terminal=False,
+            )
+            if record.status == "pending"
+        ]
+        if not candidates:
+            raise TaskRunServiceError(
+                "no pending TaskRun in this workspace; pass an id to step a blocked TaskRun"
+            )
+        if len(candidates) > 1:
+            raise TaskRunServiceError(
+                _ambiguous_message("multiple pending TaskRuns in this workspace", candidates)
+            )
+        return candidates[0]
+
+    def _validate_step_ready(
+        self,
+        record: TaskRunRecord,
+        workspace_root: str,
+        *,
+        explicit: bool,
+    ) -> None:
+        if record.status in TERMINAL_TASKRUN_STATUSES:
+            raise TaskRunServiceError(f"cannot step terminal TaskRun {record.id}: {record.status}")
+        if record.status == "running":
+            raise TaskRunServiceError(f"cannot step active running TaskRun {record.id}")
+        if record.status == "blocked" and not explicit:
+            raise TaskRunServiceError(
+                f"blocked TaskRun {record.id} requires explicit id/prefix to step"
+            )
+        profile = _normalize_profile(record.permission_profile)
+        if not bool(profile.get("nonInteractive")):
+            raise TaskRunServiceError(
+                "taskrun step is headless and cannot use interactive permission profile; "
+                "create a TaskRun with --permission guarded or --permission full"
+            )
+        running = [
+            candidate
+            for candidate in self.repository.list_running_task_runs(workspace_root)
+            if candidate.id != record.id
+        ]
+        if running:
+            raise TaskRunServiceError(
+                _ambiguous_message("another TaskRun is already running in this workspace", running)
+            )
+
+    def _start_step(
+        self,
+        record: TaskRunRecord,
+        runtime_options: TaskRunRuntimeOptions,
+    ) -> tuple[dict[str, object], TaskRunRecord, TaskStepRecord]:
+        steps = self.repository.list_steps(record.id)
+        pre_summary = self._build_summary(record, steps)
+        started_at = self._now_iso()
+        step_start = self.repository.create_running_step(
+            record.id,
+            title=f"Step {len(steps) + 1}",
+            input=_step_input(record, pre_summary, runtime_options),
+            started_at=started_at,
+            start_event_payload=_step_started_payload(record.status, runtime_options),
+        )
+        return pre_summary, step_start.task_run, step_start.step
+
+    def _run_step_runner(
+        self,
+        runner: TaskRunStepRunner,
+        *,
+        task_run: TaskRunRecord,
+        step: TaskStepRecord,
+        summary: dict[str, object],
+        runtime_options: TaskRunRuntimeOptions,
+        workspace_root: str,
+    ) -> TaskRunStepOutcome:
+        def heartbeat() -> None:
+            self.repository.lease_running_task_run(
+                task_run.id,
+                step_id=step.id,
+                heartbeat_at=self._now_iso(),
+            )
+
+        try:
+            return runner.run(
+                TaskRunStepContext(
+                    task_run=task_run,
+                    step=step,
+                    summary=summary,
+                    runtime_options=runtime_options,
+                    workspace_root=workspace_root,
+                    heartbeat=heartbeat,
+                )
+            )
+        except KeyboardInterrupt:
+            return _cancelled_outcome(task_run.id)
+        except Exception as exc:
+            return _failed_outcome(task_run.id, exc)
+
+    def _finalize_step(
+        self,
+        *,
+        task_run: TaskRunRecord,
+        step: TaskStepRecord,
+        previous_status: str,
+        outcome: TaskRunStepOutcome,
+        runtime_options: TaskRunRuntimeOptions,
+    ) -> TaskRunResult:
+        status = _normalize_step_outcome_status(outcome.status)
+        ended_at = self._now_iso()
+        output = _step_output(outcome, task_run.id, status)
+        conclusion = _step_conclusion(outcome, status)
+        updated_step = self.repository.update_step_status(
+            step.id,
+            status=status,
+            output=output,
+            conclusion=conclusion,
+            ended_at=ended_at,
+        )
+        next_task_status = "pending" if status == "done" else "blocked"
+        updated_run = self.repository.update_task_run_step_state(
+            task_run.id,
+            status=next_task_status,
+            current_step_id=None,
+            heartbeat_at=ended_at,
+            updated_at=ended_at,
+        )
+        event_type = {
+            "done": "task_step_completed",
+            "failed": "task_step_failed",
+            "blocked": "task_step_blocked",
+            "cancelled": "task_step_cancelled",
+        }[status]
+        self.repository.append_event(
+            task_run_id=updated_run.id,
+            step_id=updated_step.id,
+            event_type=event_type,
+            payload={
+                "step_id": updated_step.id,
+                "step_index": updated_step.step_index,
+                "status_from": "running",
+                "status_to": status,
+                "task_status_from": previous_status,
+                "task_status_to": next_task_status,
+                "model_ref": runtime_options.model_ref,
+                "run_id": outcome.run_id,
+                "reason": output.get("reason"),
+            },
+            occurred_at=ended_at,
+        )
+        result = self._summarize_and_project(updated_run)
+        matching_step = next(
+            (candidate for candidate in result.steps if candidate.id == updated_step.id),
+            updated_step,
+        )
+        exit_code = 130 if status == "cancelled" else 1 if status == "failed" else 0
+        return replace(result, step=matching_step, exit_code=exit_code)
 
     def _summarize_and_project(
         self,
@@ -295,7 +512,7 @@ class TaskRunService:
             "current_best": None,
             "workspace_state": _workspace_state(record.workspace_root, projection_path),
             "permission_profile": dict(record.permission_profile or DEFAULT_PERMISSION_PROFILE),
-            "next_action": DEFAULT_NEXT_ACTION,
+            "next_action": _next_action(record, last_attempt),
         }
 
     def _is_stale(self, record: TaskRunRecord, now_dt: datetime) -> bool:
@@ -336,7 +553,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
 def _step_summary(step: TaskStepRecord | None) -> dict[str, object] | None:
     if step is None:
         return None
-    return {
+    summary = {
         "id": step.id,
         "step_index": step.step_index,
         "title": step.title,
@@ -345,6 +562,155 @@ def _step_summary(step: TaskStepRecord | None) -> dict[str, object] | None:
         "started_at": step.started_at,
         "ended_at": step.ended_at,
     }
+    if step.output.get("next_action"):
+        summary["next_action"] = step.output["next_action"]
+    if step.output.get("reason"):
+        summary["reason"] = step.output["reason"]
+    return summary
+
+
+def _step_input(
+    record: TaskRunRecord,
+    summary: Mapping[str, object],
+    runtime_options: TaskRunRuntimeOptions,
+) -> dict[str, object]:
+    return {
+        "goal": record.goal,
+        "summary": dict(summary),
+        "instruction": STEP_INSTRUCTION,
+        "permission_profile": dict(record.permission_profile or {}),
+        "model": runtime_options.model_ref,
+        "thinking_level": runtime_options.thinking_level,
+        "cache_retention": runtime_options.cache_retention,
+    }
+
+
+def _step_started_payload(
+    previous_status: str,
+    runtime_options: TaskRunRuntimeOptions,
+) -> dict[str, object]:
+    return {
+        "status_from": previous_status,
+        "model_ref": runtime_options.model_ref,
+    }
+
+
+def _step_output(
+    outcome: TaskRunStepOutcome,
+    task_run_id: str,
+    status: str,
+) -> dict[str, object]:
+    reason = (
+        outcome.block_reason
+        if status == "blocked"
+        else outcome.error_message if status in {"failed", "cancelled"} else None
+    )
+    next_action = outcome.next_action or _next_action_for_status(task_run_id, status, reason)
+    output: dict[str, object] = {
+        "status": status,
+        "assistant_text_preview": _preview(outcome.assistant_text),
+        "tool_count": outcome.tool_count,
+        "permission_decision_count": outcome.permission_decision_count,
+        "next_action": next_action,
+    }
+    if outcome.run_id:
+        output["run_id"] = outcome.run_id
+    if reason:
+        output["reason"] = reason
+    if outcome.error_message:
+        output["error_message"] = outcome.error_message
+    if outcome.block_reason:
+        output["block_reason"] = outcome.block_reason
+    if outcome.finalize_errors:
+        output["finalize_errors"] = list(outcome.finalize_errors)
+    return output
+
+
+def _step_conclusion(outcome: TaskRunStepOutcome, status: str) -> str:
+    if status == "done":
+        return _preview(outcome.assistant_text) or "manual step completed"
+    if status == "blocked":
+        return _preview(outcome.block_reason) or "manual step blocked"
+    if status == "cancelled":
+        return _preview(outcome.error_message) or "manual step cancelled"
+    return _preview(outcome.error_message) or "manual step failed"
+
+
+def _preview(value: str | None, limit: int = 500) -> str:
+    if not value:
+        return ""
+    collapsed = " ".join(value.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 3] + "..."
+
+
+def _normalize_step_outcome_status(status: str) -> str:
+    if status not in {"done", "failed", "blocked", "cancelled"}:
+        raise TaskRunServiceError(f"invalid step outcome status: {status}")
+    return status
+
+
+def _normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        return normalize_permission_profile_snapshot(profile)
+    except PermissionProfileError as exc:
+        raise TaskRunServiceError(str(exc)) from exc
+
+
+def _cancelled_outcome(task_run_id: str) -> TaskRunStepOutcome:
+    return TaskRunStepOutcome(
+        status="cancelled",
+        error_message="cancelled by user interrupt",
+        next_action=(
+            "Resolve the cancellation context, then run "
+            f"`magipi taskrun step {task_run_id[:8]}` to continue."
+        ),
+    )
+
+
+def _failed_outcome(task_run_id: str, exc: Exception) -> TaskRunStepOutcome:
+    return TaskRunStepOutcome(
+        status="failed",
+        error_message=str(exc),
+        next_action=(
+            "Inspect the failure, then run "
+            f"`magipi taskrun step {task_run_id[:8]}` to retry manually."
+        ),
+    )
+
+
+def _next_action(record: TaskRunRecord, last_attempt: TaskStepRecord | None) -> str:
+    if record.status == "running" and record.current_step_id:
+        return "Wait for the current manual step to finish."
+    if record.status in TERMINAL_TASKRUN_STATUSES:
+        return "TaskRun is terminal; inspect summary or archive when ready."
+    if last_attempt is None:
+        return f"Run `magipi taskrun step {record.id[:8]}` to execute the first manual step."
+    reason = last_attempt.output.get("reason")
+    if last_attempt.status == "done":
+        return str(
+            last_attempt.output.get("next_action")
+            or f"Run `magipi taskrun step {record.id[:8]}` for the next manual step, or close when complete."
+        )
+    if last_attempt.status == "blocked":
+        return _next_action_for_status(record.id, "blocked", str(reason) if reason else None)
+    if last_attempt.status == "cancelled":
+        return _next_action_for_status(record.id, "cancelled", str(reason) if reason else None)
+    return _next_action_for_status(record.id, "failed", str(reason) if reason else None)
+
+
+def _next_action_for_status(task_run_id: str, status: str, reason: str | None) -> str:
+    prefix = f"`magipi taskrun step {task_run_id[:8]}`"
+    if status == "done":
+        return f"Run {prefix} for the next manual step, or close the TaskRun when complete."
+    if status == "blocked":
+        detail = f" ({reason})" if reason else ""
+        return f"Resolve the blocker{detail}, then run {prefix} to continue."
+    if status == "cancelled":
+        return f"Review the cancellation, then run {prefix} to continue manually."
+    detail = f" ({reason})" if reason else ""
+    return f"Inspect the failure{detail}, then run {prefix} to retry manually."
 
 
 def _workspace_state(workspace_root: str, projection_path: Path) -> dict[str, object]:
@@ -399,6 +765,10 @@ __all__ = [
     "DEFAULT_PERMISSION_PROFILE",
     "STALE_RUNNING_THRESHOLD",
     "TaskRunResult",
+    "TaskRunRuntimeOptions",
     "TaskRunService",
     "TaskRunServiceError",
+    "TaskRunStepContext",
+    "TaskRunStepOutcome",
+    "TaskRunStepRunner",
 ]

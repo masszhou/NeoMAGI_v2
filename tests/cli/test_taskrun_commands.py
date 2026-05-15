@@ -8,7 +8,7 @@ import cli.__main__ as cli_main
 import cli.taskrun_commands as taskrun_commands
 from cli.core.taskrun_projection import TaskRunProjectionResult
 from cli.core.taskrun_service import TaskRunResult
-from storage.taskrun_repository import TaskRunRecord
+from storage.taskrun_repository import TaskRunRecord, TaskStepRecord
 
 
 class _Conn:
@@ -46,6 +46,17 @@ class _FakeService:
         self.calls.append(("close", task_id, cwd))
         return self.result
 
+    def step(
+        self,
+        task_id: str | None,
+        cwd: Path,
+        *,
+        runtime_options: object | None = None,
+        runner: object | None = None,
+    ) -> TaskRunResult:
+        self.calls.append(("step", task_id, cwd, runtime_options, runner))
+        return self.result
+
 
 def _result(tmp_path: Path) -> TaskRunResult:
     record = TaskRunRecord(
@@ -74,6 +85,29 @@ def _result(tmp_path: Path) -> TaskRunResult:
     return TaskRunResult(task_run=record, projection=projection, events=[], steps=[])
 
 
+def _step_result(tmp_path: Path) -> TaskRunResult:
+    result = _result(tmp_path)
+    step = TaskStepRecord(
+        id="019e2200-0000-7000-8000-000000000003",
+        task_run_id=result.task_run.id,
+        step_index=1,
+        title="Step 1",
+        status="done",
+        input={},
+        output={"next_action": "continue"},
+        conclusion="done",
+        started_at="2026-05-13T00:00:00+00:00",
+        ended_at="2026-05-13T00:01:00+00:00",
+    )
+    return TaskRunResult(
+        task_run=result.task_run,
+        projection=result.projection,
+        events=[],
+        steps=[step],
+        step=step,
+    )
+
+
 def _stub_runtime(monkeypatch, service: _FakeService) -> _Conn:
     conn = _Conn()
     monkeypatch.setattr(taskrun_commands, "load_database_config", lambda **_kwargs: object())
@@ -96,6 +130,12 @@ def _stub_runtime(monkeypatch, service: _FakeService) -> _Conn:
         "PostgresTaskRunRepository",
         lambda _conn, _config: object(),
     )
+    monkeypatch.setattr(
+        taskrun_commands,
+        "PostgresSessionRepository",
+        lambda _conn, _config: object(),
+    )
+    monkeypatch.setattr(taskrun_commands, "TaskRunHeadlessRunner", lambda **_kwargs: object())
     monkeypatch.setattr(taskrun_commands, "TaskRunService", lambda _repo: service)
     return conn
 
@@ -170,6 +210,40 @@ def test_taskrun_summary_prints_structured_summary(
     assert rc == 0
     assert "summary:" in captured.out
     assert '"next_action"' in captured.out
+
+
+def test_taskrun_step_passes_runtime_options_and_prints_step(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_step_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(
+        [
+            "step",
+            "019e2200",
+            "--model",
+            "faux/local/faux-1",
+            "--thinking-level",
+            "off",
+            "--cache-retention",
+            "none",
+        ],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "step"
+    assert service.calls[0][1] == "019e2200"
+    assert service.calls[0][3].model_ref == "faux/local/faux-1"
+    assert service.calls[0][3].cache_retention == "none"
+    assert service.calls[0][4] is not None
+    assert "step_id: 019e2200-0000-7000-8000-000000000003" in captured.out
+    assert "step_status: done" in captured.out
+    assert "conclusion: done" in captured.out
 
 
 def test_taskrun_db_failure_returns_2_without_service(

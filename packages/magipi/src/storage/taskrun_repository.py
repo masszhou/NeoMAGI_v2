@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from .config import DatabaseConfig
 from .ids import (
@@ -17,182 +16,18 @@ from .session_utils import dump_json as _dump_json
 from .session_utils import iso as _iso
 from .session_utils import jsonb as _jsonb
 from .session_utils import utc_now_iso
-
-
-TASKRUN_STATUSES = frozenset(
-    {
-        "pending",
-        "running",
-        "blocked",
-        "completed",
-        "failed",
-        "cancelled",
-        "archived",
-    }
+from .taskrun_records import (
+    TASKRUN_STATUSES,
+    TASKSTEP_STATUSES,
+    TERMINAL_TASKRUN_STATUSES,
+    TaskEventRecord,
+    TaskPermissionDecisionRecord,
+    TaskRunCreateRequest,
+    TaskRunRecord,
+    TaskRunRepository,
+    TaskRunStepStartResult,
+    TaskStepRecord,
 )
-TASKSTEP_STATUSES = frozenset(
-    {"pending", "running", "done", "failed", "blocked", "cancelled"}
-)
-TERMINAL_TASKRUN_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "archived"}
-)
-
-
-@dataclass(frozen=True, slots=True)
-class TaskRunRecord:
-    id: str
-    workspace_root: str
-    agent_session_id: str
-    goal: str
-    status: str
-    permission_profile: dict[str, Any]
-    budget: dict[str, Any]
-    stop_conditions: dict[str, Any]
-    summary: dict[str, Any]
-    created_at: str
-    updated_at: str
-    current_step_id: str | None = None
-    heartbeat_at: str | None = None
-    closed_at: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TaskStepRecord:
-    id: str
-    task_run_id: str
-    step_index: int
-    title: str
-    status: str
-    input: dict[str, Any]
-    output: dict[str, Any]
-    conclusion: str | None = None
-    started_at: str | None = None
-    ended_at: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TaskEventRecord:
-    id: str
-    task_run_id: str
-    event_type: str
-    payload: dict[str, Any]
-    occurred_at: str
-    step_id: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TaskPermissionDecisionRecord:
-    id: str
-    task_run_id: str
-    policy_request: dict[str, Any]
-    raw_decision: dict[str, Any]
-    resolved_decision: dict[str, Any]
-    profile_name: str
-    occurred_at: str
-    step_id: str | None = None
-    tool_execution_id: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TaskRunCreateRequest:
-    workspace_root: str
-    goal: str
-    permission_profile: Mapping[str, Any] = field(
-        default_factory=lambda: {"name": "interactive"}
-    )
-    budget: Mapping[str, Any] | None = None
-    stop_conditions: Mapping[str, Any] | None = None
-    summary: Mapping[str, Any] | None = None
-    status: str = "pending"
-    task_run_id: str | None = None
-    agent_session_id: str | None = None
-    created_at: str | None = None
-
-
-class TaskRunRepository(Protocol):
-    def create_task_run(self, request: TaskRunCreateRequest) -> TaskRunRecord:
-        ...
-
-    def get_task_run(self, task_run_id: str) -> TaskRunRecord | None:
-        ...
-
-    def list_task_runs_for_workspace(
-        self,
-        workspace_root: str,
-        *,
-        include_terminal: bool = True,
-    ) -> list[TaskRunRecord]:
-        ...
-
-    def list_running_task_runs(self, workspace_root: str) -> list[TaskRunRecord]:
-        ...
-
-    def find_task_runs_by_prefix(
-        self,
-        workspace_root: str,
-        task_run_prefix: str,
-    ) -> list[TaskRunRecord]:
-        ...
-
-    def update_task_run_status(
-        self,
-        task_run_id: str,
-        *,
-        status: str,
-        heartbeat_at: str | None = None,
-        summary: Mapping[str, Any] | None = None,
-        closed_at: str | None = None,
-        updated_at: str | None = None,
-    ) -> TaskRunRecord:
-        ...
-
-    def update_task_run_summary(
-        self,
-        task_run_id: str,
-        summary: Mapping[str, Any],
-        *,
-        updated_at: str | None = None,
-    ) -> TaskRunRecord:
-        ...
-
-    def append_event(
-        self,
-        *,
-        task_run_id: str,
-        event_type: str,
-        payload: Mapping[str, Any],
-        step_id: str | None = None,
-        occurred_at: str | None = None,
-        event_id: str | None = None,
-    ) -> TaskEventRecord:
-        ...
-
-    def list_events(self, task_run_id: str) -> list[TaskEventRecord]:
-        ...
-
-    def append_permission_decision(
-        self,
-        *,
-        task_run_id: str,
-        policy_request: Mapping[str, Any],
-        raw_decision: Mapping[str, Any],
-        resolved_decision: Mapping[str, Any],
-        profile_name: str,
-        step_id: str | None = None,
-        tool_execution_id: str | None = None,
-        occurred_at: str | None = None,
-        decision_id: str | None = None,
-    ) -> TaskPermissionDecisionRecord:
-        ...
-
-    def list_permission_decisions(
-        self,
-        task_run_id: str,
-    ) -> list[TaskPermissionDecisionRecord]:
-        ...
-
-    def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
-        ...
 
 
 class PostgresTaskRunRepository:
@@ -455,6 +290,90 @@ class PostgresTaskRunRepository:
             raise KeyError(f"unknown TaskRun: {task_run_id}")
         return _task_run_from_row(row)
 
+    def create_running_step(
+        self,
+        task_run_id: str,
+        *,
+        title: str,
+        input: Mapping[str, Any],
+        started_at: str | None = None,
+        step_id: str | None = None,
+        start_event_payload: Mapping[str, Any] | None = None,
+        start_event_id: str | None = None,
+    ) -> TaskRunStepStartResult:
+        from .taskrun_step_repository import create_running_step_txn
+
+        return create_running_step_txn(
+            self._conn,
+            self._schema,
+            task_run_id,
+            title=title,
+            input=input,
+            started_at=started_at,
+            step_id=step_id,
+            start_event_payload=start_event_payload,
+            start_event_id=start_event_id,
+        )
+
+    def update_step_status(
+        self,
+        step_id: str,
+        *,
+        status: str,
+        output: Mapping[str, Any],
+        conclusion: str | None,
+        ended_at: str | None = None,
+    ) -> TaskStepRecord:
+        from .taskrun_step_repository import update_step_status_txn
+
+        return update_step_status_txn(
+            self._conn,
+            self._schema,
+            step_id,
+            status=status,
+            output=output,
+            conclusion=conclusion,
+            ended_at=ended_at,
+        )
+
+    def update_task_run_step_state(
+        self,
+        task_run_id: str,
+        *,
+        status: str,
+        current_step_id: str | None,
+        heartbeat_at: str | None,
+        updated_at: str | None = None,
+    ) -> TaskRunRecord:
+        from .taskrun_step_repository import update_task_run_step_state_txn
+
+        return update_task_run_step_state_txn(
+            self._conn,
+            self._schema,
+            task_run_id,
+            status=status,
+            current_step_id=current_step_id,
+            heartbeat_at=heartbeat_at,
+            updated_at=updated_at,
+        )
+
+    def lease_running_task_run(
+        self,
+        task_run_id: str,
+        *,
+        step_id: str,
+        heartbeat_at: str | None = None,
+    ) -> bool:
+        from .taskrun_step_repository import lease_running_task_run_txn
+
+        return lease_running_task_run_txn(
+            self._conn,
+            self._schema,
+            task_run_id,
+            step_id=step_id,
+            heartbeat_at=heartbeat_at,
+        )
+
     def append_event(
         self,
         *,
@@ -595,6 +514,21 @@ class PostgresTaskRunRepository:
             rows = cur.fetchall()
         return [_task_step_from_row(row) for row in rows]
 
+    def find_tool_execution_id(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+    ) -> str | None:
+        from .taskrun_step_repository import find_tool_execution_id
+
+        return find_tool_execution_id(
+            self._conn,
+            self._schema,
+            session_id=session_id,
+            tool_call_id=tool_call_id,
+        )
+
 
 def _validate_taskrun_status(status: str) -> None:
     if status not in TASKRUN_STATUSES:
@@ -682,5 +616,6 @@ __all__ = [
     "TaskRunCreateRequest",
     "TaskRunRecord",
     "TaskRunRepository",
+    "TaskRunStepStartResult",
     "TaskStepRecord",
 ]

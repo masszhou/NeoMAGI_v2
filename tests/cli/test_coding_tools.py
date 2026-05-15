@@ -13,7 +13,7 @@ from ai_provider.providers.faux import faux_tool_call, stream_faux
 from ai_provider.runtime_types import SimpleStreamOptions
 from ai_provider.tools import ToolArgumentValidationError, validate_tool_arguments
 from ai_provider.types import Context, Model, TextContent, ToolResultMessage
-from cli.core.session_types import BashExecutionMessage
+from cli.core.session_types import BashExecutionMessage, CustomMessage
 from cli.core.session_manager import SessionManager
 from cli.interactive.runtime import InteractiveAgentRuntime
 from cli.tools import (
@@ -868,6 +868,29 @@ def test_coding_llm_conversion_strips_run_id_from_tool_result_details() -> None:
     assert converted[0].details == {"policyDecision": {"effect": "allow"}}
     assert "runId" not in str(converted)
     assert "run-" not in str(converted)
+
+
+def test_taskrun_summary_custom_message_is_provider_visible() -> None:
+    message = CustomMessage(
+        customType="taskRunSummary",
+        content='{"goal":"ship"}',
+        display=False,
+        details={
+            "taskRunId": "019e2200-0000-7000-8000-000000000001",
+            "stepId": "019e2200-0000-7000-8000-000000000004",
+            "stepIndex": 1,
+        },
+        timestamp=1,
+    )
+
+    converted = convert_coding_messages_to_llm([message])
+
+    assert len(converted) == 1
+    assert converted[0].role == "user"
+    text = converted[0].content[0].text
+    assert "<taskrun-context type=\"taskRunSummary\"" in text
+    assert 'taskRunId="019e2200-0000-7000-8000-000000000001"' in text
+    assert '{"goal":"ship"}' in text
 
 
 def test_runtime_defaults_to_coding_tools_and_user_bash(tmp_path: Path) -> None:

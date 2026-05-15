@@ -11,6 +11,7 @@ from cli.core.session_types import (
     BashExecutionMessage,
     BranchSummaryMessage,
     CompactionSummaryMessage,
+    CustomMessage,
 )
 
 
@@ -30,6 +31,9 @@ def convert_coding_messages_to_llm(messages: list[Any]) -> list[Message]:
             continue
         if isinstance(message, BranchSummaryMessage):
             converted.append(_branch_summary_to_user_message(message))
+            continue
+        if isinstance(message, CustomMessage) and message.custom_type == "taskRunSummary":
+            converted.append(_taskrun_summary_to_user_message(message))
             continue
         converted.append(message)
     return default_convert_to_llm(converted)
@@ -85,6 +89,45 @@ def _branch_summary_to_user_message(message: BranchSummaryMessage) -> UserMessag
         content=[TextContent(text=text)],
         timestamp=int(time.time() * 1000),
     )
+
+
+def _taskrun_summary_to_user_message(message: CustomMessage) -> UserMessage:
+    task_run_id = ""
+    step_id = ""
+    step_index = ""
+    if isinstance(message.details, dict):
+        task_run_id = str(message.details.get("taskRunId") or "")
+        step_id = str(message.details.get("stepId") or "")
+        step_index = str(message.details.get("stepIndex") or "")
+    attrs = [
+        'type="taskRunSummary"',
+        f'taskRunId="{task_run_id}"' if task_run_id else "",
+        f'stepId="{step_id}"' if step_id else "",
+        f'stepIndex="{step_index}"' if step_index else "",
+    ]
+    text = (
+        f"<taskrun-context {' '.join(attr for attr in attrs if attr)}>\n"
+        f"{_custom_content_text(message.content)}\n"
+        "</taskrun-context>"
+    )
+    return UserMessage(
+        role="user",
+        content=[TextContent(text=text)],
+        timestamp=int(time.time() * 1000),
+    )
+
+
+def _custom_content_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts)
+    return str(value)
 
 
 def _strip_run_metadata(message: ToolResultMessage) -> ToolResultMessage:

@@ -9,14 +9,30 @@ from storage.taskrun_repository import PostgresTaskRunRepository, TaskRunCreateR
 TASK_ID = "019e2200-0000-7000-8000-000000000001"
 SESSION_ID = "019e2200-0000-7000-8000-000000000002"
 PERMISSION_ID = "019e2200-0000-7000-8000-000000000003"
+STEP_ID = "019e2200-0000-7000-8000-000000000004"
+TOOL_EXECUTION_ID = "019e2200-0000-7000-8000-000000000005"
+_NO_ROW = object()
 
 
 class _Cursor:
-    def __init__(self, *, fail_task_insert: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_task_insert: bool = False,
+        fail_event_insert: bool = False,
+        task_run_status: str = "pending",
+        current_step_id: object | None = None,
+        running_workspace_id: object | None = None,
+    ) -> None:
         self.fail_task_insert = fail_task_insert
+        self.fail_event_insert = fail_event_insert
+        self.task_run_status = task_run_status
+        self.current_step_id = current_step_id
+        self.running_workspace_id = running_workspace_id
         self.queries: list[str] = []
         self._last_query = ""
         self._last_params: tuple[object, ...] = ()
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -28,11 +44,23 @@ class _Cursor:
         self.queries.append(query)
         self._last_query = query
         self._last_params = _params
+        self.rowcount = 1 if query.lstrip().startswith("UPDATE") else 0
         if self.fail_task_insert and "INSERT INTO \"neomagi\".task_runs" in query:
             raise RuntimeError("injected task insert failure")
+        if self.fail_event_insert and "INSERT INTO \"neomagi\".task_events" in query:
+            raise RuntimeError("injected event insert failure")
 
     def fetchone(self):
-        if "RETURNING id, task_run_id, step_id, tool_execution_id" in self._last_query:
+        if (row := self._taskrun_start_guard_row()) is not _NO_ROW:
+            return row
+        if row := self._step_row():
+            return row
+        if "FROM \"neomagi\".agent_tool_executions" in self._last_query:
+            return (TOOL_EXECUTION_ID,)
+        if (
+            "RETURNING id, task_run_id, step_id, tool_execution_id"
+            in self._last_query
+        ):
             return (
                 PERMISSION_ID,
                 TASK_ID,
@@ -44,22 +72,92 @@ class _Cursor:
                 "guarded",
                 "2026-05-13T00:00:00+00:00",
             )
+        if row := self._task_run_step_state_row():
+            return row
         if "RETURNING id, workspace_root" not in self._last_query:
             return None
+        return self._task_run_row("pending", {"name": "interactive"})
+
+    def _taskrun_start_guard_row(self):
+        if "SELECT COALESCE(MAX(step_index), 0) + 1" in self._last_query:
+            return (1,)
+        if "SELECT workspace_root" in self._last_query:
+            return ("/workspace",)
+        if "SELECT status, current_step_id" in self._last_query:
+            return (self.task_run_status, self.current_step_id)
+        if (
+            "WHERE workspace_root = %s" in self._last_query
+            and "status = 'running'" in self._last_query
+        ):
+            return (self.running_workspace_id,) if self.running_workspace_id else None
+        return _NO_ROW
+
+    def _step_row(self):
+        if "RETURNING id, task_run_id, step_index, title, status" not in self._last_query:
+            return None
+        if "UPDATE \"neomagi\".task_steps" in self._last_query:
+            return (
+                STEP_ID,
+                TASK_ID,
+                1,
+                "Step 1",
+                self._last_params[0],
+                {"goal": "analyze repo"},
+                {"next_action": "continue"},
+                self._last_params[2],
+                "2026-05-13T00:00:00+00:00",
+                self._last_params[3],
+            )
+        return (
+            STEP_ID,
+            TASK_ID,
+            1,
+            "Step 1",
+            "running",
+            {"goal": "analyze repo"},
+            {},
+            None,
+            "2026-05-13T00:00:00+00:00",
+            None,
+        )
+
+    def _task_run_step_state_row(self):
+        if (
+            "UPDATE \"neomagi\".task_runs" not in self._last_query
+            or "current_step_id = %s" not in self._last_query
+        ):
+            return None
+        return self._task_run_row(
+            self._last_params[0],
+            {"name": "guarded", "nonInteractive": True, "scope": {}, "sources": ["builtin"]},
+            current_step_id=self._last_params[1],
+            heartbeat_at=self._last_params[2],
+            updated_at=self._last_params[3],
+        )
+
+    def _task_run_row(
+        self,
+        status: str,
+        profile: dict[str, object],
+        *,
+        current_step_id: object | None = None,
+        heartbeat_at: object | None = None,
+        updated_at: object = "2026-05-13T00:00:00+00:00",
+    ):
         return (
             TASK_ID,
             "/workspace",
             SESSION_ID,
             "analyze repo",
-            "pending",
-            {"name": "interactive"},
+            status,
+            profile,
             {},
             {},
-            None,
+            current_step_id,
             {},
-            None,
+            heartbeat_at,
             "2026-05-13T00:00:00+00:00",
-            "2026-05-13T00:00:00+00:00",
+            updated_at,
             None,
         )
 
@@ -82,8 +180,22 @@ class _Cursor:
 
 
 class _Conn:
-    def __init__(self, *, fail_task_insert: bool = False) -> None:
-        self.cursor_obj = _Cursor(fail_task_insert=fail_task_insert)
+    def __init__(
+        self,
+        *,
+        fail_task_insert: bool = False,
+        fail_event_insert: bool = False,
+        task_run_status: str = "pending",
+        current_step_id: object | None = None,
+        running_workspace_id: object | None = None,
+    ) -> None:
+        self.cursor_obj = _Cursor(
+            fail_task_insert=fail_task_insert,
+            fail_event_insert=fail_event_insert,
+            task_run_status=task_run_status,
+            current_step_id=current_step_id,
+            running_workspace_id=running_workspace_id,
+        )
         self.commits = 0
         self.rollbacks = 0
 
@@ -152,6 +264,115 @@ def test_create_task_run_rolls_back_owned_session_on_task_insert_failure() -> No
 
     assert conn.commits == 0
     assert conn.rollbacks == 1
+
+
+def test_create_running_step_inserts_step_and_marks_taskrun_running() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    result = repo.create_running_step(
+        TASK_ID,
+        title="Step 1",
+        input={"goal": "analyze repo"},
+        started_at="2026-05-13T00:00:00+00:00",
+        step_id=STEP_ID,
+        start_event_payload={"status_from": "pending", "model_ref": "faux/local/faux-1"},
+    )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert result.step.id == STEP_ID
+    assert result.step.step_index == 1
+    assert result.task_run.status == "running"
+    assert result.task_run.current_step_id == STEP_ID
+    assert "pg_advisory_xact_lock" in sql
+    assert "INSERT INTO \"neomagi\".task_steps" in sql
+    assert "current_step_id = %s" in sql
+    assert "INSERT INTO \"neomagi\".task_events" in sql
+    assert conn.commits == 1
+
+
+def test_create_running_step_rolls_back_when_started_event_fails() -> None:
+    conn = _Conn(fail_event_insert=True)
+    repo = _repo(conn)
+
+    with pytest.raises(RuntimeError, match="injected event insert failure"):
+        repo.create_running_step(
+            TASK_ID,
+            title="Step 1",
+            input={"goal": "analyze repo"},
+            started_at="2026-05-13T00:00:00+00:00",
+            step_id=STEP_ID,
+            start_event_payload={"status_from": "pending"},
+        )
+
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+
+
+def test_create_running_step_rechecks_taskrun_state_in_transaction() -> None:
+    conn = _Conn(task_run_status="running", current_step_id=STEP_ID)
+    repo = _repo(conn)
+
+    with pytest.raises(ValueError, match="not ready"):
+        repo.create_running_step(
+            TASK_ID,
+            title="Step 1",
+            input={"goal": "analyze repo"},
+            started_at="2026-05-13T00:00:00+00:00",
+            step_id=STEP_ID,
+        )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "INSERT INTO \"neomagi\".task_steps" not in sql
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+
+
+def test_create_running_step_rejects_another_running_taskrun_in_workspace() -> None:
+    conn = _Conn(running_workspace_id="019e2200-0000-7000-8000-000000000099")
+    repo = _repo(conn)
+
+    with pytest.raises(ValueError, match="another TaskRun is already running"):
+        repo.create_running_step(
+            TASK_ID,
+            title="Step 1",
+            input={"goal": "analyze repo"},
+            started_at="2026-05-13T00:00:00+00:00",
+            step_id=STEP_ID,
+        )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "INSERT INTO \"neomagi\".task_steps" not in sql
+    assert conn.commits == 0
+    assert conn.rollbacks == 1
+
+
+def test_update_step_status_persists_output_and_conclusion() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    step = repo.update_step_status(
+        STEP_ID,
+        status="done",
+        output={"next_action": "continue"},
+        conclusion="done",
+        ended_at="2026-05-13T00:01:00+00:00",
+    )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert step.status == "done"
+    assert step.output["next_action"] == "continue"
+    assert "UPDATE \"neomagi\".task_steps" in sql
+    assert conn.commits == 1
+
+
+def test_find_tool_execution_id_returns_latest_match() -> None:
+    repo = _repo(_Conn())
+
+    assert (
+        repo.find_tool_execution_id(session_id=SESSION_ID, tool_call_id="call_1")
+        == TOOL_EXECUTION_ID
+    )
 
 
 def test_append_permission_decision_allows_null_tool_execution_id() -> None:

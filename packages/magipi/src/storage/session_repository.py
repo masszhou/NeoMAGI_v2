@@ -30,7 +30,11 @@ from .session_utils import (
     utc_now_iso,
     validate_entry as _validate_entry,
 )
-from .tool_execution_records import ToolExecutionRecord
+from .tool_execution_records import (
+    ToolExecutionRecord,
+    _ToolExecutionBase,
+    _ToolExecutionEndRequest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,32 +77,6 @@ class EntryRecord:
     context_participates: bool = True
 
 
-@dataclass(frozen=True, slots=True)
-class _ToolExecutionEndRequest:
-    session_id: str
-    tool_call_id: str
-    tool_name: str
-    result_content: Any
-    result_details: Any
-    is_error: bool
-    duration_ms: int | None = None
-
-    @property
-    def details(self) -> dict[str, Any]:
-        return self.result_details if isinstance(self.result_details, dict) else {}
-
-    @property
-    def resolved_duration_ms(self) -> int | None:
-        return self.duration_ms or _duration_from_details(self.details)
-
-@dataclass(frozen=True, slots=True)
-class _ToolExecutionBase:
-    id: str
-    args: Any
-    started_at: str
-    runtime_session_id: str | None
-    run_id: str | None
-
 class SessionRepository(Protocol):
     def create_session(
         self,
@@ -112,7 +90,12 @@ class SessionRepository(Protocol):
     ) -> SessionRecord:
         ...
 
-    def get_session(self, session_id: str) -> SessionRecord | None:
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        include_taskrun_owned: bool = False,
+    ) -> SessionRecord | None:
         ...
 
     def list_recent_sessions(
@@ -230,7 +213,12 @@ class PostgresSessionRepository:
             raise
         return _session_from_row(row)
 
-    def get_session(self, session_id: str) -> SessionRecord | None:
+    def get_session(
+        self,
+        session_id: str,
+        *,
+        include_taskrun_owned: bool = False,
+    ) -> SessionRecord | None:
         if not is_db_uuid(session_id):
             return None
         with self._conn.cursor() as cur:
@@ -242,10 +230,10 @@ class PostgresSessionRepository:
                 FROM {self._schema}.agent_sessions s
                 WHERE s.id = %s
                   AND s.deleted_at IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM {self._schema}.task_runs tr
-                                  WHERE tr.agent_session_id = s.id)
+                  AND (%s OR NOT EXISTS (SELECT 1 FROM {self._schema}.task_runs tr
+                                          WHERE tr.agent_session_id = s.id))
                 """,
-                (session_id,),
+                (session_id, include_taskrun_owned),
             )
             row = cur.fetchone()
         return _session_from_row(row) if row is not None else None

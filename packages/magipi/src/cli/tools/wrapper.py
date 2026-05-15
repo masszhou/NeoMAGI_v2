@@ -325,6 +325,7 @@ async def _record_task_permission_decision(
             task_run_id=context.task_run_id,
             step_id=context.step_id,
             tool_execution_id=context.tool_execution_id,
+            tool_call_id=request.source.get("tool_call_id") if isinstance(request.source, dict) else None,
             policy_request=request.model_dump(by_alias=True, exclude_none=True),
             raw_decision=raw_decision.model_dump(by_alias=True, exclude_none=True),
             resolved_decision=resolved_decision.model_dump(by_alias=True, exclude_none=True),
