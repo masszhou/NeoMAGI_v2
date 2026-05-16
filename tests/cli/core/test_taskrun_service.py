@@ -16,10 +16,15 @@ from cli.core.taskrun_service import (
     TaskRunStepContext,
     TaskRunStepOutcome,
 )
+from cli.core.taskrun_views import (
+    step_counts,
+    step_reason,
+)
 from policy.permission_profiles import build_permission_profile_snapshot
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
+    TaskPermissionDecisionRecord,
     TaskRunCreateRequest,
     TaskRunRecord,
     TaskStepRecord,
@@ -31,6 +36,7 @@ class _FakeTaskRunRepository:
         self.runs: dict[str, TaskRunRecord] = {}
         self.events: list[TaskEventRecord] = []
         self.steps: list[TaskStepRecord] = []
+        self.permission_decisions: list[TaskPermissionDecisionRecord] = []
         self._counter = 1
 
     def create_task_run(self, request: TaskRunCreateRequest) -> TaskRunRecord:
@@ -310,6 +316,46 @@ class _FakeTaskRunRepository:
             key=lambda event: (event.occurred_at, event.id),
         )
 
+    def append_permission_decision(
+        self,
+        *,
+        task_run_id: str,
+        policy_request: Mapping[str, Any],
+        raw_decision: Mapping[str, Any],
+        resolved_decision: Mapping[str, Any],
+        profile_name: str,
+        step_id: str | None = None,
+        tool_execution_id: str | None = None,
+        occurred_at: str | None = None,
+        decision_id: str | None = None,
+    ) -> TaskPermissionDecisionRecord:
+        decision = TaskPermissionDecisionRecord(
+            id=decision_id or self._next_uuid(),
+            task_run_id=task_run_id,
+            step_id=step_id,
+            tool_execution_id=tool_execution_id,
+            policy_request=dict(policy_request),
+            raw_decision=dict(raw_decision),
+            resolved_decision=dict(resolved_decision),
+            profile_name=profile_name,
+            occurred_at=occurred_at or "2026-05-13T00:00:00+00:00",
+        )
+        self.permission_decisions.append(decision)
+        return decision
+
+    def list_permission_decisions(
+        self,
+        task_run_id: str,
+    ) -> list[TaskPermissionDecisionRecord]:
+        return sorted(
+            [
+                decision
+                for decision in self.permission_decisions
+                if decision.task_run_id == task_run_id
+            ],
+            key=lambda decision: (decision.occurred_at, decision.id),
+        )
+
     def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
         return sorted(
             [step for step in self.steps if step.task_run_id == task_run_id],
@@ -344,6 +390,10 @@ def _seed_record(
     status: str = "pending",
     heartbeat_at: str | None = None,
     goal: str = "seeded goal",
+    summary: Mapping[str, Any] | None = None,
+    permission_profile: Mapping[str, Any] | None = None,
+    updated_at: str = "2026-05-13T00:00:00+00:00",
+    current_step_id: str | None = None,
 ) -> TaskRunRecord:
     record = TaskRunRecord(
         id=task_id,
@@ -351,13 +401,14 @@ def _seed_record(
         agent_session_id="019e2200-0000-7000-8000-000000000222",
         goal=goal,
         status=status,
-        permission_profile={"name": "interactive"},
+        permission_profile=dict(permission_profile or {"name": "interactive"}),
         budget={},
         stop_conditions={},
-        summary={},
+        summary=dict(summary or {}),
         heartbeat_at=heartbeat_at,
+        current_step_id=current_step_id,
         created_at="2026-05-13T00:00:00+00:00",
-        updated_at="2026-05-13T00:00:00+00:00",
+        updated_at=updated_at,
     )
     repo.seed(record)
     return record
@@ -602,6 +653,288 @@ def test_stale_running_is_blocked_before_status_selection(tmp_path: Path) -> Non
     assert result.summary["status"] == "blocked"
     event_types = [event.event_type for event in repo.list_events(record.id)]
     assert "task_run_blocked_stale" in event_types
+
+
+def test_list_returns_workspace_records_without_projection_or_summary_events(
+    tmp_path: Path,
+) -> None:
+    repo = _FakeTaskRunRepository()
+    first = _seed_record(
+        repo,
+        tmp_path,
+        task_id="019e2200-0000-7000-8000-000000000111",
+        goal="newest task",
+        summary={"next_action": "stored next", "current_step": {"step_index": 2}},
+        permission_profile={"name": "guarded"},
+        updated_at="2026-05-13T00:03:00+00:00",
+    )
+    _seed_record(
+        repo,
+        tmp_path,
+        task_id="019e2200-0000-7000-8000-000000000112",
+        status="completed",
+        goal="terminal task",
+        updated_at="2026-05-13T00:02:00+00:00",
+    )
+    _seed_record(
+        repo,
+        tmp_path,
+        task_id="019e2200-0000-7000-8000-000000000113",
+        status="archived",
+        goal="archived task",
+        updated_at="2026-05-13T00:01:00+00:00",
+    )
+    _seed_record(
+        repo,
+        tmp_path / "other",
+        task_id="019e2200-0000-7000-8000-000000000114",
+        goal="other workspace",
+    )
+    projection = tmp_path / ".magipi" / "taskruns" / first.id / "summary.md"
+    projection.parent.mkdir(parents=True)
+    projection.write_text("manual edit", encoding="utf-8")
+    event_count = len(repo.events)
+
+    result = _service(repo).list(tmp_path)
+
+    assert [item.task_run.id for item in result.items] == [
+        "019e2200-0000-7000-8000-000000000111",
+        "019e2200-0000-7000-8000-000000000112",
+    ]
+    assert result.items[0].permission_profile_name == "guarded"
+    assert result.items[0].next_action == "stored next"
+    assert result.items[0].current_step == {"step_index": 2}
+    assert projection.read_text(encoding="utf-8") == "manual edit"
+    assert len(repo.events) == event_count
+
+
+def test_list_recovers_stale_running_before_reading(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(
+        repo,
+        tmp_path,
+        status="running",
+        heartbeat_at="2026-05-13T00:00:00+00:00",
+    )
+    service = _service(repo, now=datetime(2026, 5, 13, 1, 0, tzinfo=UTC))
+
+    result = service.list(tmp_path)
+
+    assert result.items[0].task_run.id == record.id
+    assert result.items[0].task_run.status == "blocked"
+    assert [event.event_type for event in repo.list_events(record.id)] == [
+        "task_run_blocked_stale"
+    ]
+
+
+def test_step_reason_and_counts_use_structured_priority() -> None:
+    task_run_id = "019e2200-0000-7000-8000-000000000111"
+    step_id = "019e2200-0000-7000-8000-000000000112"
+    step = TaskStepRecord(
+        id=step_id,
+        task_run_id=task_run_id,
+        step_index=1,
+        title="Step 1",
+        status="blocked",
+        input={},
+        output={"block_reason": "scope blocked", "permission_decision_count": 9},
+        conclusion="fallback conclusion",
+    )
+    event = TaskEventRecord(
+        id="019e2200-0000-7000-8000-000000000113",
+        task_run_id=task_run_id,
+        step_id=step_id,
+        event_type="task_step_blocked",
+        payload={"reason": "event reason"},
+        occurred_at="2026-05-13T00:00:00+00:00",
+    )
+    decision = TaskPermissionDecisionRecord(
+        id="019e2200-0000-7000-8000-000000000114",
+        task_run_id=task_run_id,
+        step_id=step_id,
+        tool_execution_id=None,
+        policy_request={},
+        raw_decision={},
+        resolved_decision={},
+        profile_name="guarded",
+        occurred_at="2026-05-13T00:00:00+00:00",
+    )
+    other_decision = replace(
+        decision,
+        id="019e2200-0000-7000-8000-000000000115",
+        step_id=None,
+    )
+
+    assert step_reason(step, [event]) == "scope blocked"
+    assert step_reason(replace(step, output={}), [event]) == "event reason"
+    assert step_reason(replace(step, output={}), []) == "fallback conclusion"
+    assert step_counts(step, [decision, other_decision]).permission_decision_count == 1
+    assert step_counts(step, [other_decision]).permission_decision_count == 0
+    assert step_counts(step, []).permission_decision_count == 9
+
+
+def test_history_returns_step_timeline_key_events_and_reasons(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(
+        repo,
+        tmp_path,
+        status="blocked",
+        summary={"next_action": "stored stale action"},
+    )
+    blocked_step = TaskStepRecord(
+        id="019e2200-0000-7000-8000-000000000333",
+        task_run_id=record.id,
+        step_index=1,
+        title="Step 1",
+        status="blocked",
+        input={},
+        output={"reason": "needs approval", "tool_count": 2},
+    )
+    repo.steps.append(blocked_step)
+    repo.append_event(
+        task_run_id=record.id,
+        event_type="task_step_started",
+        payload={},
+        step_id=blocked_step.id,
+        occurred_at="2026-05-13T00:00:00+00:00",
+    )
+    repo.append_event(
+        task_run_id=record.id,
+        event_type="task_step_blocked",
+        payload={"reason": "needs approval"},
+        step_id=blocked_step.id,
+        occurred_at="2026-05-13T00:01:00+00:00",
+    )
+    repo.append_event(
+        task_run_id=record.id,
+        event_type="task_run_projection_rebuilt",
+        payload={},
+        occurred_at="2026-05-13T00:02:00+00:00",
+    )
+    repo.append_permission_decision(
+        task_run_id=record.id,
+        step_id=blocked_step.id,
+        policy_request={},
+        raw_decision={},
+        resolved_decision={},
+        profile_name="guarded",
+    )
+    event_count = len(repo.events)
+
+    result = _service(repo).history(record.id[:12], tmp_path)
+
+    assert result.steps[0].step.id == blocked_step.id
+    assert result.steps[0].reason == "needs approval"
+    assert result.steps[0].counts.tool_count == 2
+    assert result.steps[0].counts.permission_decision_count == 1
+    assert [event.event_type for event in result.key_events] == [
+        "task_step_started",
+        "task_step_blocked",
+    ]
+    assert len(repo.events) == event_count
+
+
+def test_next_returns_pending_step_or_summary_without_creating_step(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(repo, tmp_path, status="pending")
+    pending_later = TaskStepRecord(
+        id="019e2200-0000-7000-8000-000000000333",
+        task_run_id=record.id,
+        step_index=2,
+        title="Step 2",
+        status="pending",
+        input={},
+        output={},
+    )
+    pending_first = replace(
+        pending_later,
+        id="019e2200-0000-7000-8000-000000000334",
+        step_index=1,
+        title="Step 1",
+    )
+    repo.steps.extend([pending_later, pending_first])
+    step_count = len(repo.steps)
+    event_count = len(repo.events)
+
+    result = _service(repo).next(record.id, tmp_path)
+
+    assert result.pending_step == pending_first
+    assert result.current_step is None
+    assert result.next_action.startswith("Run `magipi taskrun step")
+    assert result.summary_snapshot["status"] == "pending"
+    assert len(repo.steps) == step_count
+    assert len(repo.events) == event_count
+
+
+def test_next_exposes_blocked_reason_without_pending_step(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(repo, tmp_path, status="blocked")
+    blocked_step = TaskStepRecord(
+        id="019e2200-0000-7000-8000-000000000333",
+        task_run_id=record.id,
+        step_index=1,
+        title="Step 1",
+        status="failed",
+        input={},
+        output={"error_message": "provider failed"},
+        conclusion="failed",
+    )
+    repo.steps.append(blocked_step)
+    event_count = len(repo.events)
+
+    result = _service(repo).next(record.id, tmp_path)
+
+    assert result.pending_step is None
+    assert result.last_attempt == blocked_step
+    assert result.blocked_or_failed_reason == "provider failed"
+    assert "provider failed" in result.next_action
+    assert len(repo.events) == event_count
+
+
+def test_terminal_taskrun_is_readable_by_explicit_id(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(repo, tmp_path, status="completed")
+    repo.append_event(
+        task_run_id=record.id,
+        event_type="task_run_closed",
+        payload={"final_status": "completed"},
+        occurred_at="2026-05-13T00:01:00+00:00",
+    )
+    event_count = len(repo.events)
+    service = _service(repo)
+
+    history = service.history(record.id, tmp_path)
+    next_view = service.next(record.id, tmp_path)
+    events = service.events(record.id, tmp_path)
+
+    assert history.task_run.id == record.id
+    assert next_view.task_run.id == record.id
+    assert next_view.next_action == "TaskRun is terminal; inspect summary or archive when ready."
+    assert [event.event_type for event in events.events] == ["task_run_closed"]
+    assert len(repo.events) == event_count
+
+
+def test_events_returns_complete_ordered_stream_without_projection(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(repo, tmp_path)
+    late = repo.append_event(
+        task_run_id=record.id,
+        event_type="late",
+        payload={"order": 2},
+        occurred_at="2026-05-13T00:02:00+00:00",
+    )
+    early = repo.append_event(
+        task_run_id=record.id,
+        event_type="early",
+        payload={"order": 1},
+        occurred_at="2026-05-13T00:01:00+00:00",
+    )
+    event_count = len(repo.events)
+
+    result = _service(repo).events(record.id, tmp_path)
+
+    assert [event.id for event in result.events] == [early.id, late.id]
+    assert len(repo.events) == event_count
 
 
 def test_close_cancels_pending_taskrun_and_is_idempotent(tmp_path: Path) -> None:

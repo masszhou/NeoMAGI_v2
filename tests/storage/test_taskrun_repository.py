@@ -347,6 +347,39 @@ def test_create_running_step_rejects_another_running_taskrun_in_workspace() -> N
     assert conn.rollbacks == 1
 
 
+def test_list_task_runs_for_workspace_orders_by_recent_activity() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    assert repo.list_task_runs_for_workspace("/workspace") == []
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "WHERE workspace_root = %s" in sql
+    assert "status <> ALL" not in sql
+    assert "ORDER BY updated_at DESC, created_at DESC" in sql
+
+
+def test_list_task_runs_for_workspace_can_exclude_terminal_statuses() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    assert repo.list_task_runs_for_workspace("/workspace", include_terminal=False) == []
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "status <> ALL(%s)" in sql
+
+
+def test_list_events_orders_by_occurred_at_then_id() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    assert repo.list_events(TASK_ID) == []
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "FROM \"neomagi\".task_events" in sql
+    assert "ORDER BY occurred_at ASC, id ASC" in sql
+
+
 def test_update_step_status_persists_output_and_conclusion() -> None:
     conn = _Conn()
     repo = _repo(conn)

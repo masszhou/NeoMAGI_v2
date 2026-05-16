@@ -7,8 +7,19 @@ import pytest
 import cli.__main__ as cli_main
 import cli.taskrun_commands as taskrun_commands
 from cli.core.taskrun_projection import TaskRunProjectionResult
-from cli.core.taskrun_service import TaskRunResult
-from storage.taskrun_repository import TaskRunRecord, TaskStepRecord
+from cli.core.taskrun_service import (
+    TaskRunResult,
+)
+from cli.core.taskrun_views import (
+    TaskRunEventsResult,
+    TaskRunHistoryResult,
+    TaskRunHistoryStep,
+    TaskRunListItem,
+    TaskRunListResult,
+    TaskRunNextResult,
+    TaskStepCounts,
+)
+from storage.taskrun_repository import TaskEventRecord, TaskRunRecord, TaskStepRecord
 
 
 class _Conn:
@@ -41,6 +52,76 @@ class _FakeService:
     def summary(self, task_id: str | None, cwd: Path) -> TaskRunResult:
         self.calls.append(("summary", task_id, cwd))
         return self.result
+
+    def list(self, cwd: Path) -> TaskRunListResult:
+        self.calls.append(("list", cwd))
+        return TaskRunListResult(
+            [
+                TaskRunListItem(
+                    task_run=self.result.task_run,
+                    current_step=None,
+                    permission_profile_name="interactive",
+                    next_action=str(self.result.summary.get("next_action") or ""),
+                )
+            ]
+        )
+
+    def history(self, task_id: str | None, cwd: Path) -> TaskRunHistoryResult:
+        self.calls.append(("history", task_id, cwd))
+        step = self.result.steps[0] if self.result.steps else None
+        return TaskRunHistoryResult(
+            task_run=self.result.task_run,
+            steps=[
+                TaskRunHistoryStep(
+                    step=step,
+                    reason="needs approval",
+                    counts=TaskStepCounts(tool_count=1, permission_decision_count=2),
+                )
+            ]
+            if step is not None
+            else [],
+            key_events=[
+                TaskEventRecord(
+                    id="019e2200-0000-7000-8000-000000000004",
+                    task_run_id=self.result.task_run.id,
+                    step_id=step.id if step else None,
+                    event_type="task_step_blocked",
+                    payload={"reason": "needs approval"},
+                    occurred_at="2026-05-13T00:02:00+00:00",
+                )
+            ],
+            next_action=str(self.result.summary.get("next_action") or ""),
+        )
+
+    def next(self, task_id: str | None, cwd: Path) -> TaskRunNextResult:
+        self.calls.append(("next", task_id, cwd))
+        step = self.result.steps[0] if self.result.steps else None
+        return TaskRunNextResult(
+            task_run=self.result.task_run,
+            pending_step=None,
+            current_step=None,
+            last_attempt=step,
+            next_action=str(self.result.summary.get("next_action") or ""),
+            blocked_or_failed_reason="needs approval",
+            permission_profile=self.result.task_run.permission_profile,
+            summary_snapshot=self.result.summary,
+        )
+
+    def events(self, task_id: str | None, cwd: Path) -> TaskRunEventsResult:
+        self.calls.append(("events", task_id, cwd))
+        return TaskRunEventsResult(
+            task_run=self.result.task_run,
+            events=[
+                TaskEventRecord(
+                    id="019e2200-0000-7000-8000-000000000004",
+                    task_run_id=self.result.task_run.id,
+                    step_id=None,
+                    event_type="task_run_started",
+                    payload={"goal": "Analyze this repo"},
+                    occurred_at="2026-05-13T00:00:00+00:00",
+                )
+            ],
+        )
 
     def close(self, task_id: str | None, cwd: Path) -> TaskRunResult:
         self.calls.append(("close", task_id, cwd))
@@ -210,6 +291,85 @@ def test_taskrun_summary_prints_structured_summary(
     assert rc == 0
     assert "summary:" in captured.out
     assert '"next_action"' in captured.out
+
+
+def test_taskrun_list_routes_and_prints_workspace_view(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["list"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "list"
+    assert "id: 019e2200-0000-7000-8000-000000000001" in captured.out
+    assert "permission_profile: interactive" in captured.out
+    assert "goal: Analyze this repo" in captured.out
+    assert "next_action:" in captured.out
+
+
+def test_taskrun_history_routes_and_prints_reason(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_step_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["history", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "history"
+    assert service.calls[0][1] == "019e2200"
+    assert "step_status: done" in captured.out
+    assert "reason: needs approval" in captured.out
+    assert "permission_decision_count: 2" in captured.out
+    assert "task_step_blocked" in captured.out
+
+
+def test_taskrun_next_routes_and_prints_deterministic_view(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_step_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["next", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "next"
+    assert service.calls[0][1] == "019e2200"
+    assert "pending_step: none" in captured.out
+    assert "last_attempt: #1 done" in captured.out
+    assert "blocked_or_failed_reason: needs approval" in captured.out
+    assert "summary_snapshot:" in captured.out
+
+
+def test_taskrun_events_routes_and_prints_jsonl(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["events", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert rc == 0
+    assert service.calls[0][0] == "events"
+    assert service.calls[0][1] == "019e2200"
+    assert len(lines) == 1
+    assert '"event_type": "task_run_started"' in lines[0]
+    assert '"payload": {"goal": "Analyze this repo"}' in lines[0]
 
 
 def test_taskrun_step_passes_runtime_options_and_prints_step(
