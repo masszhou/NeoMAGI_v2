@@ -13,13 +13,20 @@ from ai_provider.model_registry import canonical_model_ref, resolve_model, valid
 from cli.cli_args import CACHE_RETENTIONS, DEFAULT_MODEL_REF, THINKING_LEVELS
 from cli.core.model_settings import apply_settings_models
 from cli.core.settings import LoadedSettings, SettingsManager
-from cli.core.taskrun_runner import TaskRunHeadlessRunner
 from cli.core.session_manager import SessionManager
+from cli.core.taskrun_projection import task_event_to_dict
+from cli.core.taskrun_runner import TaskRunHeadlessRunner
 from cli.core.taskrun_service import (
     TaskRunResult,
     TaskRunRuntimeOptions,
     TaskRunService,
     TaskRunServiceError,
+)
+from cli.core.taskrun_views import (
+    TaskRunEventsResult,
+    TaskRunHistoryResult,
+    TaskRunListResult,
+    TaskRunNextResult,
 )
 from policy.permission_profiles import (
     BUILTIN_PERMISSION_PROFILE_NAMES,
@@ -34,6 +41,16 @@ from storage import (
     connect_database,
     ensure_schema,
     load_database_config,
+)
+from storage.taskrun_repository import TaskStepRecord
+
+
+TaskRunCommandResult = (
+    TaskRunResult
+    | TaskRunListResult
+    | TaskRunHistoryResult
+    | TaskRunNextResult
+    | TaskRunEventsResult
 )
 
 
@@ -110,6 +127,14 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="SUBCOMMAND")
 
+    _add_start_command(sub)
+    _add_read_commands(sub)
+    _add_step_command(sub)
+    _add_close_command(sub)
+    return parser
+
+
+def _add_start_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     start = sub.add_parser("start", help="Create a pending TaskRun.")
     start.add_argument(
         "--permission",
@@ -119,12 +144,27 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     )
     start.add_argument("goal", nargs="+", help="Task goal.")
 
+
+def _add_read_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     status = sub.add_parser("status", help="Show TaskRun status.")
     status.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
 
     summary = sub.add_parser("summary", help="Regenerate and print TaskRun summary.")
     summary.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
 
+    sub.add_parser("list", help="List workspace TaskRuns.")
+
+    history = sub.add_parser("history", help="Show TaskRun step timeline and key events.")
+    history.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+
+    next_cmd = sub.add_parser("next", help="Show deterministic TaskRun next-step view.")
+    next_cmd.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+
+    events = sub.add_parser("events", help="Print TaskRun task_events as JSONL.")
+    events.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+
+
+def _add_step_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     step = sub.add_parser("step", help="Execute exactly one manual TaskRun step.")
     step.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
     step.add_argument(
@@ -146,9 +186,10 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
         help="Provider prompt-cache retention override.",
     )
 
+
+def _add_close_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     close = sub.add_parser("close", help="Close an unexecuted TaskRun as cancelled.")
     close.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
-    return parser
 
 
 def _dispatch(
@@ -159,26 +200,36 @@ def _dispatch(
     permission_profile: Mapping[str, Any] | None,
     runtime_options: TaskRunRuntimeOptions | None,
     runner: TaskRunHeadlessRunner | None,
-) -> TaskRunResult:
-    if args.cmd == "start":
-        goal = " ".join(args.goal).strip()
-        return service.start(goal, cwd, permission_profile=permission_profile)
-    if args.cmd == "status":
-        return service.status(args.id, cwd)
-    if args.cmd == "summary":
-        return service.summary(args.id, cwd)
-    if args.cmd == "step":
-        if runner is None:
-            raise TaskRunServiceError("taskrun step runner is unavailable")
-        return service.step(
-            args.id,
-            cwd,
-            runtime_options=runtime_options,
-            runner=runner,
-        )
-    if args.cmd == "close":
-        return service.close(args.id, cwd)
-    raise AssertionError(f"unhandled taskrun command: {args.cmd}")
+) -> TaskRunCommandResult:
+    match args.cmd:
+        case "start":
+            goal = " ".join(args.goal).strip()
+            return service.start(goal, cwd, permission_profile=permission_profile)
+        case "status":
+            return service.status(args.id, cwd)
+        case "summary":
+            return service.summary(args.id, cwd)
+        case "list":
+            return service.list(cwd)
+        case "history":
+            return service.history(args.id, cwd)
+        case "next":
+            return service.next(args.id, cwd)
+        case "events":
+            return service.events(args.id, cwd)
+        case "step":
+            if runner is None:
+                raise TaskRunServiceError("taskrun step runner is unavailable")
+            return service.step(
+                args.id,
+                cwd,
+                runtime_options=runtime_options,
+                runner=runner,
+            )
+        case "close":
+            return service.close(args.id, cwd)
+        case _:
+            raise AssertionError(f"unhandled taskrun command: {args.cmd}")
 
 
 def _load_permission_profile_snapshot(name: str, cwd: Path) -> dict[str, Any]:
@@ -256,7 +307,23 @@ def _deep_merge(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, 
     return merged
 
 
-def _print_result(result: TaskRunResult, *, include_summary: bool) -> None:
+def _print_result(
+    result: TaskRunCommandResult,
+    *,
+    include_summary: bool,
+) -> None:
+    if isinstance(result, TaskRunListResult):
+        _print_list_result(result)
+        return
+    if isinstance(result, TaskRunHistoryResult):
+        _print_history_result(result)
+        return
+    if isinstance(result, TaskRunNextResult):
+        _print_next_result(result)
+        return
+    if isinstance(result, TaskRunEventsResult):
+        _print_events_result(result)
+        return
     task_run = result.task_run
     summary = result.summary
     sys.stdout.write(f"id: {task_run.id}\n")
@@ -273,6 +340,117 @@ def _print_result(result: TaskRunResult, *, include_summary: bool) -> None:
         sys.stdout.write("summary:\n")
         sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         sys.stdout.write("\n")
+
+
+def _print_list_result(result: TaskRunListResult) -> None:
+    if not result.items:
+        sys.stdout.write("No TaskRuns in this workspace.\n")
+        return
+    for index, item in enumerate(result.items):
+        if index:
+            sys.stdout.write("\n")
+        task_run = item.task_run
+        sys.stdout.write(f"id: {task_run.id}\n")
+        sys.stdout.write(f"status: {task_run.status}\n")
+        sys.stdout.write(f"current_step: {_current_step_label(item.current_step)}\n")
+        sys.stdout.write(f"updated_at: {task_run.updated_at}\n")
+        sys.stdout.write(f"permission_profile: {item.permission_profile_name}\n")
+        sys.stdout.write(f"goal: {_goal_preview(task_run.goal)}\n")
+        sys.stdout.write(f"next_action: {_goal_preview(item.next_action)}\n")
+
+
+def _print_history_result(result: TaskRunHistoryResult) -> None:
+    task_run = result.task_run
+    sys.stdout.write(f"id: {task_run.id}\n")
+    sys.stdout.write(f"status: {task_run.status}\n")
+    sys.stdout.write(f"goal: {_goal_preview(task_run.goal)}\n")
+    sys.stdout.write(f"next_action: {result.next_action}\n")
+    sys.stdout.write("steps:\n")
+    if not result.steps:
+        sys.stdout.write("- none\n")
+    for item in result.steps:
+        step = item.step
+        sys.stdout.write(f"- step_index: {step.step_index}\n")
+        sys.stdout.write(f"  step_id: {step.id}\n")
+        sys.stdout.write(f"  step_status: {step.status}\n")
+        sys.stdout.write(f"  title: {step.title}\n")
+        sys.stdout.write(f"  started_at: {step.started_at or ''}\n")
+        sys.stdout.write(f"  ended_at: {step.ended_at or ''}\n")
+        sys.stdout.write(f"  conclusion: {_goal_preview(step.conclusion or '')}\n")
+        sys.stdout.write(f"  reason: {_goal_preview(item.reason or '')}\n")
+        sys.stdout.write(f"  tool_count: {item.counts.tool_count}\n")
+        sys.stdout.write(
+            f"  permission_decision_count: {item.counts.permission_decision_count}\n"
+        )
+    sys.stdout.write("key_events:\n")
+    if not result.key_events:
+        sys.stdout.write("- none\n")
+    for event in result.key_events:
+        step = event.step_id or ""
+        sys.stdout.write(
+            f"- {event.occurred_at} {event.event_type} step_id={step}\n"
+        )
+
+
+def _print_next_result(result: TaskRunNextResult) -> None:
+    sys.stdout.write(f"task_run_id: {result.task_run.id}\n")
+    sys.stdout.write(f"task_status: {result.task_run.status}\n")
+    sys.stdout.write(f"pending_step: {_step_record_label(result.pending_step)}\n")
+    sys.stdout.write(f"current_step: {_step_record_label(result.current_step)}\n")
+    sys.stdout.write(f"last_attempt: {_step_record_label(result.last_attempt)}\n")
+    sys.stdout.write(f"next_action: {result.next_action}\n")
+    sys.stdout.write(
+        f"blocked_or_failed_reason: {result.blocked_or_failed_reason or ''}\n"
+    )
+    sys.stdout.write(
+        f"permission_profile: {result.permission_profile.get('name', '')}\n"
+    )
+    sys.stdout.write("summary_snapshot:\n")
+    sys.stdout.write(
+        json.dumps(
+            result.summary_snapshot,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    sys.stdout.write("\n")
+
+
+def _print_events_result(result: TaskRunEventsResult) -> None:
+    for event in result.events:
+        sys.stdout.write(
+            json.dumps(
+                task_event_to_dict(event),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        sys.stdout.write("\n")
+
+
+def _current_step_label(current_step: Mapping[str, object] | str | None) -> str:
+    if current_step is None:
+        return "none"
+    if isinstance(current_step, str):
+        return current_step
+    index = current_step.get("step_index")
+    status = current_step.get("status")
+    title = current_step.get("title")
+    step_id = current_step.get("id")
+    parts = [
+        f"#{index}" if index is not None else None,
+        str(status) if status else None,
+        str(title) if title else None,
+        str(step_id) if step_id else None,
+    ]
+    return " ".join(part for part in parts if part) or "none"
+
+
+def _step_record_label(step: TaskStepRecord | None) -> str:
+    if step is None:
+        return "none"
+    return f"#{step.step_index} {step.status} {step.id} {step.title}"
 
 
 def _goal_preview(goal: str, limit: int = 96) -> str:

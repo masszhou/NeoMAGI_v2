@@ -19,6 +19,19 @@ from cli.core.taskrun_step import (
     TaskRunStepOutcome,
     TaskRunStepRunner,
 )
+from cli.core.taskrun_views import (
+    TaskRunEventsResult,
+    TaskRunHistoryResult,
+    TaskRunListResult,
+    TaskRunNextResult,
+    build_taskrun_history,
+    build_taskrun_list,
+    build_taskrun_next,
+    next_action_for_status,
+    preview_text,
+    step_summary,
+    taskrun_next_action,
+)
 from policy.permission_profiles import (
     PermissionProfileError,
     build_permission_profile_snapshot,
@@ -125,6 +138,53 @@ class TaskRunService:
         self.recover_stale_running(workspace_root)
         record = self._select_task_run(workspace_root, id_or_prefix)
         return self._summarize_and_project(record)
+
+    def list(self, cwd: str | Path) -> TaskRunListResult:
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        records = self.repository.list_task_runs_for_workspace(
+            workspace_root,
+            include_terminal=True,
+        )
+        return build_taskrun_list(records)
+
+    def history(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunHistoryResult:
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run(workspace_root, id_or_prefix)
+        steps = self.repository.list_steps(record.id)
+        events = self.repository.list_events(record.id)
+        permission_decisions = self.repository.list_permission_decisions(record.id)
+        return build_taskrun_history(
+            record,
+            steps,
+            events,
+            permission_decisions,
+            self._build_summary(record, steps),
+        )
+
+    def next(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunNextResult:
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run(workspace_root, id_or_prefix)
+        steps = self.repository.list_steps(record.id)
+        events = self.repository.list_events(record.id)
+        return build_taskrun_next(
+            record,
+            steps,
+            events,
+            self._build_summary(record, steps),
+            DEFAULT_PERMISSION_PROFILE,
+        )
+
+    def events(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunEventsResult:
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run(workspace_root, id_or_prefix)
+        return TaskRunEventsResult(
+            task_run=record,
+            events=self.repository.list_events(record.id),
+        )
 
     def step(
         self,
@@ -505,14 +565,14 @@ class TaskRunService:
         return {
             "goal": record.goal,
             "status": record.status,
-            "current_step": _step_summary(current_step),
-            "completed_steps": [_step_summary(step) for step in completed_steps],
-            "blocked_steps": [_step_summary(step) for step in blocked_steps],
-            "last_attempt": _step_summary(last_attempt),
+            "current_step": step_summary(current_step),
+            "completed_steps": [step_summary(step) for step in completed_steps],
+            "blocked_steps": [step_summary(step) for step in blocked_steps],
+            "last_attempt": step_summary(last_attempt),
             "current_best": None,
             "workspace_state": _workspace_state(record.workspace_root, projection_path),
             "permission_profile": dict(record.permission_profile or DEFAULT_PERMISSION_PROFILE),
-            "next_action": _next_action(record, last_attempt),
+            "next_action": taskrun_next_action(record, last_attempt),
         }
 
     def _is_stale(self, record: TaskRunRecord, now_dt: datetime) -> bool:
@@ -548,25 +608,6 @@ def _parse_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-
-
-def _step_summary(step: TaskStepRecord | None) -> dict[str, object] | None:
-    if step is None:
-        return None
-    summary = {
-        "id": step.id,
-        "step_index": step.step_index,
-        "title": step.title,
-        "status": step.status,
-        "conclusion": step.conclusion,
-        "started_at": step.started_at,
-        "ended_at": step.ended_at,
-    }
-    if step.output.get("next_action"):
-        summary["next_action"] = step.output["next_action"]
-    if step.output.get("reason"):
-        summary["reason"] = step.output["reason"]
-    return summary
 
 
 def _step_input(
@@ -605,10 +646,10 @@ def _step_output(
         if status == "blocked"
         else outcome.error_message if status in {"failed", "cancelled"} else None
     )
-    next_action = outcome.next_action or _next_action_for_status(task_run_id, status, reason)
+    next_action = outcome.next_action or next_action_for_status(task_run_id, status, reason)
     output: dict[str, object] = {
         "status": status,
-        "assistant_text_preview": _preview(outcome.assistant_text),
+        "assistant_text_preview": preview_text(outcome.assistant_text),
         "tool_count": outcome.tool_count,
         "permission_decision_count": outcome.permission_decision_count,
         "next_action": next_action,
@@ -628,21 +669,12 @@ def _step_output(
 
 def _step_conclusion(outcome: TaskRunStepOutcome, status: str) -> str:
     if status == "done":
-        return _preview(outcome.assistant_text) or "manual step completed"
+        return preview_text(outcome.assistant_text) or "manual step completed"
     if status == "blocked":
-        return _preview(outcome.block_reason) or "manual step blocked"
+        return preview_text(outcome.block_reason) or "manual step blocked"
     if status == "cancelled":
-        return _preview(outcome.error_message) or "manual step cancelled"
-    return _preview(outcome.error_message) or "manual step failed"
-
-
-def _preview(value: str | None, limit: int = 500) -> str:
-    if not value:
-        return ""
-    collapsed = " ".join(value.split())
-    if len(collapsed) <= limit:
-        return collapsed
-    return collapsed[: limit - 3] + "..."
+        return preview_text(outcome.error_message) or "manual step cancelled"
+    return preview_text(outcome.error_message) or "manual step failed"
 
 
 def _normalize_step_outcome_status(status: str) -> str:
@@ -678,39 +710,6 @@ def _failed_outcome(task_run_id: str, exc: Exception) -> TaskRunStepOutcome:
             f"`magipi taskrun step {task_run_id[:8]}` to retry manually."
         ),
     )
-
-
-def _next_action(record: TaskRunRecord, last_attempt: TaskStepRecord | None) -> str:
-    if record.status == "running" and record.current_step_id:
-        return "Wait for the current manual step to finish."
-    if record.status in TERMINAL_TASKRUN_STATUSES:
-        return "TaskRun is terminal; inspect summary or archive when ready."
-    if last_attempt is None:
-        return f"Run `magipi taskrun step {record.id[:8]}` to execute the first manual step."
-    reason = last_attempt.output.get("reason")
-    if last_attempt.status == "done":
-        return str(
-            last_attempt.output.get("next_action")
-            or f"Run `magipi taskrun step {record.id[:8]}` for the next manual step, or close when complete."
-        )
-    if last_attempt.status == "blocked":
-        return _next_action_for_status(record.id, "blocked", str(reason) if reason else None)
-    if last_attempt.status == "cancelled":
-        return _next_action_for_status(record.id, "cancelled", str(reason) if reason else None)
-    return _next_action_for_status(record.id, "failed", str(reason) if reason else None)
-
-
-def _next_action_for_status(task_run_id: str, status: str, reason: str | None) -> str:
-    prefix = f"`magipi taskrun step {task_run_id[:8]}`"
-    if status == "done":
-        return f"Run {prefix} for the next manual step, or close the TaskRun when complete."
-    if status == "blocked":
-        detail = f" ({reason})" if reason else ""
-        return f"Resolve the blocker{detail}, then run {prefix} to continue."
-    if status == "cancelled":
-        return f"Review the cancellation, then run {prefix} to continue manually."
-    detail = f" ({reason})" if reason else ""
-    return f"Inspect the failure{detail}, then run {prefix} to retry manually."
 
 
 def _workspace_state(workspace_root: str, projection_path: Path) -> dict[str, object]:
