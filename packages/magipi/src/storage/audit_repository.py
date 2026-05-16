@@ -75,14 +75,21 @@ class PostgresAuditRepository:
         entry_id: str | None = None,
         tool_execution_id: str | None = None,
     ) -> AuditEventRecord:
-        event = _event_from_audit_record(
-            session_id=session_id,
-            record=record,
-            entry_id=entry_id,
-            tool_execution_id=tool_execution_id,
-        )
         try:
             with self._conn.cursor() as cur:
+                resolved_tool_execution_id = tool_execution_id
+                if resolved_tool_execution_id is None and record.tool_call_id:
+                    resolved_tool_execution_id = self._find_tool_execution_id(
+                        cur,
+                        session_id=session_id,
+                        tool_call_id=record.tool_call_id,
+                    )
+                event = _event_from_audit_record(
+                    session_id=session_id,
+                    record=record,
+                    entry_id=entry_id,
+                    tool_execution_id=resolved_tool_execution_id,
+                )
                 cur.execute(
                     f"""
                     INSERT INTO {self._schema}.agent_audit_events(
@@ -110,6 +117,28 @@ class PostgresAuditRepository:
             self._conn.rollback()
             raise
         return event
+
+    def _find_tool_execution_id(
+        self,
+        cur: Any,
+        *,
+        session_id: str,
+        tool_call_id: str,
+    ) -> str | None:
+        cur.execute(
+            f"""
+            SELECT id
+            FROM {self._schema}.agent_tool_executions
+            WHERE session_id = %s AND tool_call_id = %s
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (session_id, tool_call_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return str(row[0])
 
 
 def _event_from_audit_record(
