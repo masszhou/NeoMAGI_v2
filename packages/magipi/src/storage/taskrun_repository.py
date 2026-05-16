@@ -290,6 +290,42 @@ class PostgresTaskRunRepository:
             raise KeyError(f"unknown TaskRun: {task_run_id}")
         return _task_run_from_row(row)
 
+    def update_task_run_permission_profile(
+        self,
+        task_run_id: str,
+        permission_profile: Mapping[str, Any],
+        *,
+        updated_at: str | None = None,
+    ) -> TaskRunRecord:
+        _validate_uuid("task_run_id", task_run_id)
+        now = updated_at or utc_now_iso()
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {self._schema}.task_runs
+                    SET permission_profile = %s, updated_at = %s
+                    WHERE id = %s
+                    RETURNING id, workspace_root, agent_session_id, goal, status,
+                              permission_profile, budget, stop_conditions,
+                              current_step_id, summary, heartbeat_at, created_at,
+                              updated_at, closed_at
+                    """,
+                    (
+                        _jsonb(_dump_json(dict(permission_profile))),
+                        now,
+                        task_run_id,
+                    ),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if row is None:
+            raise KeyError(f"unknown TaskRun: {task_run_id}")
+        return _task_run_from_row(row)
+
     def create_running_step(
         self,
         task_run_id: str,

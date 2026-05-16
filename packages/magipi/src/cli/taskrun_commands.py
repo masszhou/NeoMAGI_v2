@@ -14,6 +14,11 @@ from cli.cli_args import CACHE_RETENTIONS, DEFAULT_MODEL_REF, THINKING_LEVELS
 from cli.core.model_settings import apply_settings_models
 from cli.core.settings import LoadedSettings, SettingsManager
 from cli.core.session_manager import SessionManager
+from cli.core.taskrun_autorun import (
+    MAX_AUTO_RUN_STEPS,
+    TaskRunAutoRunOptions,
+    TaskRunAutoRunResult,
+)
 from cli.core.taskrun_projection import task_event_to_dict
 from cli.core.taskrun_runner import TaskRunHeadlessRunner
 from cli.core.taskrun_service import (
@@ -47,6 +52,7 @@ from storage.taskrun_repository import TaskStepRecord
 
 TaskRunCommandResult = (
     TaskRunResult
+    | TaskRunAutoRunResult
     | TaskRunListResult
     | TaskRunHistoryResult
     | TaskRunNextResult
@@ -61,10 +67,14 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
     try:
         permission_profile = (
             _load_permission_profile_snapshot(args.permission, cwd)
-            if args.cmd == "start"
+            if args.cmd == "start" or (args.cmd == "run" and args.permission)
             else None
         )
-        runtime_options = _load_runtime_options(args, cwd) if args.cmd == "step" else None
+        if args.cmd == "run" and permission_profile is not None:
+            _validate_run_permission_profile(permission_profile)
+        runtime_options = (
+            _load_runtime_options(args, cwd) if args.cmd in {"step", "run"} else None
+        )
         db_config = load_database_config(env_file=args.env_file)
         conn = connect_database(db_config)
         try:
@@ -85,7 +95,7 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
                         session_id,
                     ),
                 )
-                if args.cmd == "step"
+                if args.cmd in {"step", "run"}
                 else None
             )
             result = _dispatch(
@@ -130,6 +140,7 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     _add_start_command(sub)
     _add_read_commands(sub)
     _add_step_command(sub)
+    _add_run_command(sub)
     _add_close_command(sub)
     return parser
 
@@ -187,9 +198,59 @@ def _add_step_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
 
 
+def _add_run_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    run = sub.add_parser("run", help="Run a bounded foreground TaskRun auto loop.")
+    run.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    run.add_argument(
+        "--max-steps",
+        type=_parse_auto_run_max_steps,
+        required=True,
+        metavar="N",
+        help="Hard maximum number of bounded steps to execute.",
+    )
+    run.add_argument(
+        "--permission",
+        choices=BUILTIN_PERMISSION_PROFILE_NAMES,
+        default=None,
+        help="Persist a new TaskRun permission profile before running.",
+    )
+    run.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_REF,
+        metavar="VENDOR/AUTH/MODEL",
+        help="Runtime model override for this auto run.",
+    )
+    run.add_argument(
+        "--thinking-level",
+        choices=THINKING_LEVELS,
+        default="off",
+        help="Runtime thinking level for this auto run.",
+    )
+    run.add_argument(
+        "--cache-retention",
+        choices=CACHE_RETENTIONS,
+        default=None,
+        help="Provider prompt-cache retention override.",
+    )
+
+
 def _add_close_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     close = sub.add_parser("close", help="Close an unexecuted TaskRun as cancelled.")
     close.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+
+
+def _parse_auto_run_max_steps(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--max-steps must be an integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("--max-steps must be >= 1")
+    if parsed > MAX_AUTO_RUN_STEPS:
+        raise argparse.ArgumentTypeError(
+            f"--max-steps must be <= {MAX_AUTO_RUN_STEPS}"
+        )
+    return parsed
 
 
 def _dispatch(
@@ -226,6 +287,19 @@ def _dispatch(
                 runtime_options=runtime_options,
                 runner=runner,
             )
+        case "run":
+            if runner is None or runtime_options is None:
+                raise TaskRunServiceError("taskrun run runner is unavailable")
+            return service.run(
+                args.id,
+                cwd,
+                options=TaskRunAutoRunOptions(
+                    max_steps=args.max_steps,
+                    runtime_options=runtime_options,
+                ),
+                runner=runner,
+                permission_profile=permission_profile,
+            )
         case "close":
             return service.close(args.id, cwd)
         case _:
@@ -245,6 +319,14 @@ def _load_permission_profile_snapshot(name: str, cwd: Path) -> dict[str, Any]:
         )
     except PermissionProfileError as exc:
         raise TaskRunServiceError(str(exc)) from exc
+
+
+def _validate_run_permission_profile(profile: Mapping[str, Any]) -> None:
+    if not bool(profile.get("nonInteractive")):
+        raise TaskRunServiceError(
+            "taskrun run is headless and cannot use interactive permission profile; "
+            "use --permission guarded or --permission full"
+        )
 
 
 def _load_runtime_options(args: argparse.Namespace, cwd: Path) -> TaskRunRuntimeOptions:
@@ -324,6 +406,9 @@ def _print_result(
     if isinstance(result, TaskRunEventsResult):
         _print_events_result(result)
         return
+    if isinstance(result, TaskRunAutoRunResult):
+        _print_auto_run_result(result)
+        return
     task_run = result.task_run
     summary = result.summary
     sys.stdout.write(f"id: {task_run.id}\n")
@@ -340,6 +425,29 @@ def _print_result(
         sys.stdout.write("summary:\n")
         sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
         sys.stdout.write("\n")
+
+
+def _print_auto_run_result(result: TaskRunAutoRunResult) -> None:
+    task_run = result.task_run
+    sys.stdout.write(f"id: {task_run.id}\n")
+    sys.stdout.write(f"status: {task_run.status}\n")
+    sys.stdout.write(f"goal: {_goal_preview(task_run.goal)}\n")
+    sys.stdout.write(f"agent_session_id: {task_run.agent_session_id}\n")
+    sys.stdout.write("iterations:\n")
+    if not result.iterations:
+        sys.stdout.write("- none\n")
+    for index, iteration in enumerate(result.iterations, start=1):
+        step = iteration.step
+        sys.stdout.write(f"- iteration: {index}\n")
+        sys.stdout.write(f"  step_id: {step.id}\n")
+        sys.stdout.write(f"  step_status: {step.status}\n")
+        sys.stdout.write(f"  task_status: {iteration.task_run_status}\n")
+        sys.stdout.write(f"  conclusion: {_goal_preview(step.conclusion or '')}\n")
+        sys.stdout.write(f"  next_action: {_goal_preview(str(step.output.get('next_action') or ''))}\n")
+        sys.stdout.write(f"  stop_candidate: {iteration.stop_candidate or ''}\n")
+    sys.stdout.write(f"stop_reason: {result.stop_reason}\n")
+    sys.stdout.write(f"steps_run: {len(result.iterations)}\n")
+    sys.stdout.write(f"projection_path: {result.projection.path}\n")
 
 
 def _print_list_result(result: TaskRunListResult) -> None:

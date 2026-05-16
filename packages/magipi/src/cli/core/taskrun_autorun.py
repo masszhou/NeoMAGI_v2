@@ -1,0 +1,799 @@
+"""Bounded foreground TaskRun auto-loop semantics."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from cli.core.taskrun_errors import TaskRunServiceError
+from cli.core.taskrun_projection import TaskRunProjectionResult
+from cli.core.taskrun_service_internals import TaskRunServiceInternals
+from cli.core.taskrun_step import TaskRunRuntimeOptions, TaskRunStepRunner
+from policy.permission_profiles import (
+    DEFAULT_MAX_CONSECUTIVE_DENIES,
+    DEFAULT_MAX_TOTAL_DENIES,
+    PermissionProfileError,
+    normalize_permission_profile_snapshot,
+)
+from storage.ids import new_db_uuid
+from storage.taskrun_repository import (
+    TERMINAL_TASKRUN_STATUSES,
+    TaskEventRecord,
+    TaskPermissionDecisionRecord,
+    TaskRunRecord,
+    TaskStepRecord,
+)
+
+
+MAX_AUTO_RUN_STEPS = 50
+DEFAULT_MAX_CONSECUTIVE_FAILURES = 2
+AUTO_RUN_STOP_REASONS = frozenset(
+    {
+        "max_steps_reached",
+        "consecutive_failures_exhausted",
+        "consecutive_denies_exhausted",
+        "total_denies_exhausted",
+        "permission_block",
+        "user_cancelled",
+        "budget_exhausted",
+        "no_runnable_taskrun",
+        "runner_error",
+    }
+)
+_STEP_ATTRIBUTED_STOP_REASONS = frozenset(
+    {
+        "consecutive_failures_exhausted",
+        "consecutive_denies_exhausted",
+        "total_denies_exhausted",
+        "permission_block",
+        "runner_error",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRunAutoRunOptions:
+    max_steps: int
+    runtime_options: TaskRunRuntimeOptions
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRunAutoRunIteration:
+    step: TaskStepRecord
+    task_run_status: str
+    stop_candidate: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRunAutoRunResult:
+    task_run: TaskRunRecord
+    iterations: list[TaskRunAutoRunIteration]
+    stop_reason: str
+    projection: TaskRunProjectionResult
+    events: list[TaskEventRecord]
+    exit_code: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _AutoRunBudget:
+    max_steps: int | None
+    max_consecutive_failures: int
+    max_consecutive_denies: int
+    max_total_denies: int
+    deadline_utc: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AutoRunCounters:
+    steps_run: int = 0
+    consecutive_failures: int = 0
+    consecutive_denies: int = 0
+    total_denies: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _AutoRunStopDecision:
+    should_stop: bool
+    stop_reason: str | None
+    next_task_status: str | None
+    exit_code: int
+
+
+def run_taskrun_auto_loop(
+    service: TaskRunServiceInternals,
+    id_or_prefix: str | None,
+    cwd: str,
+    *,
+    options: TaskRunAutoRunOptions,
+    runner: TaskRunStepRunner,
+    permission_profile: Mapping[str, Any] | None = None,
+) -> TaskRunAutoRunResult:
+    workspace_root = str(cwd)
+    max_steps = _validate_auto_run_max_steps(options.max_steps)
+    runtime_options = options.runtime_options
+    profile_snapshot = _normalize_optional_run_profile(permission_profile)
+    record, budget = _prepare_auto_run(
+        service,
+        workspace_root,
+        id_or_prefix,
+        max_steps,
+        effective_permission_profile=profile_snapshot,
+    )
+    auto_run_id = new_db_uuid()
+
+    if _deadline_expired(budget.deadline_utc, service.clock()):
+        return _start_and_stop_auto_run(
+            service,
+            record,
+            auto_run_id=auto_run_id,
+            max_steps=max_steps,
+            runtime_options=runtime_options,
+            stop_reason="budget_exhausted",
+            counters=_AutoRunCounters(),
+            exit_code=1,
+        )
+    if profile_snapshot is not None:
+        record = _update_permission_profile_for_run(service, record, profile_snapshot)
+
+    _append_auto_run_event(
+        service,
+        record,
+        event_type="task_run_auto_run_started",
+        auto_run_id=auto_run_id,
+        max_steps=max_steps,
+        runtime_options=runtime_options,
+        counters=_AutoRunCounters(),
+        iteration_index=0,
+        stop_reason=None,
+    )
+    record = service._summarize_and_project(record).task_run
+    return _execute_auto_run_loop(
+        service,
+        record,
+        workspace_root=workspace_root,
+        auto_run_id=auto_run_id,
+        options=replace(options, max_steps=max_steps),
+        runner=runner,
+    )
+
+
+def _prepare_auto_run(
+    service: TaskRunServiceInternals,
+    workspace_root: str,
+    id_or_prefix: str | None,
+    max_steps: int,
+    *,
+    effective_permission_profile: Mapping[str, Any] | None,
+) -> tuple[TaskRunRecord, _AutoRunBudget]:
+    record = _select_task_run_for_run(service, workspace_root, id_or_prefix)
+    if record.status in TERMINAL_TASKRUN_STATUSES:
+        _raise_service_error(f"cannot run terminal TaskRun {record.id}: {record.status}")
+    _validate_headless_profile(
+        effective_permission_profile or record.permission_profile,
+        command="run",
+    )
+    _validate_auto_run_stop_conditions(record.stop_conditions)
+    budget = _auto_run_budget(record.budget)
+    _validate_auto_run_budget_cap(max_steps, budget)
+    service.recover_stale_running(workspace_root)
+    record = _select_task_run_for_run(service, workspace_root, id_or_prefix)
+    _validate_run_ready(
+        service,
+        record,
+        workspace_root,
+        explicit=bool(id_or_prefix),
+        effective_permission_profile=effective_permission_profile,
+    )
+    return record, budget
+
+
+def _execute_auto_run_loop(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    workspace_root: str,
+    auto_run_id: str,
+    options: TaskRunAutoRunOptions,
+    runner: TaskRunStepRunner,
+) -> TaskRunAutoRunResult:
+    iterations: list[TaskRunAutoRunIteration] = []
+    counters = _AutoRunCounters()
+    stop_reason = "max_steps_reached"
+    exit_code = 0
+    try:
+        while counters.steps_run < options.max_steps:
+            budget = _auto_run_budget(record.budget)
+            if _deadline_expired(budget.deadline_utc, service.clock()):
+                stop_reason, exit_code = "budget_exhausted", 1
+                break
+            record, counters, decision = _execute_auto_run_iteration(
+                service,
+                record,
+                workspace_root=workspace_root,
+                auto_run_id=auto_run_id,
+                options=options,
+                runner=runner,
+                counters=counters,
+                budget=budget,
+            )
+            iterations.append(decision[0])
+            if decision[1].should_stop:
+                stop_reason = decision[1].stop_reason or "runner_error"
+                exit_code = decision[1].exit_code
+                break
+    except KeyboardInterrupt:
+        stop_reason, exit_code = "user_cancelled", 130
+    return _finish_auto_run(
+        service,
+        record,
+        auto_run_id=auto_run_id,
+        options=options,
+        iterations=iterations,
+        counters=counters,
+        stop_reason=stop_reason,
+        exit_code=exit_code,
+    )
+
+
+def _execute_auto_run_iteration(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    workspace_root: str,
+    auto_run_id: str,
+    options: TaskRunAutoRunOptions,
+    runner: TaskRunStepRunner,
+    counters: _AutoRunCounters,
+    budget: _AutoRunBudget,
+) -> tuple[TaskRunRecord, _AutoRunCounters, tuple[TaskRunAutoRunIteration, _AutoRunStopDecision]]:
+    _validate_run_ready(service, record, workspace_root, explicit=True)
+    pre_summary, running_run, step = service._start_step(record, options.runtime_options)
+    outcome = service._run_step_runner(
+        runner,
+        task_run=running_run,
+        step=step,
+        summary=pre_summary,
+        runtime_options=options.runtime_options,
+        workspace_root=workspace_root,
+    )
+    step_result = service._finalize_step(
+        task_run=running_run,
+        step=step,
+        previous_status=record.status,
+        outcome=outcome,
+        runtime_options=options.runtime_options,
+        rebuild_projection=False,
+    )
+    if step_result.step is None:
+        _raise_service_error("taskrun run finalized without a step record")
+    record = step_result.task_run
+    step_denies = _count_step_denies(
+        service.repository.list_permission_decisions(record.id),
+        step_result.step.id,
+    )
+    counters = _advance_auto_run_counters(counters, step_result.step, step_denies)
+    decision = evaluate_auto_run_stop(
+        last_step=step_result.step,
+        counters=counters,
+        options=options,
+        budget=budget,
+        step_denies=step_denies,
+    )
+    iteration = TaskRunAutoRunIteration(
+        step=step_result.step,
+        task_run_status=record.status,
+        stop_candidate=decision.stop_reason,
+    )
+    _append_auto_run_event(
+        service,
+        record,
+        event_type="task_run_auto_run_iteration_finished",
+        auto_run_id=auto_run_id,
+        max_steps=options.max_steps,
+        runtime_options=options.runtime_options,
+        counters=counters,
+        iteration_index=counters.steps_run,
+        step=step_result.step,
+        stop_reason=decision.stop_reason,
+    )
+    if decision.next_task_status and record.status != decision.next_task_status:
+        record = service.repository.update_task_run_status(
+            record.id,
+            status=decision.next_task_status,
+            heartbeat_at=None,
+            updated_at=service._now_iso(),
+        )
+    return record, counters, (iteration, decision)
+
+
+def _finish_auto_run(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    auto_run_id: str,
+    options: TaskRunAutoRunOptions,
+    iterations: list[TaskRunAutoRunIteration],
+    counters: _AutoRunCounters,
+    stop_reason: str,
+    exit_code: int,
+) -> TaskRunAutoRunResult:
+    event_type = (
+        "task_run_auto_run_cancelled"
+        if stop_reason == "user_cancelled"
+        else "task_run_auto_run_stopped"
+    )
+    _append_auto_run_event(
+        service,
+        record,
+        event_type=event_type,
+        auto_run_id=auto_run_id,
+        max_steps=options.max_steps,
+        runtime_options=options.runtime_options,
+        counters=counters,
+        iteration_index=counters.steps_run,
+        step=_auto_run_stop_event_step(iterations, stop_reason),
+        stop_reason=stop_reason,
+    )
+    final = service._summarize_and_project(record)
+    return TaskRunAutoRunResult(
+        task_run=final.task_run,
+        iterations=iterations,
+        stop_reason=stop_reason,
+        projection=final.projection,
+        events=final.events,
+        exit_code=exit_code,
+    )
+
+
+def _start_and_stop_auto_run(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    auto_run_id: str,
+    max_steps: int,
+    runtime_options: TaskRunRuntimeOptions,
+    stop_reason: str,
+    counters: _AutoRunCounters,
+    exit_code: int,
+) -> TaskRunAutoRunResult:
+    options = TaskRunAutoRunOptions(max_steps=max_steps, runtime_options=runtime_options)
+    _append_auto_run_event(
+        service,
+        record,
+        event_type="task_run_auto_run_started",
+        auto_run_id=auto_run_id,
+        max_steps=max_steps,
+        runtime_options=runtime_options,
+        counters=counters,
+        iteration_index=0,
+        stop_reason=None,
+    )
+    record = service._summarize_and_project(record).task_run
+    return _finish_auto_run(
+        service,
+        record,
+        auto_run_id=auto_run_id,
+        options=options,
+        iterations=[],
+        counters=counters,
+        stop_reason=stop_reason,
+        exit_code=exit_code,
+    )
+
+
+def _select_task_run_for_run(
+    service: TaskRunServiceInternals,
+    workspace_root: str,
+    id_or_prefix: str | None,
+) -> TaskRunRecord:
+    if id_or_prefix:
+        return service._select_task_run(workspace_root, id_or_prefix)
+    candidates = [
+        record
+        for record in service.repository.list_task_runs_for_workspace(
+            workspace_root,
+            include_terminal=False,
+        )
+        if record.status == "pending"
+    ]
+    if not candidates:
+        _raise_service_error(
+            "no pending TaskRun in this workspace; pass an id to run a blocked TaskRun"
+        )
+    if len(candidates) > 1:
+        _raise_service_error(
+            _ambiguous_message(
+                "multiple pending TaskRuns in this workspace",
+                candidates,
+            )
+        )
+    return candidates[0]
+
+
+def _validate_run_ready(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    workspace_root: str,
+    *,
+    explicit: bool,
+    effective_permission_profile: Mapping[str, Any] | None = None,
+) -> None:
+    if record.status in TERMINAL_TASKRUN_STATUSES:
+        _raise_service_error(f"cannot run terminal TaskRun {record.id}: {record.status}")
+    if record.status == "running":
+        _raise_service_error(f"cannot run active running TaskRun {record.id}")
+    if record.status == "blocked" and not explicit:
+        _raise_service_error(f"blocked TaskRun {record.id} requires explicit id/prefix to run")
+    _validate_headless_profile(
+        effective_permission_profile or record.permission_profile,
+        command="run",
+    )
+    running = [
+        candidate
+        for candidate in service.repository.list_running_task_runs(workspace_root)
+        if candidate.id != record.id
+    ]
+    if running:
+        _raise_service_error(
+            _ambiguous_message(
+                "another TaskRun is already running in this workspace",
+                running,
+            )
+        )
+
+
+def _update_permission_profile_for_run(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    profile_snapshot: Mapping[str, Any],
+) -> TaskRunRecord:
+    now = service._now_iso()
+    previous = _normalize_profile(record.permission_profile)
+    updated = service.repository.update_task_run_permission_profile(
+        record.id,
+        profile_snapshot,
+        updated_at=now,
+    )
+    service.repository.append_event(
+        task_run_id=updated.id,
+        event_type="task_run_permission_profile_updated",
+        payload={
+            "previous_profile_name": previous.get("name"),
+            "new_profile_name": profile_snapshot.get("name"),
+            "sources": list(profile_snapshot.get("sources") or []),
+            "explicit_scope_keys": list(profile_snapshot.get("explicitScopeKeys") or []),
+            "reason": "run --permission",
+        },
+        occurred_at=now,
+    )
+    return updated
+
+
+def _append_auto_run_event(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    event_type: str,
+    auto_run_id: str,
+    max_steps: int,
+    runtime_options: TaskRunRuntimeOptions,
+    counters: _AutoRunCounters,
+    iteration_index: int,
+    step: TaskStepRecord | None = None,
+    stop_reason: str | None,
+) -> TaskEventRecord:
+    return service.repository.append_event(
+        task_run_id=record.id,
+        step_id=step.id if step is not None else None,
+        event_type=event_type,
+        payload=_auto_run_event_payload(
+            record,
+            auto_run_id=auto_run_id,
+            max_steps=max_steps,
+            runtime_options=runtime_options,
+            counters=counters,
+            iteration_index=iteration_index,
+            step=step,
+            stop_reason=stop_reason,
+        ),
+        occurred_at=service._now_iso(),
+    )
+
+
+def _auto_run_event_payload(
+    record: TaskRunRecord,
+    *,
+    auto_run_id: str,
+    max_steps: int,
+    runtime_options: TaskRunRuntimeOptions,
+    counters: _AutoRunCounters,
+    iteration_index: int,
+    step: TaskStepRecord | None,
+    stop_reason: str | None,
+) -> dict[str, object]:
+    return {
+        "auto_run_id": auto_run_id,
+        "task_run_id": record.id,
+        "max_steps": max_steps,
+        "iteration_index": iteration_index,
+        "step_id": step.id if step is not None else None,
+        "step_status": step.status if step is not None else None,
+        "stop_reason": stop_reason,
+        "consecutive_failures": counters.consecutive_failures,
+        "consecutive_denies": counters.consecutive_denies,
+        "total_denies": counters.total_denies,
+        "model_ref": runtime_options.model_ref,
+    }
+
+
+def _auto_run_stop_event_step(
+    iterations: list[TaskRunAutoRunIteration],
+    stop_reason: str,
+) -> TaskStepRecord | None:
+    if not iterations:
+        return None
+    last_step = iterations[-1].step
+    if stop_reason == "user_cancelled" and last_step.status == "cancelled":
+        return last_step
+    if stop_reason in _STEP_ATTRIBUTED_STOP_REASONS:
+        return last_step
+    return None
+
+
+def _validate_auto_run_max_steps(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        _raise_service_error("--max-steps must be an integer")
+    if value < 1:
+        _raise_service_error("--max-steps must be >= 1")
+    if value > MAX_AUTO_RUN_STEPS:
+        _raise_service_error(f"--max-steps must be <= {MAX_AUTO_RUN_STEPS}")
+    return value
+
+
+def _normalize_optional_run_profile(
+    permission_profile: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if permission_profile is None:
+        return None
+    snapshot = _normalize_profile(permission_profile)
+    if not bool(snapshot.get("nonInteractive")):
+        _raise_service_error(
+            "taskrun run is headless and cannot use interactive permission profile; "
+            "use --permission guarded or --permission full"
+        )
+    return snapshot
+
+
+def _validate_headless_profile(
+    permission_profile: Mapping[str, Any],
+    *,
+    command: str,
+) -> None:
+    profile = _normalize_profile(permission_profile)
+    if not bool(profile.get("nonInteractive")):
+        _raise_service_error(
+            f"taskrun {command} is headless and cannot use interactive permission profile; "
+            "create a TaskRun with --permission guarded or --permission full"
+        )
+
+
+def _auto_run_budget(budget: Mapping[str, Any]) -> _AutoRunBudget:
+    return _AutoRunBudget(
+        max_steps=_budget_optional_positive_int(budget, "max_steps"),
+        max_consecutive_failures=_budget_positive_int(
+            budget,
+            "max_consecutive_failures",
+            DEFAULT_MAX_CONSECUTIVE_FAILURES,
+        ),
+        max_consecutive_denies=_budget_positive_int(
+            budget,
+            "max_consecutive_denies",
+            DEFAULT_MAX_CONSECUTIVE_DENIES,
+        ),
+        max_total_denies=_budget_positive_int(
+            budget,
+            "max_total_denies",
+            DEFAULT_MAX_TOTAL_DENIES,
+        ),
+        deadline_utc=_budget_deadline_utc(budget),
+    )
+
+
+def _validate_auto_run_budget_cap(max_steps: int, budget: _AutoRunBudget) -> None:
+    if budget.max_steps is None or max_steps <= budget.max_steps:
+        return
+    _raise_service_error(
+        f"--max-steps exceeds task_run budget ({budget.max_steps}); "
+        f"rerun with --max-steps <= {budget.max_steps}"
+    )
+
+
+def _validate_auto_run_stop_conditions(stop_conditions: Mapping[str, Any]) -> None:
+    _validate_auto_run_stop_condition(
+        stop_conditions,
+        "on_workspace_dirty",
+        "stop_conditions.on_workspace_dirty='fail' is unsupported in M5 "
+        "without host-validated mutation sets",
+    )
+    _validate_auto_run_stop_condition(
+        stop_conditions,
+        "on_irrecoverable_test_failure",
+        "stop_conditions.on_irrecoverable_test_failure='fail' is unsupported "
+        "in M5 without host-validated test failure signals",
+    )
+
+
+def _validate_auto_run_stop_condition(
+    stop_conditions: Mapping[str, Any],
+    key: str,
+    unsupported_fail_message: str,
+) -> None:
+    value = stop_conditions.get(key)
+    if value is None:
+        return
+    if value != "fail":
+        _raise_service_error(f"stop_conditions.{key} unsupported value: {value!r}")
+    _raise_service_error(unsupported_fail_message)
+
+
+def _budget_optional_positive_int(
+    budget: Mapping[str, Any],
+    key: str,
+) -> int | None:
+    if key not in budget or budget.get(key) is None:
+        return None
+    return _budget_positive_int(budget, key, default=None)
+
+
+def _budget_positive_int(
+    budget: Mapping[str, Any],
+    key: str,
+    default: int | None,
+) -> int:
+    if key not in budget or budget.get(key) is None:
+        if default is None:
+            _raise_service_error(f"budget.{key} must be a positive integer")
+        return default
+    value = budget.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        _raise_service_error(f"budget.{key} must be a positive integer")
+    return value
+
+
+def _budget_deadline_utc(budget: Mapping[str, Any]) -> datetime | None:
+    if "deadline_utc" not in budget or budget.get("deadline_utc") is None:
+        return None
+    value = budget.get("deadline_utc")
+    if not isinstance(value, str) or not value.strip():
+        _raise_service_error("budget.deadline_utc must be an ISO-8601 UTC timestamp")
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise TaskRunServiceError(
+            "budget.deadline_utc must be an ISO-8601 UTC timestamp"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        _raise_service_error("budget.deadline_utc must be an ISO-8601 UTC timestamp")
+    return parsed.astimezone(UTC)
+
+
+def _deadline_expired(deadline: datetime | None, now: datetime) -> bool:
+    if deadline is None:
+        return False
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return now.astimezone(UTC) >= deadline
+
+
+def _count_step_denies(
+    permission_decisions: list[TaskPermissionDecisionRecord],
+    step_id: str,
+) -> int:
+    return sum(
+        1
+        for decision in permission_decisions
+        if decision.step_id == step_id
+        and decision.resolved_decision.get("effect") not in {None, "allow"}
+    )
+
+
+def _advance_auto_run_counters(
+    counters: _AutoRunCounters,
+    step: TaskStepRecord,
+    step_denies: int,
+) -> _AutoRunCounters:
+    return _AutoRunCounters(
+        steps_run=counters.steps_run + 1,
+        consecutive_failures=(
+            counters.consecutive_failures + 1 if step.status == "failed" else 0
+        ),
+        consecutive_denies=(counters.consecutive_denies + 1 if step_denies > 0 else 0),
+        total_denies=counters.total_denies + step_denies,
+    )
+
+
+def evaluate_auto_run_stop(
+    *,
+    last_step: TaskStepRecord,
+    counters: _AutoRunCounters,
+    options: TaskRunAutoRunOptions,
+    budget: _AutoRunBudget,
+    step_denies: int,
+) -> _AutoRunStopDecision:
+    if last_step.status == "cancelled":
+        return _AutoRunStopDecision(True, "user_cancelled", "blocked", 130)
+    if step_denies > 0:
+        return _deny_stop_decision(last_step, counters, budget)
+    if last_step.status == "blocked":
+        return _AutoRunStopDecision(True, "runner_error", "blocked", 1)
+    if _failure_budget_exhausted(last_step, counters, budget):
+        return _AutoRunStopDecision(True, "consecutive_failures_exhausted", "blocked", 1)
+    if counters.steps_run >= options.max_steps:
+        exit_code = 0 if last_step.status == "done" else 1
+        return _AutoRunStopDecision(True, "max_steps_reached", None, exit_code)
+    return _AutoRunStopDecision(False, None, None, 0)
+
+
+def _deny_stop_decision(
+    last_step: TaskStepRecord,
+    counters: _AutoRunCounters,
+    budget: _AutoRunBudget,
+) -> _AutoRunStopDecision:
+    if counters.consecutive_denies >= budget.max_consecutive_denies:
+        return _AutoRunStopDecision(True, "consecutive_denies_exhausted", "blocked", 1)
+    if counters.total_denies >= budget.max_total_denies:
+        return _AutoRunStopDecision(True, "total_denies_exhausted", "blocked", 1)
+    if last_step.status == "blocked":
+        return _AutoRunStopDecision(True, "permission_block", "blocked", 1)
+    return _AutoRunStopDecision(False, None, None, 0)
+
+
+def _failure_budget_exhausted(
+    last_step: TaskStepRecord,
+    counters: _AutoRunCounters,
+    budget: _AutoRunBudget,
+) -> bool:
+    return (
+        last_step.status == "failed"
+        and counters.consecutive_failures >= budget.max_consecutive_failures
+    )
+
+
+def _normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        return normalize_permission_profile_snapshot(profile)
+    except PermissionProfileError as exc:
+        raise TaskRunServiceError(str(exc)) from exc
+
+
+def _raise_service_error(message: str) -> None:
+    raise TaskRunServiceError(message)
+
+
+def _ambiguous_message(prefix: str, matches: list[TaskRunRecord]) -> str:
+    details = [
+        f"{record.id} {record.status} {_goal_preview(record.goal)}"
+        for record in matches
+    ]
+    return prefix + "; pass an id. Candidates: " + "; ".join(details)
+
+
+def _goal_preview(goal: str, limit: int = 64) -> str:
+    collapsed = " ".join(goal.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 3] + "..."
+
+
+__all__ = [
+    "AUTO_RUN_STOP_REASONS",
+    "MAX_AUTO_RUN_STEPS",
+    "TaskRunAutoRunIteration",
+    "TaskRunAutoRunOptions",
+    "TaskRunAutoRunResult",
+    "evaluate_auto_run_stop",
+    "run_taskrun_auto_loop",
+]

@@ -6,10 +6,9 @@ import pytest
 
 import cli.__main__ as cli_main
 import cli.taskrun_commands as taskrun_commands
+from cli.core.taskrun_autorun import TaskRunAutoRunIteration, TaskRunAutoRunResult
 from cli.core.taskrun_projection import TaskRunProjectionResult
-from cli.core.taskrun_service import (
-    TaskRunResult,
-)
+from cli.core.taskrun_service import TaskRunResult
 from cli.core.taskrun_views import (
     TaskRunEventsResult,
     TaskRunHistoryResult,
@@ -137,6 +136,37 @@ class _FakeService:
     ) -> TaskRunResult:
         self.calls.append(("step", task_id, cwd, runtime_options, runner))
         return self.result
+
+    def run(
+        self,
+        task_id: str | None,
+        cwd: Path,
+        *,
+        options: object,
+        runner: object | None = None,
+        permission_profile: object | None = None,
+    ) -> TaskRunAutoRunResult:
+        self.calls.append(("run", task_id, cwd, options, runner, permission_profile))
+        step = self.result.steps[0] if self.result.steps else None
+        iterations = (
+            [
+                TaskRunAutoRunIteration(
+                    step=step,
+                    task_run_status=self.result.task_run.status,
+                    stop_candidate="max_steps_reached",
+                )
+            ]
+            if step is not None
+            else []
+        )
+        return TaskRunAutoRunResult(
+            task_run=self.result.task_run,
+            iterations=iterations,
+            stop_reason="max_steps_reached",
+            projection=self.result.projection,
+            events=self.result.events,
+            exit_code=self.result.exit_code,
+        )
 
 
 def _result(tmp_path: Path) -> TaskRunResult:
@@ -404,6 +434,92 @@ def test_taskrun_step_passes_runtime_options_and_prints_step(
     assert "step_id: 019e2200-0000-7000-8000-000000000003" in captured.out
     assert "step_status: done" in captured.out
     assert "conclusion: done" in captured.out
+
+
+def test_taskrun_run_passes_bounded_options_permission_and_prints_iterations(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_step_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(
+        [
+            "run",
+            "019e2200",
+            "--max-steps",
+            "2",
+            "--permission",
+            "guarded",
+            "--model",
+            "faux/local/faux-1",
+            "--thinking-level",
+            "off",
+            "--cache-retention",
+            "none",
+        ],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "run"
+    assert service.calls[0][1] == "019e2200"
+    assert service.calls[0][3].max_steps == 2
+    assert service.calls[0][3].runtime_options.model_ref == "faux/local/faux-1"
+    assert service.calls[0][3].runtime_options.cache_retention == "none"
+    assert service.calls[0][4] is not None
+    assert service.calls[0][5]["name"] == "guarded"
+    assert "iterations:" in captured.out
+    assert "step_status: done" in captured.out
+    assert "stop_reason: max_steps_reached" in captured.out
+    assert "steps_run: 1" in captured.out
+
+
+def test_taskrun_run_rejects_interactive_permission_before_db(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(
+        taskrun_commands,
+        "load_database_config",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("db should not load")),
+    )
+
+    rc = taskrun_commands.run_taskrun_command(
+        ["run", "--max-steps", "1", "--permission", "interactive"],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "interactive permission profile" in captured.err
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "51"])
+def test_taskrun_run_rejects_invalid_max_steps_before_db(
+    value: str,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        taskrun_commands,
+        "load_database_config",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("db should not load")),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        taskrun_commands.run_taskrun_command(
+            ["run", "--max-steps", value],
+            prog="magipi",
+        )
+
+    assert exc.value.code == 2
 
 
 def test_taskrun_db_failure_returns_2_without_service(

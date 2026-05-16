@@ -76,7 +76,7 @@ class _Cursor:
             return row
         if "RETURNING id, workspace_root" not in self._last_query:
             return None
-        return self._task_run_row("pending", {"name": "interactive"})
+        return self._returned_task_run_row()
 
     def _taskrun_start_guard_row(self):
         if "SELECT COALESCE(MAX(step_index), 0) + 1" in self._last_query:
@@ -134,6 +134,16 @@ class _Cursor:
             heartbeat_at=self._last_params[2],
             updated_at=self._last_params[3],
         )
+
+    def _returned_task_run_row(self):
+        if "SET permission_profile = %s" not in self._last_query:
+            return self._task_run_row("pending", {"name": "interactive"})
+        profile = self._last_params[0]
+        if not isinstance(profile, dict):
+            profile = getattr(profile, "obj", None)
+        if not isinstance(profile, dict):
+            profile = {"name": "guarded", "nonInteractive": True}
+        return self._task_run_row("pending", profile, updated_at=self._last_params[1])
 
     def _task_run_row(
         self,
@@ -396,6 +406,24 @@ def test_update_step_status_persists_output_and_conclusion() -> None:
     assert step.status == "done"
     assert step.output["next_action"] == "continue"
     assert "UPDATE \"neomagi\".task_steps" in sql
+    assert conn.commits == 1
+
+
+def test_update_task_run_permission_profile_updates_only_current_snapshot() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    record = repo.update_task_run_permission_profile(
+        TASK_ID,
+        {"name": "guarded", "nonInteractive": True, "scope": {}, "sources": ["builtin"]},
+        updated_at="2026-05-13T00:01:00+00:00",
+    )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert record.permission_profile["name"] == "guarded"
+    assert record.updated_at == "2026-05-13T00:01:00+00:00"
+    assert "SET permission_profile = %s, updated_at = %s" in sql
+    assert "task_permission_decisions" not in sql
     assert conn.commits == 1
 
 

@@ -132,6 +132,22 @@ class _FakeTaskRunRepository:
         self.runs[task_run_id] = record
         return record
 
+    def update_task_run_permission_profile(
+        self,
+        task_run_id: str,
+        permission_profile: Mapping[str, Any],
+        *,
+        updated_at: str | None = None,
+    ) -> TaskRunRecord:
+        record = self.runs[task_run_id]
+        record = replace(
+            record,
+            permission_profile=dict(permission_profile),
+            updated_at=updated_at or record.updated_at,
+        )
+        self.runs[task_run_id] = record
+        return record
+
     def create_running_step(
         self,
         task_run_id: str,
@@ -392,6 +408,8 @@ def _seed_record(
     goal: str = "seeded goal",
     summary: Mapping[str, Any] | None = None,
     permission_profile: Mapping[str, Any] | None = None,
+    budget: Mapping[str, Any] | None = None,
+    stop_conditions: Mapping[str, Any] | None = None,
     updated_at: str = "2026-05-13T00:00:00+00:00",
     current_step_id: str | None = None,
 ) -> TaskRunRecord:
@@ -402,8 +420,8 @@ def _seed_record(
         goal=goal,
         status=status,
         permission_profile=dict(permission_profile or {"name": "interactive"}),
-        budget={},
-        stop_conditions={},
+        budget=dict(budget or {}),
+        stop_conditions=dict(stop_conditions or {}),
         summary=dict(summary or {}),
         heartbeat_at=heartbeat_at,
         current_step_id=current_step_id,

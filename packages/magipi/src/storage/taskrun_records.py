@@ -149,6 +149,15 @@ class TaskRunRepository(Protocol):
     ) -> TaskRunRecord:
         ...
 
+    def update_task_run_permission_profile(
+        self,
+        task_run_id: str,
+        permission_profile: Mapping[str, Any],
+        *,
+        updated_at: str | None = None,
+    ) -> TaskRunRecord:
+        ...
+
     def create_running_step(
         self,
         task_run_id: str,

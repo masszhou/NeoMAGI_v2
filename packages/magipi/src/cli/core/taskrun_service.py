@@ -12,6 +12,12 @@ from cli.core.taskrun_projection import (
     TaskRunProjectionResult,
     TaskRunProjectionWriter,
 )
+from cli.core.taskrun_autorun import (
+    TaskRunAutoRunOptions,
+    TaskRunAutoRunResult,
+    run_taskrun_auto_loop,
+)
+from cli.core.taskrun_errors import TaskRunServiceError
 from cli.core.taskrun_step import (
     STEP_INSTRUCTION,
     TaskRunRuntimeOptions,
@@ -65,10 +71,6 @@ class TaskRunResult:
     @property
     def summary(self) -> dict[str, object]:
         return dict(self.task_run.summary)
-
-
-class TaskRunServiceError(RuntimeError):
-    """Raised when a product-level TaskRun operation is invalid."""
 
 
 class TaskRunService:
@@ -214,6 +216,24 @@ class TaskRunService:
             previous_status=record.status,
             outcome=outcome,
             runtime_options=runtime_options,
+        )
+
+    def run(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+        *,
+        options: TaskRunAutoRunOptions,
+        runner: TaskRunStepRunner,
+        permission_profile: Mapping[str, Any] | None = None,
+    ) -> TaskRunAutoRunResult:
+        return run_taskrun_auto_loop(
+            self,
+            id_or_prefix,
+            _workspace_root(cwd),
+            options=options,
+            runner=runner,
+            permission_profile=permission_profile,
         )
 
     def close(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunResult:
@@ -374,12 +394,14 @@ class TaskRunService:
             raise TaskRunServiceError(
                 f"blocked TaskRun {record.id} requires explicit id/prefix to step"
             )
-        profile = _normalize_profile(record.permission_profile)
-        if not bool(profile.get("nonInteractive")):
-            raise TaskRunServiceError(
-                "taskrun step is headless and cannot use interactive permission profile; "
-                "create a TaskRun with --permission guarded or --permission full"
-            )
+        _validate_headless_profile(record.permission_profile, command="step")
+        self._validate_no_other_running(record, workspace_root)
+
+    def _validate_no_other_running(
+        self,
+        record: TaskRunRecord,
+        workspace_root: str,
+    ) -> None:
         running = [
             candidate
             for candidate in self.repository.list_running_task_runs(workspace_root)
@@ -448,6 +470,7 @@ class TaskRunService:
         previous_status: str,
         outcome: TaskRunStepOutcome,
         runtime_options: TaskRunRuntimeOptions,
+        rebuild_projection: bool = True,
     ) -> TaskRunResult:
         status = _normalize_step_outcome_status(outcome.status)
         ended_at = self._now_iso()
@@ -491,7 +514,7 @@ class TaskRunService:
             },
             occurred_at=ended_at,
         )
-        result = self._summarize_and_project(updated_run)
+        result = self._summarize_and_project(updated_run, rebuild_projection=rebuild_projection)
         matching_step = next(
             (candidate for candidate in result.steps if candidate.id == updated_step.id),
             updated_step,
@@ -608,6 +631,19 @@ def _parse_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _validate_headless_profile(
+    permission_profile: Mapping[str, Any],
+    *,
+    command: str,
+) -> None:
+    profile = _normalize_profile(permission_profile)
+    if not bool(profile.get("nonInteractive")):
+        raise TaskRunServiceError(
+            f"taskrun {command} is headless and cannot use interactive permission profile; "
+            "create a TaskRun with --permission guarded or --permission full"
+        )
 
 
 def _step_input(
@@ -757,17 +793,3 @@ def _is_task_run_id_prefix(value: str) -> bool:
     if len(value) < 8:
         return False
     return all(char in "0123456789abcdefABCDEF-" for char in value)
-
-
-__all__ = [
-    "DEFAULT_NEXT_ACTION",
-    "DEFAULT_PERMISSION_PROFILE",
-    "STALE_RUNNING_THRESHOLD",
-    "TaskRunResult",
-    "TaskRunRuntimeOptions",
-    "TaskRunService",
-    "TaskRunServiceError",
-    "TaskRunStepContext",
-    "TaskRunStepOutcome",
-    "TaskRunStepRunner",
-]
