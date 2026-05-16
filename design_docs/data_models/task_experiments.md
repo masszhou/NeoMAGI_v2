@@ -38,6 +38,9 @@ One row per experiment attempt inside a TaskRun step.
   only in `task_steps.output`.
 - The table is for audit and later comparison of experiment attempts, command
   evidence, metrics, and accepted/rejected outcomes.
+- Baseline attempts use `decision='baseline'`; related task event payloads keep
+  trial-only fields such as `trial_value` and `delta` as `null`, and `diff_ref`
+  as an empty object because no trial diff exists yet.
 - P2-M1 defines the table shape; later milestones own experiment execution and
   decision vocabulary.
 

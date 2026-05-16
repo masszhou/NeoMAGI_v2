@@ -79,36 +79,14 @@ class TaskRunHeadlessRunner:
             run_id_provider=active_run_id,
         )
 
-        tools = create_coding_tools(
-            self.cwd,
+        tools = self._create_tools(
+            context,
             runtime_session_id=runtime_session_id,
             run_id_provider=active_run_id,
             audit_sink=audit_sink,
-            taskrun_permission_context=TaskRunPermissionContext(
-                task_run_id=context.task_run.id,
-                step_id=context.step.id,
-                permission_profile=context.task_run.permission_profile,
-                budget=context.task_run.budget,
-                record_permission_decision=self._permission_recorder(context),
-            ),
             artifact_store=artifact_store,
         )
-        agent = self.agent_factory(
-            AgentOptions(
-                model=model,
-                system_prompt=_system_prompt(self.cwd, [tool.name for tool in tools]),
-                thinking_level=context.runtime_options.thinking_level,
-                cache_retention=context.runtime_options.cache_retention,
-                session_id=session.provider_cache_affinity_id,
-                messages=messages,
-                tools=tools,
-                tool_execution="sequential",
-                convert_to_llm=convert_coding_messages_to_llm,
-                get_api_key=lambda _provider: None
-                if model.provider == "faux"
-                else resolve_api_key(model),
-            )
-        )
+        agent = self._create_agent(context, session, model, messages, tools)
         agent_ref.append(agent)
 
         async def listener(event: Any, _signal: asyncio.Event) -> None:
@@ -132,6 +110,55 @@ class TaskRunHeadlessRunner:
             return collector.outcome()
         finally:
             artifact_store.cleanup()
+
+    def _create_tools(
+        self,
+        context: TaskRunStepContext,
+        *,
+        runtime_session_id: str,
+        run_id_provider: Callable[[], str | None],
+        audit_sink: AuditSink,
+        artifact_store: RuntimeArtifactStore,
+    ):
+        return create_coding_tools(
+            self.cwd,
+            runtime_session_id=runtime_session_id,
+            run_id_provider=run_id_provider,
+            audit_sink=audit_sink,
+            taskrun_permission_context=TaskRunPermissionContext(
+                task_run_id=context.task_run.id,
+                step_id=context.step.id,
+                permission_profile=context.task_run.permission_profile,
+                budget=context.task_run.budget,
+                record_permission_decision=self._permission_recorder(context),
+            ),
+            artifact_store=artifact_store,
+        )
+
+    def _create_agent(
+        self,
+        context: TaskRunStepContext,
+        session: Any,
+        model: Any,
+        messages: list[Any],
+        tools: list[Any],
+    ) -> Agent:
+        return self.agent_factory(
+            AgentOptions(
+                model=model,
+                system_prompt=_system_prompt(self.cwd, [tool.name for tool in tools]),
+                thinking_level=context.runtime_options.thinking_level,
+                cache_retention=context.runtime_options.cache_retention,
+                session_id=session.provider_cache_affinity_id,
+                messages=messages,
+                tools=tools,
+                tool_execution="sequential",
+                convert_to_llm=convert_coding_messages_to_llm,
+                get_api_key=lambda _provider: None
+                if model.provider == "faux"
+                else resolve_api_key(model),
+            )
+        )
 
     def _append_taskrun_summary(self, context: TaskRunStepContext) -> None:
         content = _taskrun_summary_block(context)

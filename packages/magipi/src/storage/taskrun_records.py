@@ -82,6 +82,21 @@ class TaskPermissionDecisionRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskExperimentRecord:
+    id: str
+    task_run_id: str
+    step_id: str
+    hypothesis: str
+    change: dict[str, Any]
+    command: dict[str, Any]
+    metrics: dict[str, Any]
+    result: dict[str, Any]
+    decision: str
+    diff_ref: dict[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class TaskRunCreateRequest:
     workspace_root: str
     goal: str
@@ -238,6 +253,29 @@ class TaskRunRepository(Protocol):
     ) -> list[TaskPermissionDecisionRecord]:
         ...
 
+    def append_experiment(
+        self,
+        *,
+        task_run_id: str,
+        step_id: str,
+        hypothesis: str,
+        change: Mapping[str, Any],
+        command: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        result: Mapping[str, Any],
+        decision: str,
+        diff_ref: Mapping[str, Any],
+        created_at: str | None = None,
+        experiment_id: str | None = None,
+    ) -> TaskExperimentRecord:
+        ...
+
+    def list_experiments(self, task_run_id: str) -> list[TaskExperimentRecord]:
+        ...
+
+    def list_experiments_for_step(self, step_id: str) -> list[TaskExperimentRecord]:
+        ...
+
     def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
         ...
 
@@ -255,6 +293,7 @@ __all__ = [
     "TASKSTEP_STATUSES",
     "TERMINAL_TASKRUN_STATUSES",
     "TaskEventRecord",
+    "TaskExperimentRecord",
     "TaskPermissionDecisionRecord",
     "TaskRunCreateRequest",
     "TaskRunRecord",

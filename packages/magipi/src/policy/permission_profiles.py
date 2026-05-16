@@ -234,6 +234,15 @@ def profile_explicit_scope_keys(config: Mapping[str, Any] | None) -> list[str]:
     return sorted(_explicit_scope_keys(dict(config or {})))
 
 
+def _profile_metadata(profile: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "name": profile["name"],
+        "sources": list(profile.get("sources") or []),
+        "nonInteractive": bool(profile.get("nonInteractive")),
+        "explicitScope": bool(profile.get("explicitScope")),
+    }
+
+
 class PermissionProfileResolver:
     """Resolve raw policy decisions against a TaskRun permission profile."""
 
@@ -253,68 +262,106 @@ class PermissionProfileResolver:
         try:
             profile = normalize_permission_profile_snapshot(profile_snapshot)
         except PermissionProfileError as exc:
-            metadata = {
-                "name": "invalid",
-                "sources": [],
-                "nonInteractive": True,
-                "explicitScope": False,
-                "scopeReason": str(exc),
-            }
-            resolved = _block(
+            return self._invalid_profile_resolution(
                 raw_decision,
-                str(exc),
-                ["permission:profile:block"],
+                exc,
+                budget,
+                budget_state,
             )
-            return self._with_budget(raw_decision, resolved, {}, metadata, budget, budget_state)
+        return self._resolve_profile(
+            request,
+            raw_decision,
+            profile,
+            ui_available=ui_available,
+            budget=budget,
+            budget_state=budget_state,
+        )
+
+    def _resolve_profile(
+        self,
+        request: PolicyRequest,
+        raw_decision: PolicyDecision,
+        profile: dict[str, Any],
+        *,
+        ui_available: bool,
+        budget: Mapping[str, Any] | None,
+        budget_state: PermissionBudgetState | None,
+    ) -> PermissionProfileResolution:
         profile_name = profile["name"]
-        metadata: dict[str, Any] = {
-            "name": profile_name,
-            "sources": list(profile.get("sources") or []),
-            "nonInteractive": bool(profile.get("nonInteractive")),
-            "explicitScope": bool(profile.get("explicitScope")),
-        }
+        metadata = _profile_metadata(profile)
         if profile_name == "interactive" and not ui_available:
-            resolved = _block(
+            return self._blocked_resolution(
                 raw_decision,
-                "interactive permission profile cannot run headless; choose guarded or full",
-                ["permission:interactive:headless"],
+                profile,
+                metadata,
+                budget,
+                budget_state,
+                reason="interactive permission profile cannot run headless; choose guarded or full",
+                tags=["permission:interactive:headless"],
             )
-            return self._with_budget(raw_decision, resolved, profile, metadata, budget, budget_state)
         if raw_decision.effect == "block":
-            resolved = _block(
+            return self._blocked_resolution(
                 raw_decision,
-                raw_decision.reason or "blocked by base policy",
-                ["permission:raw:block"],
+                profile,
+                metadata,
+                budget,
+                budget_state,
+                reason=raw_decision.reason or "blocked by base policy",
+                tags=["permission:raw:block"],
             )
-            return self._with_budget(raw_decision, resolved, profile, metadata, budget, budget_state)
         if profile_name == "interactive":
-            if raw_decision.effect == "confirm":
-                resolved = _block(
-                    raw_decision,
-                    "interactive confirmation adapter is not available",
-                    ["permission:interactive:confirm-unavailable"],
-                )
-                return self._with_budget(raw_decision, resolved, profile, metadata, budget, budget_state)
-            resolved = _allow_with_tags(raw_decision, ["permission:interactive:allow"])
-            return PermissionProfileResolution(raw_decision, resolved, profile, metadata)
+            return self._interactive_resolution(
+                raw_decision,
+                profile,
+                metadata,
+                budget,
+                budget_state,
+            )
 
         scope_check = _check_scope(request, profile)
         metadata["scopeReason"] = scope_check.reason
+        return self._resolve_scope_check(
+            raw_decision,
+            profile,
+            metadata,
+            scope_check,
+            budget,
+            budget_state,
+        )
+
+    def _resolve_scope_check(
+        self,
+        raw_decision: PolicyDecision,
+        profile: dict[str, Any],
+        metadata: dict[str, Any],
+        scope_check: _ScopeCheck,
+        budget: Mapping[str, Any] | None,
+        budget_state: PermissionBudgetState | None,
+    ) -> PermissionProfileResolution:
+        profile_name = profile["name"]
         if not scope_check.allowed:
-            resolved = _block(
+            reason = scope_check.reason or f"permission profile '{profile_name}' scope denied request"
+            tags = [*scope_check.audit_tags, f"permission:{profile_name}:block"]
+            return self._blocked_resolution(
                 raw_decision,
-                scope_check.reason or f"permission profile '{profile_name}' scope denied request",
-                [*scope_check.audit_tags, f"permission:{profile_name}:block"],
+                profile,
+                metadata,
+                budget,
+                budget_state,
+                reason=reason,
+                tags=tags,
             )
-            return self._with_budget(raw_decision, resolved, profile, metadata, budget, budget_state)
 
         if raw_decision.effect == "confirm" and profile_name == "guarded":
-            resolved = _block(
+            return self._blocked_resolution(
                 raw_decision,
-                "permission profile 'guarded' does not auto-approve confirmation",
-                ["permission:guarded:confirm:block"],
+                profile,
+                metadata,
+                budget,
+                budget_state,
+                reason="permission profile 'guarded' does not auto-approve confirmation",
+                tags=["permission:guarded:confirm:block"],
             )
-            return self._with_budget(raw_decision, resolved, profile, metadata, budget, budget_state)
 
         resolved = _allow_with_tags(
             raw_decision,
@@ -322,6 +369,58 @@ class PermissionProfileResolver:
             resolved_paths=scope_check.resolved_paths,
         )
         return PermissionProfileResolution(raw_decision, resolved, profile, metadata)
+
+    def _invalid_profile_resolution(
+        self,
+        raw_decision: PolicyDecision,
+        exc: PermissionProfileError,
+        budget: Mapping[str, Any] | None,
+        budget_state: PermissionBudgetState | None,
+    ) -> PermissionProfileResolution:
+        metadata = {
+            "name": "invalid",
+            "sources": [],
+            "nonInteractive": True,
+            "explicitScope": False,
+            "scopeReason": str(exc),
+        }
+        resolved = _block(raw_decision, str(exc), ["permission:profile:block"])
+        return self._with_budget(raw_decision, resolved, {}, metadata, budget, budget_state)
+
+    def _interactive_resolution(
+        self,
+        raw_decision: PolicyDecision,
+        profile: dict[str, Any],
+        metadata: dict[str, Any],
+        budget: Mapping[str, Any] | None,
+        budget_state: PermissionBudgetState | None,
+    ) -> PermissionProfileResolution:
+        if raw_decision.effect != "confirm":
+            resolved = _allow_with_tags(raw_decision, ["permission:interactive:allow"])
+            return PermissionProfileResolution(raw_decision, resolved, profile, metadata)
+        return self._blocked_resolution(
+            raw_decision,
+            profile,
+            metadata,
+            budget,
+            budget_state,
+            reason="interactive confirmation adapter is not available",
+            tags=["permission:interactive:confirm-unavailable"],
+        )
+
+    def _blocked_resolution(
+        self,
+        raw_decision: PolicyDecision,
+        profile: dict[str, Any],
+        metadata: dict[str, Any],
+        budget: Mapping[str, Any] | None,
+        budget_state: PermissionBudgetState | None,
+        *,
+        reason: str,
+        tags: list[str],
+    ) -> PermissionProfileResolution:
+        resolved = _block(raw_decision, reason, tags)
+        return self._with_budget(raw_decision, resolved, profile, metadata, budget, budget_state)
 
     def _with_budget(
         self,
@@ -606,6 +705,22 @@ def _check_bash_scope(
     scope: PermissionProfileScope,
     explicit_keys: set[str],
 ) -> _ScopeCheck:
+    command_result = _bash_command_string(request)
+    if isinstance(command_result, _ScopeCheck):
+        return command_result
+    timeout_check = _check_bash_timeout(request, scope)
+    if not timeout_check.allowed:
+        return timeout_check
+    command = command_result
+    segments = _shell_segments(command)
+    if segments is None:
+        return _ScopeCheck(False, "shell command cannot be parsed safely", ["permission:command:block"])
+    if not segments:
+        return _ScopeCheck(False, "shell command must include an executable", ["permission:command:block"])
+    return _check_shell_segments(segments, request.cwd, profile_name, scope, explicit_keys)
+
+
+def _bash_command_string(request: PolicyRequest) -> str | _ScopeCheck:
     command = request.args.get("command")
     if not isinstance(command, str) or not command.strip():
         return _ScopeCheck(False, "shell command must be a non-empty string", ["permission:command:block"])
@@ -615,6 +730,13 @@ def _check_bash_scope(
             "dynamic shell command substitution is outside permission profile scope",
             ["permission:command:block"],
         )
+    return command
+
+
+def _check_bash_timeout(
+    request: PolicyRequest,
+    scope: PermissionProfileScope,
+) -> _ScopeCheck:
     timeout = request.args.get("timeout", DEFAULT_TIMEOUT_SECONDS)
     if not isinstance(timeout, int | float):
         return _ScopeCheck(False, "timeout must be a number", ["permission:timeout:block"])
@@ -632,16 +754,19 @@ def _check_bash_scope(
             f"timeout exceeds hard cap of {MAX_TIMEOUT_SECONDS}s",
             ["permission:timeout:block"],
         )
+    return _ScopeCheck(True)
 
-    segments = _shell_segments(command)
-    if segments is None:
-        return _ScopeCheck(False, "shell command cannot be parsed safely", ["permission:command:block"])
-    if not segments:
-        return _ScopeCheck(False, "shell command must include an executable", ["permission:command:block"])
 
+def _check_shell_segments(
+    segments: list[list[str]],
+    cwd: str,
+    profile_name: str,
+    scope: PermissionProfileScope,
+    explicit_keys: set[str],
+) -> _ScopeCheck:
     resolved_paths: dict[str, str] = {}
     for segment in segments:
-        check = _check_shell_segment(segment, request.cwd, profile_name, scope, explicit_keys)
+        check = _check_shell_segment(segment, cwd, profile_name, scope, explicit_keys)
         if not check.allowed:
             return check
         resolved_paths.update(check.resolved_paths)
@@ -655,6 +780,34 @@ def _check_shell_segment(
     scope: PermissionProfileScope,
     explicit_keys: set[str],
 ) -> _ScopeCheck:
+    executable_result = _allowed_shell_executable(tokens, profile_name, scope)
+    if isinstance(executable_result, _ScopeCheck):
+        return executable_result
+    executable, executable_index = executable_result
+    args = tokens[executable_index + 1 :]
+    check = _check_git_scope(executable, args, scope)
+    if not check.allowed:
+        return check
+    check = _check_dynamic_shell_constructs(tokens)
+    if not check.allowed:
+        return check
+    check = _check_nested_script(executable, args, cwd, profile_name, scope, explicit_keys)
+    if not check.allowed:
+        return check
+    check = _check_interpreter_eval_scope(executable, args, scope)
+    if not check.allowed:
+        return check
+    check = _check_network_scope(executable, tokens, scope)
+    if not check.allowed:
+        return check
+    return _check_output_paths(tokens, cwd, profile_name, scope, explicit_keys)
+
+
+def _allowed_shell_executable(
+    tokens: list[str],
+    profile_name: str,
+    scope: PermissionProfileScope,
+) -> tuple[str, int] | _ScopeCheck:
     executable_index = _executable_index(tokens)
     if executable_index is None:
         return _ScopeCheck(False, "shell command segment cannot be classified", ["permission:command:block"])
@@ -670,36 +823,38 @@ def _check_shell_segment(
     allowed = {_command_basename(item) for item in scope.commands.allow}
     if executable not in allowed:
         return _ScopeCheck(False, f"command outside permission profile scope: {executable}", ["permission:command:block"])
+    return executable, executable_index
 
-    git_check = _check_git_scope(executable, tokens[executable_index + 1 :], scope)
-    if not git_check.allowed:
-        return git_check
 
-    dynamic_check = _check_dynamic_shell_constructs(tokens)
-    if not dynamic_check.allowed:
-        return dynamic_check
+def _check_nested_script(
+    executable: str,
+    args: list[str],
+    cwd: str,
+    profile_name: str,
+    scope: PermissionProfileScope,
+    explicit_keys: set[str],
+) -> _ScopeCheck:
+    nested = _nested_script(executable, args)
+    if nested is None:
+        return _ScopeCheck(True)
+    nested_segments = _shell_segments(nested)
+    if nested_segments is None:
+        return _ScopeCheck(False, "nested shell command cannot be parsed safely", ["permission:command:block"])
+    return _check_shell_segments(nested_segments, cwd, profile_name, scope, explicit_keys)
 
-    nested = _nested_script(executable, tokens[executable_index + 1 :])
-    if nested is not None:
-        nested_segments = _shell_segments(nested)
-        if nested_segments is None:
-            return _ScopeCheck(False, "nested shell command cannot be parsed safely", ["permission:command:block"])
-        for segment in nested_segments:
-            check = _check_shell_segment(segment, cwd, profile_name, scope, explicit_keys)
-            if not check.allowed:
-                return check
-    if _interpreter_eval_code(executable, tokens[executable_index + 1 :]) is not None and not scope.commands.allow_eval:
-        return _ScopeCheck(
-            False,
-            f"interpreter eval is outside permission profile scope: {executable}",
-            ["permission:command:block"],
-        )
 
-    network_check = _check_network_scope(executable, tokens, scope)
-    if not network_check.allowed:
-        return network_check
-
-    return _check_output_paths(tokens, cwd, profile_name, scope, explicit_keys)
+def _check_interpreter_eval_scope(
+    executable: str,
+    args: list[str],
+    scope: PermissionProfileScope,
+) -> _ScopeCheck:
+    if _interpreter_eval_code(executable, args) is None or scope.commands.allow_eval:
+        return _ScopeCheck(True)
+    return _ScopeCheck(
+        False,
+        f"interpreter eval is outside permission profile scope: {executable}",
+        ["permission:command:block"],
+    )
 
 
 def _check_git_scope(

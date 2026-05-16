@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -19,6 +20,7 @@ from cli.core.taskrun_autorun import (
     TaskRunAutoRunOptions,
     TaskRunAutoRunResult,
 )
+from cli.core.taskrun_experiments import TaskRunExperimentOptions
 from cli.core.taskrun_projection import task_event_to_dict
 from cli.core.taskrun_runner import TaskRunHeadlessRunner
 from cli.core.taskrun_service import (
@@ -65,51 +67,7 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
     args = parser.parse_args(argv)
     cwd = Path.cwd()
     try:
-        permission_profile = (
-            _load_permission_profile_snapshot(args.permission, cwd)
-            if args.cmd == "start" or (args.cmd == "run" and args.permission)
-            else None
-        )
-        if args.cmd == "run" and permission_profile is not None:
-            _validate_run_permission_profile(permission_profile)
-        runtime_options = (
-            _load_runtime_options(args, cwd) if args.cmd in {"step", "run"} else None
-        )
-        db_config = load_database_config(env_file=args.env_file)
-        conn = connect_database(db_config)
-        try:
-            ensure_schema(conn, db_config)
-            task_repository = PostgresTaskRunRepository(conn, db_config)
-            service = TaskRunService(task_repository)
-            runner = (
-                TaskRunHeadlessRunner(
-                    session_manager=SessionManager(
-                        PostgresSessionRepository(conn, db_config),
-                        include_taskrun_owned=True,
-                    ),
-                    task_repository=task_repository,
-                    cwd=cwd,
-                    audit_sink_factory=lambda session_id: _postgres_audit_sink(
-                        conn,
-                        db_config,
-                        session_id,
-                    ),
-                )
-                if args.cmd in {"step", "run"}
-                else None
-            )
-            result = _dispatch(
-                args,
-                service,
-                cwd=cwd,
-                permission_profile=permission_profile,
-                runtime_options=runtime_options,
-                runner=runner,
-            )
-        finally:
-            close = getattr(conn, "close", None)
-            if callable(close):
-                close()
+        result = _execute_command(args, cwd)
     except (TaskRunServiceError, KeyError, ValueError) as exc:
         sys.stderr.write(f"{prog} taskrun: {exc}\n")
         return 1
@@ -119,6 +77,64 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
 
     _print_result(result, include_summary=args.cmd == "summary")
     return result.exit_code
+
+
+def _execute_command(args: argparse.Namespace, cwd: Path) -> TaskRunCommandResult:
+    permission_profile = (
+        _load_permission_profile_snapshot(args.permission, cwd)
+        if args.cmd == "start" or (args.cmd == "run" and args.permission)
+        else None
+    )
+    if args.cmd == "run" and permission_profile is not None:
+        _validate_run_permission_profile(permission_profile)
+    runtime_options = (
+        _load_runtime_options(args, cwd) if args.cmd in {"step", "run"} else None
+    )
+    experiment_options = _load_experiment_options(args) if args.cmd == "run" else None
+    db_config = load_database_config(env_file=args.env_file)
+    conn = connect_database(db_config)
+    try:
+        ensure_schema(conn, db_config)
+        task_repository = PostgresTaskRunRepository(conn, db_config)
+        service = TaskRunService(task_repository)
+        runner = _taskrun_runner(args, conn, db_config, task_repository, cwd)
+        return _dispatch(
+            args,
+            service,
+            cwd=cwd,
+            permission_profile=permission_profile,
+            runtime_options=runtime_options,
+            experiment_options=experiment_options,
+            runner=runner,
+        )
+    finally:
+        close = getattr(conn, "close", None)
+        if callable(close):
+            close()
+
+
+def _taskrun_runner(
+    args: argparse.Namespace,
+    conn: Any,
+    db_config: Any,
+    task_repository: Any,
+    cwd: Path,
+) -> TaskRunHeadlessRunner | None:
+    if args.cmd not in {"step", "run"}:
+        return None
+    return TaskRunHeadlessRunner(
+        session_manager=SessionManager(
+            PostgresSessionRepository(conn, db_config),
+            include_taskrun_owned=True,
+        ),
+        task_repository=task_repository,
+        cwd=cwd,
+        audit_sink_factory=lambda session_id: _postgres_audit_sink(
+            conn,
+            db_config,
+            session_id,
+        ),
+    )
 
 
 def _build_parser(prog: str) -> argparse.ArgumentParser:
@@ -214,23 +230,61 @@ def _add_run_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         default=None,
         help="Persist a new TaskRun permission profile before running.",
     )
-    run.add_argument(
+    _add_run_runtime_flags(run)
+    _add_experiment_flags(run)
+
+
+def _add_run_runtime_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "--model",
         default=DEFAULT_MODEL_REF,
         metavar="VENDOR/AUTH/MODEL",
         help="Runtime model override for this auto run.",
     )
-    run.add_argument(
+    parser.add_argument(
         "--thinking-level",
         choices=THINKING_LEVELS,
         default="off",
         help="Runtime thinking level for this auto run.",
     )
-    run.add_argument(
+    parser.add_argument(
         "--cache-retention",
         choices=CACHE_RETENTIONS,
         default=None,
         help="Provider prompt-cache retention override.",
+    )
+
+
+def _add_experiment_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--benchmark-command",
+        default=None,
+        metavar="CMD",
+        help="Enable experiment mode and run this benchmark before/after each step.",
+    )
+    parser.add_argument(
+        "--metric",
+        default=None,
+        metavar="NAME",
+        help="Primary METRIC name to compare in experiment mode.",
+    )
+    parser.add_argument(
+        "--metric-direction",
+        choices=("lower", "higher"),
+        default=None,
+        help="Whether lower or higher primary metric values are better.",
+    )
+    parser.add_argument(
+        "--min-delta",
+        type=_parse_min_delta,
+        default=None,
+        metavar="N",
+        help="Minimum primary metric improvement threshold. Defaults to 0.",
+    )
+    parser.add_argument(
+        "--revert-on-regression",
+        action="store_true",
+        help="Safely revert tracked-file regressions when experiment mode is enabled.",
     )
 
 
@@ -253,6 +307,16 @@ def _parse_auto_run_max_steps(value: str) -> int:
     return parsed
 
 
+def _parse_min_delta(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--min-delta must be a number") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("--min-delta must be a finite non-negative number")
+    return parsed
+
+
 def _dispatch(
     args: argparse.Namespace,
     service: TaskRunService,
@@ -260,6 +324,7 @@ def _dispatch(
     cwd: Path,
     permission_profile: Mapping[str, Any] | None,
     runtime_options: TaskRunRuntimeOptions | None,
+    experiment_options: TaskRunExperimentOptions | None,
     runner: TaskRunHeadlessRunner | None,
 ) -> TaskRunCommandResult:
     match args.cmd:
@@ -296,6 +361,7 @@ def _dispatch(
                 options=TaskRunAutoRunOptions(
                     max_steps=args.max_steps,
                     runtime_options=runtime_options,
+                    experiment_options=experiment_options,
                 ),
                 runner=runner,
                 permission_profile=permission_profile,
@@ -337,6 +403,38 @@ def _load_runtime_options(args: argparse.Namespace, cwd: Path) -> TaskRunRuntime
         model_ref=canonical_model_ref(model),
         thinking_level=thinking_level,
         cache_retention=args.cache_retention,
+    )
+
+
+def _load_experiment_options(args: argparse.Namespace) -> TaskRunExperimentOptions | None:
+    benchmark_command = args.benchmark_command
+    has_experiment_flag = any(
+        [
+            benchmark_command is not None,
+            args.metric is not None,
+            args.metric_direction is not None,
+            args.min_delta is not None,
+            bool(args.revert_on_regression),
+        ]
+    )
+    if benchmark_command is None:
+        if has_experiment_flag:
+            raise TaskRunServiceError(
+                "experiment flags require --benchmark-command"
+            )
+        return None
+    if not str(benchmark_command).strip():
+        raise TaskRunServiceError("--benchmark-command must not be empty")
+    if args.metric is None or args.metric_direction is None:
+        raise TaskRunServiceError(
+            "--benchmark-command requires --metric and --metric-direction"
+        )
+    return TaskRunExperimentOptions(
+        benchmark_command=str(benchmark_command),
+        primary_metric=str(args.metric),
+        metric_direction=args.metric_direction,
+        min_delta=0.0 if args.min_delta is None else float(args.min_delta),
+        revert_on_regression=bool(args.revert_on_regression),
     )
 
 
@@ -490,6 +588,17 @@ def _print_history_result(result: TaskRunHistoryResult) -> None:
         sys.stdout.write(
             f"  permission_decision_count: {item.counts.permission_decision_count}\n"
         )
+        if item.experiments:
+            sys.stdout.write("  experiments:\n")
+            for experiment in item.experiments:
+                metric = experiment.result.get("primaryMetric")
+                value = experiment.metrics.get(metric) if isinstance(metric, str) else None
+                reason = experiment.result.get("reason") or ""
+                sys.stdout.write(
+                    f"  - {experiment.decision} metric={metric or ''} "
+                    f"value={value if value is not None else ''} "
+                    f"reason={_goal_preview(str(reason))}\n"
+                )
     sys.stdout.write("key_events:\n")
     if not result.key_events:
         sys.stdout.write("- none\n")

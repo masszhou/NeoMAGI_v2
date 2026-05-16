@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +17,11 @@ from cli.core.taskrun_autorun import (
     run_taskrun_auto_loop,
 )
 from cli.core.taskrun_errors import TaskRunServiceError
+from cli.core.taskrun_experiment_summary import (
+    current_best_experiment,
+    experiment_next_action,
+    experiment_preview,
+)
 from cli.core.taskrun_step import (
     STEP_INSTRUCTION,
     TaskRunRuntimeOptions,
@@ -38,6 +42,7 @@ from cli.core.taskrun_views import (
     step_summary,
     taskrun_next_action,
 )
+from cli.core.taskrun_workspace_state import workspace_state
 from policy.permission_profiles import (
     PermissionProfileError,
     build_permission_profile_snapshot,
@@ -157,11 +162,13 @@ class TaskRunService:
         steps = self.repository.list_steps(record.id)
         events = self.repository.list_events(record.id)
         permission_decisions = self.repository.list_permission_decisions(record.id)
+        experiments = self.repository.list_experiments(record.id)
         return build_taskrun_history(
             record,
             steps,
             events,
             permission_decisions,
+            experiments,
             self._build_summary(record, steps),
         )
 
@@ -573,6 +580,7 @@ class TaskRunService:
             record.workspace_root,
             record.id,
         )
+        experiments = self.repository.list_experiments(record.id)
         current_step = next(
             (step for step in steps if step.id == record.current_step_id),
             None,
@@ -585,17 +593,22 @@ class TaskRunService:
             if step.status in {"done", "failed", "blocked", "cancelled"}
         ]
         last_attempt = attempted[-1] if attempted else None
+        latest_experiment = experiments[-1] if experiments else None
+        last_attempt_summary = step_summary(last_attempt)
+        if last_attempt_summary is not None and latest_experiment is not None:
+            last_attempt_summary["experiment"] = experiment_preview(latest_experiment)
         return {
             "goal": record.goal,
             "status": record.status,
             "current_step": step_summary(current_step),
             "completed_steps": [step_summary(step) for step in completed_steps],
             "blocked_steps": [step_summary(step) for step in blocked_steps],
-            "last_attempt": step_summary(last_attempt),
-            "current_best": None,
-            "workspace_state": _workspace_state(record.workspace_root, projection_path),
+            "last_attempt": last_attempt_summary,
+            "current_best": current_best_experiment(experiments),
+            "workspace_state": workspace_state(record.workspace_root, projection_path),
             "permission_profile": dict(record.permission_profile or DEFAULT_PERMISSION_PROFILE),
-            "next_action": taskrun_next_action(record, last_attempt),
+            "next_action": experiment_next_action(record, latest_experiment)
+            or taskrun_next_action(record, last_attempt),
         }
 
     def _is_stale(self, record: TaskRunRecord, now_dt: datetime) -> bool:
@@ -746,32 +759,6 @@ def _failed_outcome(task_run_id: str, exc: Exception) -> TaskRunStepOutcome:
             f"`magipi taskrun step {task_run_id[:8]}` to retry manually."
         ),
     )
-
-
-def _workspace_state(workspace_root: str, projection_path: Path) -> dict[str, object]:
-    state: dict[str, object] = {
-        "workspace_root": workspace_root,
-        "projection_path": str(projection_path),
-        "git": {"status": "unknown"},
-    }
-    try:
-        result = subprocess.run(
-            ["git", "-C", workspace_root, "status", "--short", "--untracked-files=no"],
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return state
-    if result.returncode != 0:
-        return state
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
-    state["git"] = {
-        "status": "dirty" if lines else "clean",
-        "changed_tracked_paths": len(lines),
-    }
-    return state
 
 
 def _ambiguous_message(prefix: str, matches: list[TaskRunRecord]) -> str:

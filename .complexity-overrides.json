@@ -1,0 +1,5 @@
+{
+  "skip_file_lines": [
+    "packages/magipi/src/policy/permission_profiles.py"
+  ]
+}

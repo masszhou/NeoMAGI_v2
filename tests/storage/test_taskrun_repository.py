@@ -11,6 +11,7 @@ SESSION_ID = "019e2200-0000-7000-8000-000000000002"
 PERMISSION_ID = "019e2200-0000-7000-8000-000000000003"
 STEP_ID = "019e2200-0000-7000-8000-000000000004"
 TOOL_EXECUTION_ID = "019e2200-0000-7000-8000-000000000005"
+EXPERIMENT_ID = "019e2200-0000-7000-8000-000000000006"
 _NO_ROW = object()
 
 
@@ -70,6 +71,23 @@ class _Cursor:
                 {"effect": "confirm", "auditTags": ["policy:confirm"]},
                 {"effect": "block", "auditTags": ["policy:confirm", "permission:guarded:block"]},
                 "guarded",
+                "2026-05-13T00:00:00+00:00",
+            )
+        if (
+            "RETURNING id, task_run_id, step_id, hypothesis, change"
+            in self._last_query
+        ):
+            return (
+                EXPERIMENT_ID,
+                TASK_ID,
+                STEP_ID,
+                "try faster path",
+                {"files": ["bench.py"]},
+                {"commandPreview": "uv run python bench.py"},
+                {"latency_ms": 118.0},
+                {"primaryMetric": "latency_ms", "decision": "keep"},
+                "keep",
+                {"changed_paths": ["bench.py"]},
                 "2026-05-13T00:00:00+00:00",
             )
         if row := self._task_run_step_state_row():
@@ -183,6 +201,22 @@ class _Cursor:
                     {"effect": "confirm", "normalizedArgs": {"path": "a.txt"}},
                     {"effect": "block", "auditTags": ["permission:guarded:block"]},
                     "guarded",
+                    "2026-05-13T00:00:00+00:00",
+                )
+            ]
+        if "FROM \"neomagi\".task_experiments" in self._last_query:
+            return [
+                (
+                    EXPERIMENT_ID,
+                    TASK_ID,
+                    STEP_ID,
+                    "try faster path",
+                    {"files": ["bench.py"]},
+                    {"commandPreview": "uv run python bench.py"},
+                    {"latency_ms": 118.0},
+                    {"primaryMetric": "latency_ms", "decision": "keep"},
+                    "keep",
+                    {"changed_paths": ["bench.py"]},
                     "2026-05-13T00:00:00+00:00",
                 )
             ]
@@ -485,3 +519,53 @@ def test_append_permission_decision_rejects_invalid_task_run_id() -> None:
             resolved_decision={"effect": "allow"},
             profile_name="guarded",
         )
+
+
+def test_append_experiment_persists_taskrun_experiment_truth() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    record = repo.append_experiment(
+        task_run_id=TASK_ID,
+        step_id=STEP_ID,
+        hypothesis="try faster path",
+        change={"files": ["bench.py"]},
+        command={"commandPreview": "uv run python bench.py"},
+        metrics={"latency_ms": 118.0},
+        result={"primaryMetric": "latency_ms", "decision": "keep"},
+        decision="keep",
+        diff_ref={"changed_paths": ["bench.py"]},
+        experiment_id=EXPERIMENT_ID,
+        created_at="2026-05-13T00:00:00+00:00",
+    )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert record.id == EXPERIMENT_ID
+    assert record.step_id == STEP_ID
+    assert record.metrics["latency_ms"] == 118.0
+    assert "INSERT INTO \"neomagi\".task_experiments" in sql
+    assert conn.commits == 1
+
+
+def test_list_experiments_orders_by_created_at_then_id() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    records = repo.list_experiments(TASK_ID)
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert records[0].id == EXPERIMENT_ID
+    assert "FROM \"neomagi\".task_experiments" in sql
+    assert "WHERE task_run_id = %s" in sql
+    assert "ORDER BY created_at ASC, id ASC" in sql
+
+
+def test_list_experiments_for_step_filters_by_step_id() -> None:
+    conn = _Conn()
+    repo = _repo(conn)
+
+    records = repo.list_experiments_for_step(STEP_ID)
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert records[0].step_id == STEP_ID
+    assert "WHERE step_id = %s" in sql

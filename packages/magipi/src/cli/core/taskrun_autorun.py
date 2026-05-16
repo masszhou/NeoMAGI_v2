@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cli.core.taskrun_errors import TaskRunServiceError
-from cli.core.taskrun_projection import TaskRunProjectionResult
+from cli.core.taskrun_autorun_common import (
+    AutoRunBudget as _AutoRunBudget,
+    AutoRunCounters as _AutoRunCounters,
+    AutoRunStopDecision as _AutoRunStopDecision,
+    TaskRunAutoRunIteration,
+    TaskRunAutoRunOptions,
+    TaskRunAutoRunResult,
+    advance_auto_run_counters as _advance_auto_run_counters,
+    append_auto_run_event as _append_auto_run_event,
+    count_step_denies as _count_step_denies,
+    evaluate_auto_run_stop,
+    validate_auto_run_ready as _validate_run_ready,
+    validate_headless_profile as _validate_headless_profile,
+)
+from cli.core.taskrun_experiment_loop import execute_experiment_auto_run_iteration
+from cli.core.taskrun_experiments import (
+    TaskRunExperimentAttempt,
+    TaskRunExperimentOptions,
+    validate_experiment_permission_profile,
+    validate_experiment_options,
+)
 from cli.core.taskrun_service_internals import TaskRunServiceInternals
 from cli.core.taskrun_step import TaskRunRuntimeOptions, TaskRunStepRunner
 from policy.permission_profiles import (
@@ -20,8 +40,6 @@ from policy.permission_profiles import (
 from storage.ids import new_db_uuid
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
-    TaskEventRecord,
-    TaskPermissionDecisionRecord,
     TaskRunRecord,
     TaskStepRecord,
 )
@@ -40,6 +58,11 @@ AUTO_RUN_STOP_REASONS = frozenset(
         "budget_exhausted",
         "no_runnable_taskrun",
         "runner_error",
+        "experiment_blocked",
+        "experiment_reverted",
+        "benchmark_failed",
+        "metric_parse_failed",
+        "unsafe_revert",
     }
 )
 _STEP_ATTRIBUTED_STOP_REASONS = frozenset(
@@ -49,56 +72,13 @@ _STEP_ATTRIBUTED_STOP_REASONS = frozenset(
         "total_denies_exhausted",
         "permission_block",
         "runner_error",
+        "experiment_blocked",
+        "experiment_reverted",
+        "benchmark_failed",
+        "metric_parse_failed",
+        "unsafe_revert",
     }
 )
-
-
-@dataclass(frozen=True, slots=True)
-class TaskRunAutoRunOptions:
-    max_steps: int
-    runtime_options: TaskRunRuntimeOptions
-
-
-@dataclass(frozen=True, slots=True)
-class TaskRunAutoRunIteration:
-    step: TaskStepRecord
-    task_run_status: str
-    stop_candidate: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class TaskRunAutoRunResult:
-    task_run: TaskRunRecord
-    iterations: list[TaskRunAutoRunIteration]
-    stop_reason: str
-    projection: TaskRunProjectionResult
-    events: list[TaskEventRecord]
-    exit_code: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _AutoRunBudget:
-    max_steps: int | None
-    max_consecutive_failures: int
-    max_consecutive_denies: int
-    max_total_denies: int
-    deadline_utc: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
-class _AutoRunCounters:
-    steps_run: int = 0
-    consecutive_failures: int = 0
-    consecutive_denies: int = 0
-    total_denies: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _AutoRunStopDecision:
-    should_stop: bool
-    stop_reason: str | None
-    next_task_status: str | None
-    exit_code: int
 
 
 def run_taskrun_auto_loop(
@@ -113,6 +93,7 @@ def run_taskrun_auto_loop(
     workspace_root = str(cwd)
     max_steps = _validate_auto_run_max_steps(options.max_steps)
     runtime_options = options.runtime_options
+    _validate_experiment_options_for_run(options.experiment_options)
     profile_snapshot = _normalize_optional_run_profile(permission_profile)
     record, budget = _prepare_auto_run(
         service,
@@ -130,25 +111,26 @@ def run_taskrun_auto_loop(
             auto_run_id=auto_run_id,
             max_steps=max_steps,
             runtime_options=runtime_options,
+            experiment_options=options.experiment_options,
             stop_reason="budget_exhausted",
             counters=_AutoRunCounters(),
             exit_code=1,
         )
+    _validate_experiment_profile_for_run(
+        record,
+        options.experiment_options,
+        effective_permission_profile=profile_snapshot,
+    )
     if profile_snapshot is not None:
         record = _update_permission_profile_for_run(service, record, profile_snapshot)
-
-    _append_auto_run_event(
+    record = _record_auto_run_started(
         service,
         record,
-        event_type="task_run_auto_run_started",
         auto_run_id=auto_run_id,
         max_steps=max_steps,
         runtime_options=runtime_options,
-        counters=_AutoRunCounters(),
-        iteration_index=0,
-        stop_reason=None,
+        experiment_options=options.experiment_options,
     )
-    record = service._summarize_and_project(record).task_run
     return _execute_auto_run_loop(
         service,
         record,
@@ -157,6 +139,17 @@ def run_taskrun_auto_loop(
         options=replace(options, max_steps=max_steps),
         runner=runner,
     )
+
+
+def _validate_experiment_options_for_run(
+    experiment_options: TaskRunExperimentOptions | None,
+) -> None:
+    if experiment_options is None:
+        return
+    try:
+        validate_experiment_options(experiment_options)
+    except ValueError as exc:
+        _raise_service_error(str(exc))
 
 
 def _prepare_auto_run(
@@ -189,6 +182,49 @@ def _prepare_auto_run(
     return record, budget
 
 
+def _record_auto_run_started(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    auto_run_id: str,
+    max_steps: int,
+    runtime_options: TaskRunRuntimeOptions,
+    experiment_options: TaskRunExperimentOptions | None,
+) -> TaskRunRecord:
+    _append_auto_run_event(
+        service,
+        record,
+        event_type="task_run_auto_run_started",
+        auto_run_id=auto_run_id,
+        max_steps=max_steps,
+        runtime_options=runtime_options,
+        experiment_options=experiment_options,
+        counters=_AutoRunCounters(),
+        iteration_index=0,
+        stop_reason=None,
+    )
+    return service._summarize_and_project(record).task_run
+
+
+def _validate_experiment_profile_for_run(
+    record: TaskRunRecord,
+    experiment_options: TaskRunExperimentOptions | None,
+    *,
+    effective_permission_profile: Mapping[str, Any] | None = None,
+) -> None:
+    if experiment_options is None:
+        return
+    try:
+        validate_experiment_permission_profile(
+            experiment_options,
+            workspace_root=record.workspace_root,
+            permission_profile=effective_permission_profile or record.permission_profile,
+            budget=record.budget,
+        )
+    except ValueError as exc:
+        _raise_service_error(str(exc))
+
+
 def _execute_auto_run_loop(
     service: TaskRunServiceInternals,
     record: TaskRunRecord,
@@ -199,6 +235,8 @@ def _execute_auto_run_loop(
     runner: TaskRunStepRunner,
 ) -> TaskRunAutoRunResult:
     iterations: list[TaskRunAutoRunIteration] = []
+    experiment_attempts: list[TaskRunExperimentAttempt] = []
+    baseline_metrics: dict[str, float] | None = None
     counters = _AutoRunCounters()
     stop_reason = "max_steps_reached"
     exit_code = 0
@@ -208,17 +246,21 @@ def _execute_auto_run_loop(
             if _deadline_expired(budget.deadline_utc, service.clock()):
                 stop_reason, exit_code = "budget_exhausted", 1
                 break
-            record, counters, decision = _execute_auto_run_iteration(
-                service,
-                record,
-                workspace_root=workspace_root,
-                auto_run_id=auto_run_id,
-                options=options,
-                runner=runner,
-                counters=counters,
-                budget=budget,
+            record, counters, decision, attempts, baseline_metrics = (
+                _execute_next_auto_run_iteration(
+                    service,
+                    record,
+                    workspace_root=workspace_root,
+                    auto_run_id=auto_run_id,
+                    options=options,
+                    runner=runner,
+                    counters=counters,
+                    budget=budget,
+                    baseline_metrics=baseline_metrics,
+                )
             )
             iterations.append(decision[0])
+            experiment_attempts.extend(attempts)
             if decision[1].should_stop:
                 stop_reason = decision[1].stop_reason or "runner_error"
                 exit_code = decision[1].exit_code
@@ -234,6 +276,50 @@ def _execute_auto_run_loop(
         counters=counters,
         stop_reason=stop_reason,
         exit_code=exit_code,
+        experiment_attempts=experiment_attempts,
+    )
+
+
+def _execute_next_auto_run_iteration(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    workspace_root: str,
+    auto_run_id: str,
+    options: TaskRunAutoRunOptions,
+    runner: TaskRunStepRunner,
+    counters: _AutoRunCounters,
+    budget: _AutoRunBudget,
+    baseline_metrics: dict[str, float] | None,
+) -> tuple[
+    TaskRunRecord,
+    _AutoRunCounters,
+    tuple[TaskRunAutoRunIteration, _AutoRunStopDecision],
+    list[TaskRunExperimentAttempt],
+    dict[str, float] | None,
+]:
+    if options.experiment_options is None:
+        record, counters, decision = _execute_auto_run_iteration(
+            service,
+            record,
+            workspace_root=workspace_root,
+            auto_run_id=auto_run_id,
+            options=options,
+            runner=runner,
+            counters=counters,
+            budget=budget,
+        )
+        return record, counters, decision, [], baseline_metrics
+    return execute_experiment_auto_run_iteration(
+        service,
+        record,
+        workspace_root=workspace_root,
+        auto_run_id=auto_run_id,
+        options=options,
+        runner=runner,
+        counters=counters,
+        budget=budget,
+        baseline_metrics=baseline_metrics,
     )
 
 
@@ -268,21 +354,41 @@ def _execute_auto_run_iteration(
     )
     if step_result.step is None:
         _raise_service_error("taskrun run finalized without a step record")
-    record = step_result.task_run
+    return _finalize_auto_run_iteration(
+        service,
+        step_result.task_run,
+        step_result.step,
+        auto_run_id=auto_run_id,
+        options=options,
+        counters=counters,
+        budget=budget,
+    )
+
+
+def _finalize_auto_run_iteration(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    step: TaskStepRecord,
+    *,
+    auto_run_id: str,
+    options: TaskRunAutoRunOptions,
+    counters: _AutoRunCounters,
+    budget: _AutoRunBudget,
+) -> tuple[TaskRunRecord, _AutoRunCounters, tuple[TaskRunAutoRunIteration, _AutoRunStopDecision]]:
     step_denies = _count_step_denies(
         service.repository.list_permission_decisions(record.id),
-        step_result.step.id,
+        step.id,
     )
-    counters = _advance_auto_run_counters(counters, step_result.step, step_denies)
+    counters = _advance_auto_run_counters(counters, step, step_denies)
     decision = evaluate_auto_run_stop(
-        last_step=step_result.step,
+        last_step=step,
         counters=counters,
         options=options,
         budget=budget,
         step_denies=step_denies,
     )
     iteration = TaskRunAutoRunIteration(
-        step=step_result.step,
+        step=step,
         task_run_status=record.status,
         stop_candidate=decision.stop_reason,
     )
@@ -293,9 +399,10 @@ def _execute_auto_run_iteration(
         auto_run_id=auto_run_id,
         max_steps=options.max_steps,
         runtime_options=options.runtime_options,
+        experiment_options=options.experiment_options,
         counters=counters,
         iteration_index=counters.steps_run,
-        step=step_result.step,
+        step=step,
         stop_reason=decision.stop_reason,
     )
     if decision.next_task_status and record.status != decision.next_task_status:
@@ -318,6 +425,7 @@ def _finish_auto_run(
     counters: _AutoRunCounters,
     stop_reason: str,
     exit_code: int,
+    experiment_attempts: list[TaskRunExperimentAttempt] | None = None,
 ) -> TaskRunAutoRunResult:
     event_type = (
         "task_run_auto_run_cancelled"
@@ -331,6 +439,7 @@ def _finish_auto_run(
         auto_run_id=auto_run_id,
         max_steps=options.max_steps,
         runtime_options=options.runtime_options,
+        experiment_options=options.experiment_options,
         counters=counters,
         iteration_index=counters.steps_run,
         step=_auto_run_stop_event_step(iterations, stop_reason),
@@ -344,6 +453,7 @@ def _finish_auto_run(
         projection=final.projection,
         events=final.events,
         exit_code=exit_code,
+        experiment_attempts=list(experiment_attempts or []),
     )
 
 
@@ -354,11 +464,16 @@ def _start_and_stop_auto_run(
     auto_run_id: str,
     max_steps: int,
     runtime_options: TaskRunRuntimeOptions,
+    experiment_options: TaskRunExperimentOptions | None = None,
     stop_reason: str,
     counters: _AutoRunCounters,
     exit_code: int,
 ) -> TaskRunAutoRunResult:
-    options = TaskRunAutoRunOptions(max_steps=max_steps, runtime_options=runtime_options)
+    options = TaskRunAutoRunOptions(
+        max_steps=max_steps,
+        runtime_options=runtime_options,
+        experiment_options=experiment_options,
+    )
     _append_auto_run_event(
         service,
         record,
@@ -366,6 +481,7 @@ def _start_and_stop_auto_run(
         auto_run_id=auto_run_id,
         max_steps=max_steps,
         runtime_options=runtime_options,
+        experiment_options=experiment_options,
         counters=counters,
         iteration_index=0,
         stop_reason=None,
@@ -412,38 +528,6 @@ def _select_task_run_for_run(
     return candidates[0]
 
 
-def _validate_run_ready(
-    service: TaskRunServiceInternals,
-    record: TaskRunRecord,
-    workspace_root: str,
-    *,
-    explicit: bool,
-    effective_permission_profile: Mapping[str, Any] | None = None,
-) -> None:
-    if record.status in TERMINAL_TASKRUN_STATUSES:
-        _raise_service_error(f"cannot run terminal TaskRun {record.id}: {record.status}")
-    if record.status == "running":
-        _raise_service_error(f"cannot run active running TaskRun {record.id}")
-    if record.status == "blocked" and not explicit:
-        _raise_service_error(f"blocked TaskRun {record.id} requires explicit id/prefix to run")
-    _validate_headless_profile(
-        effective_permission_profile or record.permission_profile,
-        command="run",
-    )
-    running = [
-        candidate
-        for candidate in service.repository.list_running_task_runs(workspace_root)
-        if candidate.id != record.id
-    ]
-    if running:
-        _raise_service_error(
-            _ambiguous_message(
-                "another TaskRun is already running in this workspace",
-                running,
-            )
-        )
-
-
 def _update_permission_profile_for_run(
     service: TaskRunServiceInternals,
     record: TaskRunRecord,
@@ -469,63 +553,6 @@ def _update_permission_profile_for_run(
         occurred_at=now,
     )
     return updated
-
-
-def _append_auto_run_event(
-    service: TaskRunServiceInternals,
-    record: TaskRunRecord,
-    *,
-    event_type: str,
-    auto_run_id: str,
-    max_steps: int,
-    runtime_options: TaskRunRuntimeOptions,
-    counters: _AutoRunCounters,
-    iteration_index: int,
-    step: TaskStepRecord | None = None,
-    stop_reason: str | None,
-) -> TaskEventRecord:
-    return service.repository.append_event(
-        task_run_id=record.id,
-        step_id=step.id if step is not None else None,
-        event_type=event_type,
-        payload=_auto_run_event_payload(
-            record,
-            auto_run_id=auto_run_id,
-            max_steps=max_steps,
-            runtime_options=runtime_options,
-            counters=counters,
-            iteration_index=iteration_index,
-            step=step,
-            stop_reason=stop_reason,
-        ),
-        occurred_at=service._now_iso(),
-    )
-
-
-def _auto_run_event_payload(
-    record: TaskRunRecord,
-    *,
-    auto_run_id: str,
-    max_steps: int,
-    runtime_options: TaskRunRuntimeOptions,
-    counters: _AutoRunCounters,
-    iteration_index: int,
-    step: TaskStepRecord | None,
-    stop_reason: str | None,
-) -> dict[str, object]:
-    return {
-        "auto_run_id": auto_run_id,
-        "task_run_id": record.id,
-        "max_steps": max_steps,
-        "iteration_index": iteration_index,
-        "step_id": step.id if step is not None else None,
-        "step_status": step.status if step is not None else None,
-        "stop_reason": stop_reason,
-        "consecutive_failures": counters.consecutive_failures,
-        "consecutive_denies": counters.consecutive_denies,
-        "total_denies": counters.total_denies,
-        "model_ref": runtime_options.model_ref,
-    }
 
 
 def _auto_run_stop_event_step(
@@ -564,19 +591,6 @@ def _normalize_optional_run_profile(
             "use --permission guarded or --permission full"
         )
     return snapshot
-
-
-def _validate_headless_profile(
-    permission_profile: Mapping[str, Any],
-    *,
-    command: str,
-) -> None:
-    profile = _normalize_profile(permission_profile)
-    if not bool(profile.get("nonInteractive")):
-        _raise_service_error(
-            f"taskrun {command} is headless and cannot use interactive permission profile; "
-            "create a TaskRun with --permission guarded or --permission full"
-        )
 
 
 def _auto_run_budget(budget: Mapping[str, Any]) -> _AutoRunBudget:
@@ -686,80 +700,6 @@ def _deadline_expired(deadline: datetime | None, now: datetime) -> bool:
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     return now.astimezone(UTC) >= deadline
-
-
-def _count_step_denies(
-    permission_decisions: list[TaskPermissionDecisionRecord],
-    step_id: str,
-) -> int:
-    return sum(
-        1
-        for decision in permission_decisions
-        if decision.step_id == step_id
-        and decision.resolved_decision.get("effect") not in {None, "allow"}
-    )
-
-
-def _advance_auto_run_counters(
-    counters: _AutoRunCounters,
-    step: TaskStepRecord,
-    step_denies: int,
-) -> _AutoRunCounters:
-    return _AutoRunCounters(
-        steps_run=counters.steps_run + 1,
-        consecutive_failures=(
-            counters.consecutive_failures + 1 if step.status == "failed" else 0
-        ),
-        consecutive_denies=(counters.consecutive_denies + 1 if step_denies > 0 else 0),
-        total_denies=counters.total_denies + step_denies,
-    )
-
-
-def evaluate_auto_run_stop(
-    *,
-    last_step: TaskStepRecord,
-    counters: _AutoRunCounters,
-    options: TaskRunAutoRunOptions,
-    budget: _AutoRunBudget,
-    step_denies: int,
-) -> _AutoRunStopDecision:
-    if last_step.status == "cancelled":
-        return _AutoRunStopDecision(True, "user_cancelled", "blocked", 130)
-    if step_denies > 0:
-        return _deny_stop_decision(last_step, counters, budget)
-    if last_step.status == "blocked":
-        return _AutoRunStopDecision(True, "runner_error", "blocked", 1)
-    if _failure_budget_exhausted(last_step, counters, budget):
-        return _AutoRunStopDecision(True, "consecutive_failures_exhausted", "blocked", 1)
-    if counters.steps_run >= options.max_steps:
-        exit_code = 0 if last_step.status == "done" else 1
-        return _AutoRunStopDecision(True, "max_steps_reached", None, exit_code)
-    return _AutoRunStopDecision(False, None, None, 0)
-
-
-def _deny_stop_decision(
-    last_step: TaskStepRecord,
-    counters: _AutoRunCounters,
-    budget: _AutoRunBudget,
-) -> _AutoRunStopDecision:
-    if counters.consecutive_denies >= budget.max_consecutive_denies:
-        return _AutoRunStopDecision(True, "consecutive_denies_exhausted", "blocked", 1)
-    if counters.total_denies >= budget.max_total_denies:
-        return _AutoRunStopDecision(True, "total_denies_exhausted", "blocked", 1)
-    if last_step.status == "blocked":
-        return _AutoRunStopDecision(True, "permission_block", "blocked", 1)
-    return _AutoRunStopDecision(False, None, None, 0)
-
-
-def _failure_budget_exhausted(
-    last_step: TaskStepRecord,
-    counters: _AutoRunCounters,
-    budget: _AutoRunBudget,
-) -> bool:
-    return (
-        last_step.status == "failed"
-        and counters.consecutive_failures >= budget.max_consecutive_failures
-    )
 
 
 def _normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:

@@ -200,6 +200,14 @@ _TASKRUN_SCHEMA_SQL_TEMPLATES = (
     CREATE INDEX IF NOT EXISTS task_events_task_run_order_idx
     ON {schema}.task_events(task_run_id, occurred_at ASC, id ASC)
     """,
+    """
+    CREATE INDEX IF NOT EXISTS task_experiments_task_run_order_idx
+    ON {schema}.task_experiments(task_run_id, created_at ASC, id ASC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS task_experiments_step_idx
+    ON {schema}.task_experiments(step_id)
+    """,
 )
 
 

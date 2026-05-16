@@ -39,11 +39,7 @@ def create_running_step_txn(
     now = started_at or utc_now_iso()
     try:
         with conn.cursor() as cur:
-            workspace_root = _workspace_root(cur, schema, task_run_id)
-            _lock_workspace(cur, workspace_root)
-            _require_step_ready_task_run(cur, schema, task_run_id)
-            _require_no_running_workspace_task(cur, schema, workspace_root, task_run_id)
-            step_row = _insert_running_step(
+            run_row, step_row = _create_running_step_rows(
                 cur,
                 schema,
                 task_run_id=task_run_id,
@@ -51,27 +47,9 @@ def create_running_step_txn(
                 title=title,
                 input=input,
                 started_at=now,
+                start_event_payload=start_event_payload,
+                start_event_id=start_event_id,
             )
-            run_row = update_task_run_step_state_tx(
-                cur,
-                schema,
-                task_run_id,
-                status="running",
-                current_step_id=step_id,
-                heartbeat_at=now,
-                updated_at=now,
-            )
-            if start_event_payload is not None:
-                _insert_step_started_event(
-                    cur,
-                    schema,
-                    task_run_id=task_run_id,
-                    step_id=step_id,
-                    step_index=int(step_row[2]),
-                    payload=start_event_payload,
-                    occurred_at=now,
-                    event_id=start_event_id,
-                )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -80,6 +58,54 @@ def create_running_step_txn(
         task_run=_task_run_from_row(run_row),
         step=_task_step_from_row(step_row),
     )
+
+
+def _create_running_step_rows(
+    cur: Any,
+    schema: str,
+    *,
+    task_run_id: str,
+    step_id: str,
+    title: str,
+    input: Mapping[str, Any],
+    started_at: str,
+    start_event_payload: Mapping[str, Any] | None,
+    start_event_id: str | None,
+):
+    workspace_root = _workspace_root(cur, schema, task_run_id)
+    _lock_workspace(cur, workspace_root)
+    _require_step_ready_task_run(cur, schema, task_run_id)
+    _require_no_running_workspace_task(cur, schema, workspace_root, task_run_id)
+    step_row = _insert_running_step(
+        cur,
+        schema,
+        task_run_id=task_run_id,
+        step_id=step_id,
+        title=title,
+        input=input,
+        started_at=started_at,
+    )
+    run_row = update_task_run_step_state_tx(
+        cur,
+        schema,
+        task_run_id,
+        status="running",
+        current_step_id=step_id,
+        heartbeat_at=started_at,
+        updated_at=started_at,
+    )
+    if start_event_payload is not None:
+        _insert_step_started_event(
+            cur,
+            schema,
+            task_run_id=task_run_id,
+            step_id=step_id,
+            step_index=int(step_row[2]),
+            payload=start_event_payload,
+            occurred_at=started_at,
+            event_id=start_event_id,
+        )
+    return run_row, step_row
 
 
 def update_step_status_txn(

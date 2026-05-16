@@ -18,7 +18,12 @@ from cli.core.taskrun_views import (
     TaskRunNextResult,
     TaskStepCounts,
 )
-from storage.taskrun_repository import TaskEventRecord, TaskRunRecord, TaskStepRecord
+from storage.taskrun_repository import (
+    TaskEventRecord,
+    TaskExperimentRecord,
+    TaskRunRecord,
+    TaskStepRecord,
+)
 
 
 class _Conn:
@@ -219,6 +224,30 @@ def _step_result(tmp_path: Path) -> TaskRunResult:
     )
 
 
+def _history_experiment(
+    result: TaskRunResult,
+    step: TaskStepRecord,
+    *,
+    experiment_id: str,
+    decision: str,
+    value: float,
+    reason: str,
+) -> TaskExperimentRecord:
+    return TaskExperimentRecord(
+        id=experiment_id,
+        task_run_id=result.task_run.id,
+        step_id=step.id,
+        hypothesis="agent trial" if decision == "keep" else "loop-level baseline",
+        change={},
+        command={},
+        metrics={"latency_ms": value},
+        result={"primaryMetric": "latency_ms", "reason": reason},
+        decision=decision,
+        diff_ref={},
+        created_at="2026-05-13T00:00:00+00:00",
+    )
+
+
 def _stub_runtime(monkeypatch, service: _FakeService) -> _Conn:
     conn = _Conn()
     monkeypatch.setattr(taskrun_commands, "load_database_config", lambda **_kwargs: object())
@@ -362,6 +391,59 @@ def test_taskrun_history_routes_and_prints_reason(
     assert "task_step_blocked" in captured.out
 
 
+def test_taskrun_history_prints_experiment_attempts(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_step_result(tmp_path))
+    step = service.result.steps[0]
+
+    def fake_history(task_id: str | None, cwd: Path) -> TaskRunHistoryResult:
+        service.calls.append(("history", task_id, cwd))
+        return TaskRunHistoryResult(
+            task_run=service.result.task_run,
+            steps=[
+                TaskRunHistoryStep(
+                    step=step,
+                    reason=None,
+                    counts=TaskStepCounts(tool_count=0, permission_decision_count=0),
+                    experiments=[
+                        _history_experiment(
+                            service.result,
+                            step,
+                            experiment_id="019e2200-0000-7000-8000-000000000010",
+                            decision="baseline",
+                            value=120.0,
+                            reason="baseline recorded",
+                        ),
+                        _history_experiment(
+                            service.result,
+                            step,
+                            experiment_id="019e2200-0000-7000-8000-000000000011",
+                            decision="keep",
+                            value=110.0,
+                            reason="primary metric improved",
+                        ),
+                    ],
+                )
+            ],
+            key_events=[],
+            next_action="continue",
+        )
+
+    service.history = fake_history
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["history", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "experiments:" in captured.out
+    assert "- baseline metric=latency_ms value=120.0 reason=baseline recorded" in captured.out
+    assert "- keep metric=latency_ms value=110.0 reason=primary metric improved" in captured.out
+
+
 def test_taskrun_next_routes_and_prints_deterministic_view(
     tmp_path: Path,
     monkeypatch,
@@ -469,12 +551,88 @@ def test_taskrun_run_passes_bounded_options_permission_and_prints_iterations(
     assert service.calls[0][3].max_steps == 2
     assert service.calls[0][3].runtime_options.model_ref == "faux/local/faux-1"
     assert service.calls[0][3].runtime_options.cache_retention == "none"
+    assert service.calls[0][3].experiment_options is None
     assert service.calls[0][4] is not None
     assert service.calls[0][5]["name"] == "guarded"
     assert "iterations:" in captured.out
     assert "step_status: done" in captured.out
     assert "stop_reason: max_steps_reached" in captured.out
     assert "steps_run: 1" in captured.out
+
+
+def test_taskrun_run_passes_experiment_options(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _FakeService(_step_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(
+        [
+            "run",
+            "019e2200",
+            "--max-steps",
+            "2",
+            "--benchmark-command",
+            "uv run python scripts/bench.py",
+            "--metric",
+            "latency_ms",
+            "--metric-direction",
+            "lower",
+            "--min-delta",
+            "0.5",
+            "--revert-on-regression",
+        ],
+        prog="magipi",
+    )
+
+    options = service.calls[0][3].experiment_options
+    assert rc == 0
+    assert options.benchmark_command == "uv run python scripts/bench.py"
+    assert options.primary_metric == "latency_ms"
+    assert options.metric_direction == "lower"
+    assert options.min_delta == 0.5
+    assert options.revert_on_regression is True
+
+
+def test_taskrun_run_requires_metric_and_direction_for_experiment_before_db(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        taskrun_commands,
+        "load_database_config",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("db should not load")),
+    )
+
+    rc = taskrun_commands.run_taskrun_command(
+        ["run", "--max-steps", "1", "--benchmark-command", "python bench.py"],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "--metric and --metric-direction" in captured.err
+
+
+def test_taskrun_run_rejects_experiment_flags_without_benchmark_before_db(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        taskrun_commands,
+        "load_database_config",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("db should not load")),
+    )
+
+    rc = taskrun_commands.run_taskrun_command(
+        ["run", "--max-steps", "1", "--metric", "latency_ms"],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "experiment flags require --benchmark-command" in captured.err
 
 
 def test_taskrun_run_rejects_interactive_permission_before_db(

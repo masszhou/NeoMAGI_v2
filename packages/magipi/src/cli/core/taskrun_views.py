@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
+    TaskExperimentRecord,
     TaskPermissionDecisionRecord,
     TaskRunRecord,
     TaskStepRecord,
@@ -25,6 +26,11 @@ KEY_HISTORY_EVENT_TYPES = frozenset(
         "task_run_auto_run_iteration_finished",
         "task_run_auto_run_stopped",
         "task_run_auto_run_cancelled",
+        "task_experiment_baseline_recorded",
+        "task_experiment_trial_recorded",
+        "task_experiment_decided",
+        "task_experiment_reverted",
+        "task_experiment_blocked",
         "task_step_started",
         "task_step_completed",
         "task_step_failed",
@@ -68,6 +74,7 @@ class TaskRunHistoryStep:
     step: TaskStepRecord
     reason: str | None
     counts: TaskStepCounts
+    experiments: list[TaskExperimentRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +126,7 @@ def build_taskrun_history(
     steps: list[TaskStepRecord],
     events: list[TaskEventRecord],
     permission_decisions: list[TaskPermissionDecisionRecord],
+    experiments: list[TaskExperimentRecord],
     summary: Mapping[str, object],
 ) -> TaskRunHistoryResult:
     return TaskRunHistoryResult(
@@ -128,6 +136,11 @@ def build_taskrun_history(
                 step=step,
                 reason=step_reason(step, _related_step_events(step, events)),
                 counts=step_counts(step, permission_decisions),
+                experiments=[
+                    experiment
+                    for experiment in experiments
+                    if experiment.step_id == step.id
+                ],
             )
             for step in steps
         ],

@@ -61,6 +61,8 @@ def test_ensure_schema_bootstraps_taskrun_tables_and_meta() -> None:
     assert "CREATE TABLE IF NOT EXISTS \"neomagi\".task_permission_decisions" in sql
     assert "CREATE TABLE IF NOT EXISTS \"neomagi\".task_experiments" in sql
     assert "task_runs_one_running_per_workspace_idx" in sql
+    assert "task_experiments_task_run_order_idx" in sql
+    assert "task_experiments_step_idx" in sql
     assert ("neomagi_taskrun_schema_version", NEOMAGI_TASKRUN_SCHEMA_VERSION) in meta_params
     assert conn.commits == 1
     assert conn.rollbacks == 0

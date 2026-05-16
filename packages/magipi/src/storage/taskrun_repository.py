@@ -21,6 +21,7 @@ from .taskrun_records import (
     TASKSTEP_STATUSES,
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
+    TaskExperimentRecord,
     TaskPermissionDecisionRecord,
     TaskRunCreateRequest,
     TaskRunRecord,
@@ -535,6 +536,91 @@ class PostgresTaskRunRepository:
             rows = cur.fetchall()
         return [_task_permission_decision_from_row(row) for row in rows]
 
+    def append_experiment(
+        self,
+        *,
+        task_run_id: str,
+        step_id: str,
+        hypothesis: str,
+        change: Mapping[str, Any],
+        command: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        result: Mapping[str, Any],
+        decision: str,
+        diff_ref: Mapping[str, Any],
+        created_at: str | None = None,
+        experiment_id: str | None = None,
+    ) -> TaskExperimentRecord:
+        _validate_uuid("task_run_id", task_run_id)
+        _validate_uuid("step_id", step_id)
+        experiment_id = experiment_id or new_db_uuid()
+        created_at = created_at or utc_now_iso()
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {self._schema}.task_experiments(
+                        id, task_run_id, step_id, hypothesis, change, command,
+                        metrics, result, decision, diff_ref, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, task_run_id, step_id, hypothesis, change,
+                              command, metrics, result, decision, diff_ref,
+                              created_at
+                    """,
+                    (
+                        experiment_id,
+                        task_run_id,
+                        step_id,
+                        hypothesis,
+                        _jsonb(_dump_json(dict(change))),
+                        _jsonb(_dump_json(dict(command))),
+                        _jsonb(_dump_json(dict(metrics))),
+                        _jsonb(_dump_json(dict(result))),
+                        decision,
+                        _jsonb(_dump_json(dict(diff_ref))),
+                        created_at,
+                    ),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return _task_experiment_from_row(row)
+
+    def list_experiments(self, task_run_id: str) -> list[TaskExperimentRecord]:
+        _validate_uuid("task_run_id", task_run_id)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, task_run_id, step_id, hypothesis, change, command,
+                       metrics, result, decision, diff_ref, created_at
+                FROM {self._schema}.task_experiments
+                WHERE task_run_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (task_run_id,),
+            )
+            rows = cur.fetchall()
+        return [_task_experiment_from_row(row) for row in rows]
+
+    def list_experiments_for_step(self, step_id: str) -> list[TaskExperimentRecord]:
+        _validate_uuid("step_id", step_id)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, task_run_id, step_id, hypothesis, change, command,
+                       metrics, result, decision, diff_ref, created_at
+                FROM {self._schema}.task_experiments
+                WHERE step_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (step_id,),
+            )
+            rows = cur.fetchall()
+        return [_task_experiment_from_row(row) for row in rows]
+
     def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
         with self._conn.cursor() as cur:
             cur.execute(
@@ -642,12 +728,29 @@ def _task_permission_decision_from_row(row: Any) -> TaskPermissionDecisionRecord
     )
 
 
+def _task_experiment_from_row(row: Any) -> TaskExperimentRecord:
+    return TaskExperimentRecord(
+        id=str(row[0]),
+        task_run_id=str(row[1]),
+        step_id=str(row[2]),
+        hypothesis=row[3],
+        change=dict(row[4] or {}),
+        command=dict(row[5] or {}),
+        metrics=dict(row[6] or {}),
+        result=dict(row[7] or {}),
+        decision=row[8],
+        diff_ref=dict(row[9] or {}),
+        created_at=_iso(row[10]),
+    )
+
+
 __all__ = [
     "PostgresTaskRunRepository",
     "TASKRUN_STATUSES",
     "TASKSTEP_STATUSES",
     "TERMINAL_TASKRUN_STATUSES",
     "TaskEventRecord",
+    "TaskExperimentRecord",
     "TaskPermissionDecisionRecord",
     "TaskRunCreateRequest",
     "TaskRunRecord",

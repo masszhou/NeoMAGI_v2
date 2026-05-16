@@ -24,6 +24,7 @@ from policy.permission_profiles import build_permission_profile_snapshot
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
+    TaskExperimentRecord,
     TaskPermissionDecisionRecord,
     TaskRunCreateRequest,
     TaskRunRecord,
@@ -37,6 +38,7 @@ class _FakeTaskRunRepository:
         self.events: list[TaskEventRecord] = []
         self.steps: list[TaskStepRecord] = []
         self.permission_decisions: list[TaskPermissionDecisionRecord] = []
+        self.experiments: list[TaskExperimentRecord] = []
         self._counter = 1
 
     def create_task_run(self, request: TaskRunCreateRequest) -> TaskRunRecord:
@@ -370,6 +372,57 @@ class _FakeTaskRunRepository:
                 if decision.task_run_id == task_run_id
             ],
             key=lambda decision: (decision.occurred_at, decision.id),
+        )
+
+    def append_experiment(
+        self,
+        *,
+        task_run_id: str,
+        step_id: str,
+        hypothesis: str,
+        change: Mapping[str, Any],
+        command: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        result: Mapping[str, Any],
+        decision: str,
+        diff_ref: Mapping[str, Any],
+        created_at: str | None = None,
+        experiment_id: str | None = None,
+    ) -> TaskExperimentRecord:
+        experiment = TaskExperimentRecord(
+            id=experiment_id or self._next_uuid(),
+            task_run_id=task_run_id,
+            step_id=step_id,
+            hypothesis=hypothesis,
+            change=dict(change),
+            command=dict(command),
+            metrics=dict(metrics),
+            result=dict(result),
+            decision=decision,
+            diff_ref=dict(diff_ref),
+            created_at=created_at or "2026-05-13T00:00:00+00:00",
+        )
+        self.experiments.append(experiment)
+        return experiment
+
+    def list_experiments(self, task_run_id: str) -> list[TaskExperimentRecord]:
+        return sorted(
+            [
+                experiment
+                for experiment in self.experiments
+                if experiment.task_run_id == task_run_id
+            ],
+            key=lambda experiment: (experiment.created_at, experiment.id),
+        )
+
+    def list_experiments_for_step(self, step_id: str) -> list[TaskExperimentRecord]:
+        return sorted(
+            [
+                experiment
+                for experiment in self.experiments
+                if experiment.step_id == step_id
+            ],
+            key=lambda experiment: (experiment.created_at, experiment.id),
         )
 
     def list_steps(self, task_run_id: str) -> list[TaskStepRecord]:
