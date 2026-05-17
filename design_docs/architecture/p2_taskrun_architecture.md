@@ -659,7 +659,8 @@ Boundary:
 
 - `AgentSession` (P1) continues to own session truth, compaction, cache affinity.
 - `TaskRunAgentSession` owns TaskRun step lifecycle, semantic event translation, evidence ledger, policy hook injection.
-- `TaskRunService` does NOT hold `Agent` directly. It holds zero or one `TaskRunAgentSession` per active TaskRun.
+- `TaskRunService` does NOT hold `Agent` or `TaskRunAgentSession` directly. It orchestrates step lifecycle via the `TaskRunStepRunner` Protocol (`packages/magipi/src/cli/core/taskrun_step.py`).
+- `TaskRunHeadlessRunner` (the `TaskRunStepRunner` implementation in `packages/magipi/src/cli/core/taskrun_runner.py`) creates and owns one `TaskRunAgentSession` per step; runtime ownership stays at the runner layer, not the service layer.
 - Future P3 Gateway consumes TaskRun projection (read model). It does NOT consume `TaskRunAgentSession` events directly.
 
 ### D14. Compaction / Auto-Retry Production in Headless Path
