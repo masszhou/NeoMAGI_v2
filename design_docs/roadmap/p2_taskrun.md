@@ -659,7 +659,36 @@ TaskRun summary 用确定性字段保留 current best / last attempt / next acti
 keep/revert 不会删除 TaskRun ledger
 ```
 
-### Milestone 7: P3 Gateway Readiness
+### Milestone 7: White-Box Runtime
+
+目标：让 TaskRun 把 in-process agent loop 的白盒事件转化为任务质量信号，不再只读取最终回答。
+
+依赖：`design_docs/roadmap/p2_taskrun_whitebox_runtime_supplement.md` 与 `design_docs/architecture/p2_taskrun_architecture.md` 待办 amendments D10-D15 必须先 accept；M7 是它们的实现里程碑。
+
+用户能力：
+
+```text
+TaskRun step 不再只依赖模型自述判断完成
+工具是否真的运行、是否成功有可查询证据
+权限决策在 tool body 执行前可见可审计
+中断/恢复后下一步建议基于真实过程事实
+长 step 中的 compaction / auto-retry 不再隐形
+```
+
+验收标准：
+
+```text
+task_events 存 TaskRun-owned 派生事件（D10）
+PermissionProfile resolver 已从 wrapper 迁到 before_tool_call hook（D11）
+task_steps.output.verification_state 在 step finalize 时算出（D12）
+TaskRunAgentSession adapter 替代 taskrun_runner 直接持 Agent（D13）
+compaction / auto_retry 在 headless 路径有显式生产者（D14）
+tool_execution_update 在工具执行期间实时可见，不再 buffered 后批量补发（D15）；
+  测试覆盖：≥3 秒持续输出的工具其中间事件在执行中可被订阅者接收
+最小可验收反例（supplement R4）由测试覆盖
+```
+
+### Milestone 8: P3 Gateway Readiness
 
 目标：P2 不实现 Gateway，但 TaskRun core 要为 P3 保留可从真实用法中抽取的内部 service seam。
 
@@ -753,7 +782,13 @@ Gateway 后续抽取点明确，但不依赖 Gateway
 如果用户选择 full permission，所有 tool confirm 是否都被 PermissionProfile resolver 自动解析为 allow/block/fail，并写入 audit/task event，而不是进入 TUI confirm 或等待用户输入？
 ```
 
-如果这两个问题答案都是肯定的，P2 就达到了核心目标。
+以及：
+
+```text
+当 TaskRun step 已经收敛，用户能否仅凭过程事实（不依赖模型自述）判断 step 完成是否可信、当前 blocker 是什么、下一步建议是什么？也就是说：声称做完了但没有证据的 step，能否在 status / summary / next 视图中被自动标识为不可信？
+```
+
+如果这三个问题答案都是肯定的，P2 就达到了核心目标。
 
 ## 7. P2 的一句话定位
 

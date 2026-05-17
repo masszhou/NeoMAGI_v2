@@ -458,6 +458,277 @@ set_permission_profile
 
 These are implementation seams, not a stable Gateway contract. P3 will define public host APIs after TaskRun behavior is proven through CLI usage and tests.
 
+## Amendments (accepted 2026-05-17)
+
+These amendments extend D1-D9 with white-box runtime contracts; they were jointly accepted with `design_docs/roadmap/p2_taskrun_whitebox_runtime_supplement.md` and ADR-0023 on 2026-05-17. Subsequent edits to D10-D15 follow the same governance as D1-D9.
+
+### D10. TaskRun Semantic Event Taxonomy
+Decision: define the **additions** to `task_events.event_type` for TaskRun-owned white-box semantic events. Raw `AgentEvent` and session-level frames are NOT written directly to `task_events`; they remain in session jsonl, audit tables, and `agent_tool_executions`.
+
+**Two-tier model (binding for the amendment)**:
+
+```text
+Tier 1 — task_events truth (every event written here, no exception):
+  all existing task_run_* / task_step_* / task_experiment_* events
+  + all new white-box semantic events listed below
+
+Tier 2 — KEY_HISTORY_EVENT_TYPES (curated subset for `taskrun history` view):
+  step-summary signals enter Tier 2
+  high-frequency tool-level / runtime-level events default to Tier 1 only,
+    not Tier 2 (avoids polluting history view with one row per tool call)
+```
+
+Rationale: `taskrun history` is summary-grade. Promoting `task_tool_observed` (one row per tool call; a step with 50 bash calls would emit 50 rows) into Tier 2 would defeat R2's "no log noise" requirement. Full trace remains queryable via `taskrun events <id>` from Tier 1.
+
+**Existing Tier 2 closed set (NOT renamed, NOT extended for non-summary events)**:
+
+```text
+task_run_started / task_run_blocked_stale / task_run_closed /
+task_run_permission_profile_updated /
+task_run_auto_run_started / task_run_auto_run_iteration_finished /
+task_run_auto_run_stopped / task_run_auto_run_cancelled
+task_step_started / task_step_completed / task_step_failed /
+task_step_blocked / task_step_cancelled
+task_experiment_baseline_recorded / task_experiment_trial_recorded /
+task_experiment_decided / task_experiment_reverted /
+task_experiment_blocked
+```
+
+**Additions**:
+
+```text
+Step-summary scope — Tier 1 truth + Tier 2 KEY_HISTORY:
+  task_step_evidence_recorded         explicit success evidence
+  task_step_evidence_missing          claim has no supporting evidence
+  task_step_blocker_detected          explicit blocker reason
+  task_step_outcome_supported         final claim has matching evidence
+  task_step_outcome_unsupported       final claim lacks matching evidence
+  task_step_resume_context_generated  rehydration summary regenerated
+
+Tool-detail scope — Tier 1 truth only (NOT in KEY_HISTORY):
+  task_tool_observed                  derived from tool_execution_end
+  task_tool_policy_resolved           derived from before_tool_call resolver
+  task_tool_policy_blocked            denied path
+
+TaskRun-runtime scope — Tier 1 truth only (NOT in KEY_HISTORY; produced only after D14):
+  task_runtime_compaction_observed    derived from session compaction
+  task_runtime_auto_retry_observed    derived from session auto-retry
+```
+
+**Promotion rule**: a tool-detail event MAY be reduced to a step-summary event by step finalize, and that derived summary event enters Tier 2. Example: a `task_tool_observed` with `is_error=true` for a test runner is reduced to `task_step_evidence_missing` (Tier 2); the original `task_tool_observed` stays in Tier 1. No tool-detail or runtime event is itself added to KEY_HISTORY.
+
+**Versioning**: per-event-type `payload_version`, not a single global `schema_version`. Event families evolve independently; migration is per `event_type`.
+
+**Linking**: every derived event carries one or more of `run_id`, `tool_call_id`, `tool_execution_id`, `session_entry_id` pointing to underlying truth.
+
+**Backward compatibility**: existing `task_step_started/completed/failed/blocked/cancelled` are NOT replaced; D12 lifecycle judgments continue to set these. New `task_step_evidence_*` / `task_step_outcome_*` are **complementary signals** written by step finalize alongside the lifecycle status.
+
+**Out of scope for D10**: token-delta / reasoning-stream / message-update events. These remain in session truth, not TaskRun truth.
+
+### D11. Policy Hook Ordering and Resolver Migration
+Decision: precise ordering of policy resolution relative to `agent_core` tool execution lifecycle, plus wrapper-to-hook migration plan.
+
+Current state (verified 2026-05-17):
+
+- `packages/magipi/src/agent_core/tool_executor.py:101, 131` emit `tool_execution_start` BEFORE `prepare_tool_call()` runs `before_tool_call`. Policy decision currently cannot precede `tool_execution_start` without core changes.
+- `packages/magipi/src/cli/tools/wrapper.py:142` runs `_resolve_policy_decision` inside the wrapper; `:165` `_finalize_governed_execution` writes both `task_permission_decisions` and audit in a `finally` block.
+
+**Decision**: option C — keep the current `agent_core` event order (`tool_execution_start` fires before `before_tool_call` runs). R6 is redefined as "policy resolved before tool body `execute()`", not "before `tool_execution_start`". No `agent_core` core change.
+
+**Binding design principle (P2)**: `agent_core` stays strict pi-mono protocol parity. Formalized in ADR-0023; see `design_docs/decisions/0023-agent-core-pi-mono-protocol-parity.md` for full rationale, governance, and impact on D11/D13/D14/D15. Operational consequence for D11: policy observability is provided at the TaskRun layer through D10 derived events (`task_tool_policy_resolved` / `task_tool_policy_blocked`), correlated to raw `tool_execution_start` / `tool_execution_end` via `tool_call_id`. Consumers needing "tool actually ran" semantics correlate the derived events with `tool_execution_end.isError`.
+
+Selected because: option A breaks shipped event semantics in `agent_core` (downstream consumers expect current order); option B forks pi-mono protocol (NeoMAGI agent_core would diverge from pi-mono, breaking the alignment principle and creating long-term maintenance debt). Option C accepts the constraint that `tool_execution_start` alone is not a "tool will actually run" signal — consumers must correlate.
+
+Considered alternatives (rejected):
+
+```text
+A. Reorder agent_core: move tool_execution_start emission AFTER before_tool_call
+   resolves. Rejected: changes shipped event semantic; breaks pi-mono parity.
+
+B. Add a new pre-event in agent_core: tool_call_proposed (emitted at start of
+   prepare_tool_call, before before_tool_call). Rejected: forks pi-mono
+   protocol; conflicts with the P2 design principle that agent_core stays
+   strictly aligned with pi-mono.
+```
+
+Wrapper migration (regardless of ordering choice):
+
+- Wrapper stops calling `_resolve_policy_decision`. Resolver moves to the `before_tool_call` hook supplied by `TaskRunAgentSession` (D13).
+- Wrapper still finalizes audit, but takes `raw_decision` / `resolved_decision` from runtime instead of computing them.
+- Wrapper does not write `task_permission_decisions`. The hook does, before the tool body runs.
+- Hook block path emits `task_tool_policy_blocked` synchronously (D10 naming). `_StepEventCollector` stops reading `result.details.policyDecision`; it reads derived `task_tool_policy_blocked` events instead.
+
+**Mechanism: PolicyResolutionStore** (hook → wrapper data flow):
+
+```python
+# Per-TaskRun-step lifetime; lives on ToolRuntime (or equivalent context).
+class PolicyResolutionStore:
+    def put(tool_call_id: str, raw: PolicyDecision,
+            resolved: PolicyDecision, profile: dict) -> None: ...
+    def consume(tool_call_id: str) -> ResolvedPolicy | None: ...
+        # Read-and-remove. None means hook did not pre-resolve for this call.
+```
+
+Flow:
+
+```text
+1. before_tool_call hook (TaskRun mode):
+     raw      = policy.evaluate(request)
+     resolved = profile_resolver.resolve(raw, task_run.permission_profile)
+     task_permission_decisions.append(raw, resolved)
+     audit.write_partial(raw, resolved)         # pre-execution audit row
+     runtime.policy_resolution_store.put(tool_call_id, raw, resolved, profile)
+     if resolved.effect == "block":
+         task_events.append(task_tool_policy_blocked, ...)
+         return {block: True, reason: ...}
+     task_events.append(task_tool_policy_resolved, ...)  # allow path
+     return None                                # allow execution
+
+2. wrapper._resolve_policy_decision (cli/tools/wrapper.py:142 entry):
+     pre = runtime.policy_resolution_store.consume(tool_call_id)
+     if pre is not None:
+         return pre                             # hook pre-resolved; skip wrapper resolver
+     return _legacy_resolve(request)            # non-TaskRun mode or legacy call site
+
+3. wrapper._finalize_governed_execution (cli/tools/wrapper.py:165 finally):
+     if pre was consumed by step 2:
+         audit.finalize(pre.raw, pre.resolved, tool_result)
+         # task_permission_decisions NOT re-written (hook already wrote)
+     else:
+         audit.finalize(raw, resolved, tool_result)
+         task_permission_decisions.append(raw, resolved)   # legacy path
+```
+
+**Hook ↔ `tool_execution_start` ordering** (interaction with D13 listener queue):
+
+D13's listener queue means `tool_execution_start` may not have been processed into an `agent_tool_executions` row by the time the `before_tool_call` hook fires. The current recorder (`packages/magipi/src/cli/core/taskrun_runner.py:181`) looks up `tool_execution_id` by `tool_call_id` and raises if not found — under D13 this would race-fail every step. To avoid this without adding a synchronous barrier in `agent_core` (forbidden by ADR-0023):
+
+- Hook writes `task_permission_decisions` keyed by `tool_call_id` and `task_run_id`; `tool_execution_id` is left NULL (the column already allows NULL per § D1).
+- The listener queue consumer, when processing `tool_execution_start` and creating the corresponding `agent_tool_executions` row, back-fills pending `task_permission_decisions` rows matching `tool_call_id` where `tool_execution_id IS NULL`.
+- This preserves ADR-0023 (no synchronous barrier added to `agent_core`) and keeps `tool_call_id` as the primary correlation key.
+- Step finalize MUST verify all `task_permission_decisions` for the step are back-filled (no `tool_execution_id IS NULL` rows remain) before lifecycle status converges; failure fails the step closed.
+
+Backwards compatibility: existing call sites that pass `taskrun_permission_context` to the wrapper without a `before_tool_call` hook continue to work — `policy_resolution_store.consume` returns `None` and the wrapper falls back to its current resolver. Migration is per call site, not global. P2-M7 acceptance requires TaskRun call sites to use the hook path; non-TaskRun (e.g., interactive mode) call sites may continue on the legacy path until separately migrated.
+
+### D12. Evidence Ledger and Verification State
+Decision: where TaskRun stores its claim-vs-evidence consistency signal and how it interacts with `task_steps.status`.
+
+Position:
+
+- `task_steps.status` is NOT extended. Existing lifecycle values (`pending / running / done / failed / blocked / cancelled`) remain authoritative.
+- New field `task_steps.output.verification_state` carries the quality signal:
+
+```text
+supported           claim has matching tool_observed / evidence_recorded
+missing_evidence    claim has no supporting evidence
+inconsistent        claim contradicts observed events
+abandoned           last assistant turn ended in tool-call stop without completion
+error               terminal assistant error
+```
+
+- Consistency is computed at step finalize (runner side), not at query time.
+- `verification_state ∈ {missing_evidence, inconsistent, abandoned}` MUST drive `task_steps.status` to `blocked` or `failed`. Lifecycle status remains the source of truth for "is this step done"; `verification_state` answers "why".
+- Status views display both fields together; no inferences are re-computed on read.
+
+Out of scope for D12: subjective quality metrics (e.g., "code quality score"). Only structural claim-vs-evidence consistency.
+
+### D13. TaskRunAgentSession Adapter Lifecycle
+Decision: introduce a TaskRun-owned adapter that holds the white-box runtime, replacing the current direct `Agent` ownership in `cli/core/taskrun_runner.py`.
+
+Shape:
+
+```text
+TaskRunAgentSession holds:
+  agent: Agent                              in-process agent
+  event_queue: asyncio.Queue                listener enqueues; consumer dequeues
+  event_consumer: asyncio.Task              processes events sequentially
+  abort_signal: asyncio.Event               propagates to agent.abort()
+  event_translator: SemanticEventTranslator raw AgentEvent → TaskRun semantic events
+  collector: StepEventCollector             consumes semantic events
+  session_writer: DurableSessionEventWriter session jsonl
+  heartbeat: HeartbeatUpdater               updates task_runs.heartbeat_at
+```
+
+Lifecycle:
+
+- Cancel: `agent.abort()` + emit `step_cancelled` or `step_blocked` semantic event; consumer drains queue.
+- Resume: a new `TaskRunAgentSession` is constructed for the next step from Postgres summary + durable `AgentSession`. **In-memory agent state is NOT restored across step boundaries**; each step gets a fresh agent loaded with rehydrated context.
+- Listener consumer pattern: `subscribe` handler only enqueues; the consumer awaits events sequentially. Handler-internal `await` cannot cause event reorder.
+
+Boundary:
+
+- `AgentSession` (P1) continues to own session truth, compaction, cache affinity.
+- `TaskRunAgentSession` owns TaskRun step lifecycle, semantic event translation, evidence ledger, policy hook injection.
+- `TaskRunService` does NOT hold `Agent` directly. It holds zero or one `TaskRunAgentSession` per active TaskRun.
+- Future P3 Gateway consumes TaskRun projection (read model). It does NOT consume `TaskRunAgentSession` events directly.
+
+### D14. Compaction / Auto-Retry Production in Headless Path
+Decision: how `compaction_*` and `auto_retry_*` events become observable in the TaskRun headless runner. Currently they are produced only via `cli/interactive/compaction_runtime.py:77` `CompactionRuntimeMixin`, which `cli/core/taskrun_runner.py` does not use.
+
+Options:
+
+```text
+A. Push compaction / auto-retry event emission down into agent_core so all
+   consumers (interactive + headless) produce them natively. Cleanest, but
+   requires agent_core to know about compaction at all (it currently does not).
+
+B. Define a HeadlessCompactionAdapter mirroring CompactionRuntimeMixin and
+   require TaskRunAgentSession (D13) to install it.
+
+C. Refactor CompactionRuntimeMixin so its event-emitting core is reusable
+   independent of interactive context; TaskRunAgentSession then wires the
+   same core.
+```
+
+**Decision**: option C — refactor `CompactionRuntimeMixin` so its event-emitting core is reusable independent of interactive context; `TaskRunAgentSession` wires the same core. Selected because option A elevates compaction from a session-runtime concern to an agent-core concern (too broad), and option B duplicates code paths.
+
+Until D14 is accepted: the supplement's R2 list keeps `compaction_*` / `auto_retry_*` as expectations; TaskRun M7 verification does NOT require these events to appear pre-accept. Once D14 is accepted, real-time visibility of these events in the headless TaskRun path becomes part of M7 acceptance (see § P2-M7).
+
+### D15. Tool Execution Progress Event Timing
+Decision: `agent_core` must emit `tool_execution_update` events **during** tool body execution, not buffered until the tool returns.
+
+Current state (verified 2026-05-17):
+
+- `packages/magipi/src/agent_core/tool_executor.py:275-299` defines `on_update` as a sync callback that only appends `partial_result` to a local list.
+- `tool_executor.py:170-191` and `:194-226` emit buffered `tool_execution_update` events AFTER `tool.execute(...)` returns; no events fire during tool body execution.
+- pi-mono equivalent (`packages/agent/src/agent-loop.ts:558-575`) emits inline within the `onUpdate` callback, so subscribers see partial results in real-time as the tool runs.
+
+Required behavior:
+
+- A long-running tool (e.g., 5-minute `bash` / `pytest` / benchmark) must produce `tool_execution_update` events observable by subscribers **during** execution, not retroactively after the tool returns.
+- The fix lives in `agent_core/tool_executor.py`; downstream consumers (`_StepEventCollector`, the proposed `task_runtime_*` events under D10) inherit real-time visibility once the producer is fixed.
+
+Implementation options (subject to plan-level decision):
+
+```text
+A. on_update bridge schedules asyncio.create_task(emit(...)) inside the
+   sync callback. Tool code stays sync. Risk: unhandled task exceptions,
+   loss of ordering guarantee between concurrent tool calls.
+
+B. Change on_update signature to async/Awaitable; tool code awaits emit
+   directly. Risk: existing sync tool implementations break; signature
+   change is intrusive across all tools.
+
+C. Insert an asyncio.Queue between tool and emitter. Producer (sync
+   on_update callback) puts partial results; a dedicated consumer task
+   drains the queue and emits in FIFO order. Preserves sync tool API,
+   guarantees ordering, and shares its consumer-task pattern with the
+   listener queue proposed in D13.
+```
+
+**Decision**: option C — insert an `asyncio.Queue` between tool and emitter; the sync `on_update` callback puts partial results onto the queue, a dedicated consumer task drains and emits in FIFO order. Selected because option A loses ordering guarantees when concurrent tool calls race their `create_task` schedules, and option B requires breaking the existing sync `on_update` callback API across every tool implementation. The chosen mechanism reuses the same `asyncio.Queue` + consumer-task pattern proposed in D13 for the listener side.
+
+**Yielding requirement**: the `asyncio.Queue` only delivers real-time emission when the tool body itself yields control to the event loop (via `await` or by running blocking work in an executor). A CPU-bound synchronous tool that never yields will block the event loop, the consumer task cannot drain mid-execution, and updates will batch back to exactly the post-return behavior D15 is fixing.
+
+Long-running tool implementations MUST EITHER:
+
+- be `async` and explicitly yield between progress updates (e.g., `await asyncio.sleep(0)` after `on_update(...)`, or perform `await`-ing I/O); OR
+- offload the blocking work via `asyncio.to_thread(...)` / `loop.run_in_executor(...)`, keeping the event loop free to drain the consumer queue.
+
+M7 acceptance test covers the happy path: a long-running async tool (≥3 seconds) with periodic `on_update` calls; subscriber receives `tool_execution_update` events before the tool returns its final result. A negative test SHOULD assert that a deliberately-blocking sync tool fails the same assertion, documenting that yielding is the tool's responsibility (the queue's promise is ordering and decoupling, not magic real-time delivery from a blocked loop).
+
+Scope note: this is an `agent_core` correctness item, not a TaskRun-layer amendment. It is included in the P2 amendments set because supplement R2 ("process events as task semantics") and D10 (`task_tool_*` taxonomy) both implicitly assume real-time visibility; without D15 the upstream producer cannot satisfy either. The fix is independent of D10-D14 and may land first; once D15 is accepted, real-time `tool_execution_update` visibility becomes part of M7 acceptance (see § P2-M7).
+
 ## Milestone Architecture Mapping
 
 ### P2-M0 Architecture Contract
@@ -530,7 +801,20 @@ Acceptance:
 - keep/revert is explainable and policy-governed;
 - ledger survives revert/cleanup.
 
-### P2-M7 P3 Readiness
+### P2-M7 White-Box Runtime
+
+Acceptance:
+
+- amendments D10-D15 accepted;
+- TaskRun semantic event taxonomy (D10) implemented; `task_events` no longer stores raw `AgentEvent`;
+- PermissionProfile resolver migrated to `before_tool_call` (D11); wrapper no longer double-evaluates;
+- `task_steps.output.verification_state` produced at step finalize (D12);
+- `TaskRunAgentSession` adapter replaces direct `Agent` ownership in `taskrun_runner.py` (D13);
+- compaction / auto-retry events visible in headless TaskRun runner (D14);
+- `tool_execution_update` emitted in real-time during tool execution (D15); test covers a ≥3-second long-running tool whose `on_update` callbacks become observable mid-execution;
+- supplement R4 reverse-example covered by a test.
+
+### P2-M8 P3 Readiness
 
 Acceptance:
 
