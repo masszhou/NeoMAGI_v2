@@ -167,6 +167,40 @@ def detect_claims(assistant_text: str) -> dict[str, bool]:
     }
 
 
+def _result(
+    *,
+    state: str,
+    reason: str | None,
+    claims: dict[str, bool] | None = None,
+    missing_kinds: list[str] | None = None,
+    inconsistent_kinds: list[str] | None = None,
+) -> VerificationResult:
+    return VerificationResult(
+        state=state,
+        reason=reason,
+        claims=claims or {},
+        missing_kinds=missing_kinds or [],
+        inconsistent_kinds=inconsistent_kinds or [],
+    )
+
+
+def _claim_gaps(
+    claims: dict[str, bool],
+    observations: Sequence[EvidenceObservation],
+) -> tuple[list[str], list[str]]:
+    missing: list[str] = []
+    inconsistent: list[str] = []
+    for kind, claimed in claims.items():
+        if not claimed:
+            continue
+        relevant = [obs for obs in observations if obs.evidence_kind == kind]
+        if not relevant:
+            missing.append(kind)
+        elif all(obs.is_error for obs in relevant):
+            inconsistent.append(kind)
+    return missing, inconsistent
+
+
 def infer_verification_state(
     *,
     assistant_text: str,
@@ -190,37 +224,21 @@ def infer_verification_state(
     """
 
     if error_message:
-        return VerificationResult(
+        return _result(
             state=VERIFICATION_ERROR,
             reason=error_message,
-            claims={},
-            missing_kinds=[],
-            inconsistent_kinds=[],
         )
     if assistant_stop_reason == "tool_call":
-        return VerificationResult(
+        return _result(
             state=VERIFICATION_ABANDONED,
             reason="assistant ended turn awaiting tool result",
-            claims={},
-            missing_kinds=[],
-            inconsistent_kinds=[],
         )
 
     claims = detect_claims(assistant_text)
-    missing: list[str] = []
-    inconsistent: list[str] = []
-    for kind, claimed in claims.items():
-        if not claimed:
-            continue
-        relevant = [obs for obs in observations if obs.evidence_kind == kind]
-        if not relevant:
-            missing.append(kind)
-            continue
-        if all(obs.is_error for obs in relevant):
-            inconsistent.append(kind)
+    missing, inconsistent = _claim_gaps(claims, observations)
 
     if missing:
-        return VerificationResult(
+        return _result(
             state=VERIFICATION_MISSING_EVIDENCE,
             reason=f"claim mentions {missing[0]} but no successful evidence found",
             claims=claims,
@@ -228,19 +246,17 @@ def infer_verification_state(
             inconsistent_kinds=inconsistent,
         )
     if inconsistent:
-        return VerificationResult(
+        return _result(
             state=VERIFICATION_INCONSISTENT,
             reason=f"claim mentions {inconsistent[0]} but all matching tool runs reported errors",
             claims=claims,
             missing_kinds=missing,
             inconsistent_kinds=inconsistent,
         )
-    return VerificationResult(
+    return _result(
         state=VERIFICATION_SUPPORTED,
         reason=None,
         claims=claims,
-        missing_kinds=[],
-        inconsistent_kinds=[],
     )
 
 

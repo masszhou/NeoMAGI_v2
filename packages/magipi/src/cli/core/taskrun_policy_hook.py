@@ -21,6 +21,7 @@ error sink and the step finalizes as ``failed``.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -59,6 +60,149 @@ def _profile_name(metadata: Mapping[str, Any] | None, fallback: Mapping[str, Any
     return str(fallback.get("name", "unknown"))
 
 
+def _policy_request(
+    context: BeforeToolCallContext,
+    *,
+    cwd: str,
+    runtime_session_id: str,
+    run_id_provider: Callable[[], str | None],
+) -> tuple[str, PolicyRequest]:
+    tool_call = context.tool_call if isinstance(context.tool_call, Mapping) else {}
+    tool_call_id = str(tool_call.get("id") or tool_call.get("toolCallId") or "")
+    tool_name = str(tool_call.get("name") or tool_call.get("toolName") or "")
+    args = context.args if isinstance(context.args, dict) else {}
+    return tool_call_id, PolicyRequest(
+        runtimeSessionId=runtime_session_id,
+        runId=run_id_provider(),
+        toolName=tool_name,
+        args=args,
+        cwd=cwd,
+        actor="model",
+        source={
+            "tool_call_id": tool_call_id,
+            "input_origin": "model",
+            "actor_role": "model",
+        },
+    )
+
+
+def _raw_policy_decision(request: PolicyRequest) -> PolicyDecision:
+    raw_decision = default_policy_decider(request)
+    if isinstance(raw_decision, PolicyDecision):
+        return raw_decision
+    return PolicyDecision.model_validate(raw_decision)
+
+
+@dataclass(slots=True)
+class _BeforeToolCallHook:
+    task_repository: TaskRunRepository
+    task_run_id: str
+    step_id: str
+    permission_profile: Mapping[str, Any]
+    budget: Mapping[str, Any] | None
+    budget_state: PermissionBudgetState
+    policy_resolution_store: PolicyResolutionStore
+    cwd: str
+    runtime_session_id: str
+    run_id_provider: Callable[[], str | None]
+    resolver: PermissionProfileResolver
+
+    async def __call__(
+        self,
+        context: BeforeToolCallContext,
+        _signal: AbortSignal | None,
+    ) -> BeforeToolCallResult | None:
+        tool_call_id, request = _policy_request(
+            context,
+            cwd=self.cwd,
+            runtime_session_id=self.runtime_session_id,
+            run_id_provider=self.run_id_provider,
+        )
+        resolution = self.resolver.resolve(
+            request,
+            _raw_policy_decision(request),
+            self.permission_profile,
+            ui_available=False,
+            budget=self.budget,
+            budget_state=self.budget_state,
+        )
+        occurred_at = _utc_now_iso()
+        profile_name = _profile_name(resolution.metadata, self.permission_profile)
+        self._append_decision(request, resolution, profile_name, occurred_at)
+        if resolution.resolved_decision.effect == "block":
+            return self._block(tool_call_id, resolution, profile_name, occurred_at)
+        self._allow(tool_call_id, resolution, profile_name, occurred_at)
+        return None
+
+    def _append_decision(
+        self,
+        request: PolicyRequest,
+        resolution: Any,
+        profile_name: str,
+        occurred_at: str,
+    ) -> None:
+        self.task_repository.append_permission_decision(
+            task_run_id=self.task_run_id,
+            step_id=self.step_id,
+            tool_execution_id=None,
+            policy_request=request.model_dump(by_alias=True, exclude_none=True),
+            raw_decision=resolution.raw_decision.model_dump(by_alias=True, exclude_none=True),
+            resolved_decision=resolution.resolved_decision.model_dump(by_alias=True, exclude_none=True),
+            profile_name=profile_name,
+            occurred_at=occurred_at,
+        )
+
+    def _block(
+        self,
+        tool_call_id: str,
+        resolution: Any,
+        profile_name: str,
+        occurred_at: str,
+    ) -> BeforeToolCallResult:
+        reason = resolution.resolved_decision.reason
+        block_text = reason or "tool execution blocked by policy"
+        self.policy_resolution_store.record_block(tool_call_id, block_text)
+        self.task_repository.append_event(
+            task_run_id=self.task_run_id,
+            step_id=self.step_id,
+            event_type=TASK_TOOL_POLICY_BLOCKED,
+            payload=build_tool_policy_blocked_payload(
+                tool_call_id=tool_call_id,
+                permission_profile_name=profile_name,
+                effect=resolution.resolved_decision.effect,
+                reason=reason,
+            ),
+            occurred_at=occurred_at,
+        )
+        return BeforeToolCallResult(block=True, reason=block_text)
+
+    def _allow(
+        self,
+        tool_call_id: str,
+        resolution: Any,
+        profile_name: str,
+        occurred_at: str,
+    ) -> None:
+        self.policy_resolution_store.put(
+            tool_call_id,
+            raw=resolution.raw_decision,
+            resolved=resolution.resolved_decision,
+            permission_profile=resolution.metadata,
+        )
+        self.task_repository.append_event(
+            task_run_id=self.task_run_id,
+            step_id=self.step_id,
+            event_type=TASK_TOOL_POLICY_RESOLVED,
+            payload=build_tool_policy_resolved_payload(
+                tool_call_id=tool_call_id,
+                permission_profile_name=profile_name,
+                effect=resolution.resolved_decision.effect,
+                reason=resolution.resolved_decision.reason,
+            ),
+            occurred_at=occurred_at,
+        )
+
+
 def build_before_tool_call_hook(
     *,
     task_repository: TaskRunRepository,
@@ -73,102 +217,19 @@ def build_before_tool_call_hook(
     runtime_session_id: str,
     run_id_provider: Callable[[], str | None],
 ) -> BeforeToolCallHook:
-    resolver = PermissionProfileResolver()
-
-    async def hook(
-        context: BeforeToolCallContext,
-        _signal: AbortSignal | None,
-    ) -> BeforeToolCallResult | None:
-        tool_call = context.tool_call if isinstance(context.tool_call, Mapping) else {}
-        tool_call_id = str(tool_call.get("id") or tool_call.get("toolCallId") or "")
-        tool_name = str(tool_call.get("name") or tool_call.get("toolName") or "")
-        args = context.args if isinstance(context.args, dict) else {}
-        request = PolicyRequest(
-            runtimeSessionId=runtime_session_id,
-            runId=run_id_provider(),
-            toolName=tool_name,
-            args=args,
-            cwd=cwd,
-            actor="model",
-            source={
-                "tool_call_id": tool_call_id,
-                "input_origin": "model",
-                "actor_role": "model",
-            },
-        )
-        raw_decision = default_policy_decider(request)
-        if not isinstance(raw_decision, PolicyDecision):
-            raw_decision = PolicyDecision.model_validate(raw_decision)
-        resolution = resolver.resolve(
-            request,
-            raw_decision,
-            permission_profile,
-            ui_available=False,
-            budget=budget,
-            budget_state=budget_state,
-        )
-        occurred_at = _utc_now_iso()
-        profile_name = _profile_name(resolution.metadata, permission_profile)
-        task_repository.append_permission_decision(
-            task_run_id=task_run_id,
-            step_id=step_id,
-            tool_execution_id=None,
-            policy_request=request.model_dump(by_alias=True, exclude_none=True),
-            raw_decision=resolution.raw_decision.model_dump(by_alias=True, exclude_none=True),
-            resolved_decision=resolution.resolved_decision.model_dump(by_alias=True, exclude_none=True),
-            profile_name=profile_name,
-            occurred_at=occurred_at,
-        )
-        effect = resolution.resolved_decision.effect
-        reason = resolution.resolved_decision.reason
-        if effect == "block":
-            block_text = reason or "tool execution blocked by policy"
-            # Side-channel the block reason so the session consumer can
-            # surface it on the matching ``tool_execution_end`` event —
-            # the agent_core error result for a hook block carries no
-            # ``policyDecision`` details (per ADR-0023 we don't extend
-            # the protocol surface to add them), so the collector relies
-            # on the store rather than ``result.details``. We deliberately
-            # do NOT call ``store.put`` on the block branch: the wrapper
-            # is short-circuited by ``_ImmediateToolCallOutcome`` and
-            # never reaches ``store.consume``, so a put() here would
-            # leak a stale entry that violates the store's
-            # read-and-remove contract.
-            policy_resolution_store.record_block(tool_call_id, block_text)
-            task_repository.append_event(
-                task_run_id=task_run_id,
-                step_id=step_id,
-                event_type=TASK_TOOL_POLICY_BLOCKED,
-                payload=build_tool_policy_blocked_payload(
-                    tool_call_id=tool_call_id,
-                    permission_profile_name=profile_name,
-                    effect=effect,
-                    reason=reason,
-                ),
-                occurred_at=occurred_at,
-            )
-            return BeforeToolCallResult(block=True, reason=block_text)
-        policy_resolution_store.put(
-            tool_call_id,
-            raw=resolution.raw_decision,
-            resolved=resolution.resolved_decision,
-            permission_profile=resolution.metadata,
-        )
-        task_repository.append_event(
-            task_run_id=task_run_id,
-            step_id=step_id,
-            event_type=TASK_TOOL_POLICY_RESOLVED,
-            payload=build_tool_policy_resolved_payload(
-                tool_call_id=tool_call_id,
-                permission_profile_name=profile_name,
-                effect=effect,
-                reason=reason,
-            ),
-            occurred_at=occurred_at,
-        )
-        return None
-
-    return hook
+    return _BeforeToolCallHook(
+        task_repository=task_repository,
+        task_run_id=task_run_id,
+        step_id=step_id,
+        permission_profile=permission_profile,
+        budget=budget,
+        budget_state=budget_state,
+        policy_resolution_store=policy_resolution_store,
+        cwd=cwd,
+        runtime_session_id=runtime_session_id,
+        run_id_provider=run_id_provider,
+        resolver=PermissionProfileResolver(),
+    )
 
 
 def build_back_fill_event_hook(
@@ -242,6 +303,70 @@ def _duration_from_result(result: Any) -> int | None:
     return None
 
 
+@dataclass(slots=True)
+class _EvidenceEventHook:
+    task_repository: TaskRunRepository
+    task_run_id: str
+    step_id: str
+    tool_call_state_lookup: Callable[[str], Any]
+    record_observation: Callable[[EvidenceObservation], None]
+
+    def __call__(self, event: Any) -> None:
+        if getattr(event, "type", "") != "tool_execution_end":
+            return
+        tool_call_id = _tool_execution_end_id(event)
+        state = self._state(tool_call_id)
+        is_error = bool(getattr(event, "is_error", False))
+        observation = _observation(tool_call_id, state, is_error, event)
+        self.record_observation(observation)
+        self.task_repository.append_event(
+            task_run_id=self.task_run_id,
+            step_id=self.step_id,
+            event_type=TASK_TOOL_OBSERVED,
+            payload=build_tool_observed_payload(
+                tool_call_id=tool_call_id,
+                tool_name=state.tool_name,
+                is_error=is_error,
+                evidence_kind=observation.evidence_kind,
+                tool_execution_id=state.tool_execution_id,
+                command_summary=observation.command_summary,
+                duration_ms=observation.duration_ms,
+            ),
+        )
+
+    def _state(self, tool_call_id: str) -> Any:
+        state = self.tool_call_state_lookup(tool_call_id)
+        if state is None:
+            raise RuntimeError(
+                "tool_call state missing on tool_execution_end "
+                f"for tool_call_id={tool_call_id}; lost start event"
+            )
+        return state
+
+
+def _tool_execution_end_id(event: Any) -> str:
+    tool_call_id = getattr(event, "tool_call_id", None)
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        raise RuntimeError("tool_execution_end without tool_call_id")
+    return tool_call_id
+
+
+def _observation(
+    tool_call_id: str,
+    state: Any,
+    is_error: bool,
+    event: Any,
+) -> EvidenceObservation:
+    return EvidenceObservation(
+        tool_call_id=tool_call_id,
+        tool_name=state.tool_name,
+        is_error=is_error,
+        evidence_kind=classify_tool_evidence(state.tool_name, state.args, is_error),
+        command_summary=summarize_command(state.args),
+        duration_ms=_duration_from_result(getattr(event, "result", None)),
+    )
+
+
 def build_evidence_event_hook(
     *,
     task_repository: TaskRunRepository,
@@ -260,49 +385,13 @@ def build_evidence_event_hook(
     the session marks the step ``failed`` rather than silently defaulting
     to ``generic`` evidence.
     """
-
-    def hook(event: Any) -> None:
-        if getattr(event, "type", "") != "tool_execution_end":
-            return
-        tool_call_id = getattr(event, "tool_call_id", None)
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            raise RuntimeError("tool_execution_end without tool_call_id")
-        state = tool_call_state_lookup(tool_call_id)
-        if state is None:
-            raise RuntimeError(
-                "tool_call state missing on tool_execution_end "
-                f"for tool_call_id={tool_call_id}; lost start event"
-            )
-        is_error = bool(getattr(event, "is_error", False))
-        evidence_kind = classify_tool_evidence(state.tool_name, state.args, is_error)
-        command_summary = summarize_command(state.args)
-        duration_ms = _duration_from_result(getattr(event, "result", None))
-        tool_execution_id = state.tool_execution_id
-        observation = EvidenceObservation(
-            tool_call_id=tool_call_id,
-            tool_name=state.tool_name,
-            is_error=is_error,
-            evidence_kind=evidence_kind,
-            command_summary=command_summary,
-            duration_ms=duration_ms,
-        )
-        record_observation(observation)
-        task_repository.append_event(
-            task_run_id=task_run_id,
-            step_id=step_id,
-            event_type=TASK_TOOL_OBSERVED,
-            payload=build_tool_observed_payload(
-                tool_call_id=tool_call_id,
-                tool_name=state.tool_name,
-                is_error=is_error,
-                evidence_kind=evidence_kind,
-                tool_execution_id=tool_execution_id,
-                command_summary=command_summary,
-                duration_ms=duration_ms,
-            ),
-        )
-
-    return hook
+    return _EvidenceEventHook(
+        task_repository=task_repository,
+        task_run_id=task_run_id,
+        step_id=step_id,
+        tool_call_state_lookup=tool_call_state_lookup,
+        record_observation=record_observation,
+    )
 
 
 def chain_event_hooks(*hooks: Callable[[Any], None]) -> Callable[[Any], None]:
