@@ -27,6 +27,7 @@ from policy.shell_policy import decide_shell_access
 from policy.types import PolicyActor, PolicyDecision, PolicyRequest
 
 from .definitions import SkillEnvGrant, ToolDefinition, ToolExecutionContext
+from .policy_resolution_store import PolicyResolutionStore
 
 PolicyDecider = Callable[[PolicyRequest], PolicyDecision | Awaitable[PolicyDecision]]
 TaskPermissionDecisionRecorder = Callable[..., None | Awaitable[None]]
@@ -42,6 +43,7 @@ class TaskRunPermissionContext:
     tool_execution_id: str | None = None
     ui_available: bool = False
     record_permission_decision: TaskPermissionDecisionRecorder | None = None
+    policy_resolution_store: PolicyResolutionStore | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +51,7 @@ class _ResolvedPolicy:
     raw: PolicyDecision
     resolved: PolicyDecision
     permission_profile: dict[str, Any] | None = None
+    pre_resolved: bool = False
 
 
 class ToolRuntime:
@@ -131,6 +134,7 @@ async def _execute_governed(
     permission_profile: dict[str, Any] | None = None
     result: AgentToolResult | None = None
     exception: Exception | None = None
+    pre_resolved = False
     try:
         validation_error = _validate_args(definition, args)
         if validation_error is not None:
@@ -139,10 +143,11 @@ async def _execute_governed(
             result = _with_common_details(result, decision, raw_decision, permission_profile, run_id, started, start_monotonic)
             return result
         request = _policy_request(definition, runtime, tool_call_id, args, run_id)
-        resolved = await _resolve_policy_decision(runtime, request)
+        resolved = await _resolve_policy_decision(runtime, request, tool_call_id)
         raw_decision = resolved.raw
         decision = resolved.resolved
         permission_profile = resolved.permission_profile
+        pre_resolved = resolved.pre_resolved
         result = await _run_or_block_tool(
             definition,
             runtime,
@@ -166,6 +171,7 @@ async def _execute_governed(
                 runtime, definition, tool_call_id, args, request,
                 raw_decision, decision, permission_profile, result,
                 run_id, started, start_monotonic, exception,
+                pre_resolved=pre_resolved,
             )
             if finalize_errors:
                 _attach_finalize_errors(result, finalize_errors)
@@ -185,19 +191,25 @@ async def _finalize_governed_execution(
     started: str,
     start_monotonic: float,
     exception: Exception | None,
+    *,
+    pre_resolved: bool = False,
 ) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
-    try:
-        await _record_task_permission_decision(
-            runtime,
-            request,
-            raw_decision,
-            decision,
-            permission_profile,
-            started,
-        )
-    except Exception as exc:
-        errors.append(_finalize_error("task_permission_decision", exc))
+    # When the ``before_tool_call`` hook (D11) pre-resolved policy and
+    # already wrote ``task_permission_decisions``, skip the wrapper-side
+    # write to avoid a duplicate row.
+    if not pre_resolved:
+        try:
+            await _record_task_permission_decision(
+                runtime,
+                request,
+                raw_decision,
+                decision,
+                permission_profile,
+                started,
+            )
+        except Exception as exc:
+            errors.append(_finalize_error("task_permission_decision", exc))
     try:
         await _audit(
             runtime,
@@ -265,12 +277,25 @@ def _input_origin(actor: PolicyActor) -> str:
     return "extension"
 
 
-async def _resolve_policy_decision(runtime: ToolRuntime, request: PolicyRequest) -> _ResolvedPolicy:
+async def _resolve_policy_decision(
+    runtime: ToolRuntime,
+    request: PolicyRequest,
+    tool_call_id: str,
+) -> _ResolvedPolicy:
+    context = runtime.taskrun_permission_context
+    if context is not None and context.policy_resolution_store is not None:
+        cached = context.policy_resolution_store.consume(tool_call_id)
+        if cached is not None:
+            return _ResolvedPolicy(
+                raw=cached.raw,
+                resolved=cached.resolved,
+                permission_profile=cached.permission_profile,
+                pre_resolved=True,
+            )
     decision = await maybe_await(runtime.policy_decider(request))
     if not isinstance(decision, PolicyDecision):
         decision = PolicyDecision.model_validate(decision)
-    if runtime.taskrun_permission_context is not None:
-        context = runtime.taskrun_permission_context
+    if context is not None:
         resolver = runtime.permission_resolver or PermissionProfileResolver()
         resolution = resolver.resolve(
             request,

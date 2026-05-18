@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cli.core.taskrun_event_payloads import DERIVED_STEP_SUMMARY_EVENT_TYPES
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
@@ -37,6 +38,7 @@ KEY_HISTORY_EVENT_TYPES = frozenset(
         "task_step_blocked",
         "task_step_cancelled",
     }
+    | DERIVED_STEP_SUMMARY_EVENT_TYPES
 )
 STEP_REASON_EVENT_TYPES = frozenset(
     {

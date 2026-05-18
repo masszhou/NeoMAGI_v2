@@ -519,8 +519,16 @@ class PostgresTaskRunRepository:
     def list_permission_decisions(
         self,
         task_run_id: str,
+        *,
+        step_id: str | None = None,
     ) -> list[TaskPermissionDecisionRecord]:
         _validate_uuid("task_run_id", task_run_id)
+        params: list[Any] = [task_run_id]
+        where = "task_run_id = %s"
+        if step_id is not None:
+            _validate_uuid("step_id", step_id)
+            where += " AND step_id = %s"
+            params.append(step_id)
         with self._conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -528,13 +536,45 @@ class PostgresTaskRunRepository:
                        policy_request, raw_decision, resolved_decision,
                        profile_name, occurred_at
                 FROM {self._schema}.task_permission_decisions
-                WHERE task_run_id = %s
+                WHERE {where}
                 ORDER BY occurred_at ASC, id ASC
                 """,
-                (task_run_id,),
+                tuple(params),
             )
             rows = cur.fetchall()
         return [_task_permission_decision_from_row(row) for row in rows]
+
+    def backfill_permission_decision_tool_execution_id(
+        self,
+        *,
+        task_run_id: str,
+        step_id: str,
+        tool_call_id: str,
+        tool_execution_id: str,
+    ) -> int:
+        # D11: step-scoped JSONB match; callers fail closed unless rowcount==1.
+        _validate_uuid("task_run_id", task_run_id)
+        _validate_uuid("step_id", step_id)
+        _validate_uuid("tool_execution_id", tool_execution_id)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {self._schema}.task_permission_decisions
+                    SET tool_execution_id = %s
+                    WHERE task_run_id = %s
+                      AND step_id = %s
+                      AND policy_request->'source'->>'tool_call_id' = %s
+                      AND tool_execution_id IS NULL
+                    """,
+                    (tool_execution_id, task_run_id, step_id, tool_call_id),
+                )
+                affected = cur.rowcount
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return int(affected or 0)
 
     def append_experiment(
         self,

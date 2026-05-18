@@ -413,6 +413,62 @@ def test_list_task_runs_for_workspace_can_exclude_terminal_statuses() -> None:
     assert "status <> ALL(%s)" in sql
 
 
+def test_backfill_permission_decision_tool_execution_id_uses_step_scoped_jsonb_match() -> None:
+    conn = _Conn()
+    conn.cursor_obj.rowcount = 1
+    # Force rowcount=1 for the UPDATE path emitted by the back-fill SQL.
+
+    class _BackfillCursor(_Cursor):
+        def execute(self, query: str, _params: tuple[object, ...] = ()) -> None:  # type: ignore[override]
+            super().execute(query, _params)
+            if "task_permission_decisions" in query and "tool_execution_id = %s" in query:
+                self.rowcount = 1
+
+    conn.cursor_obj = _BackfillCursor()
+    repo = _repo(conn)
+
+    affected = repo.backfill_permission_decision_tool_execution_id(
+        task_run_id=TASK_ID,
+        step_id=STEP_ID,
+        tool_call_id="call_back_1",
+        tool_execution_id=TOOL_EXECUTION_ID,
+    )
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert affected == 1
+    assert "UPDATE \"neomagi\".task_permission_decisions" in sql
+    assert "SET tool_execution_id = %s" in sql
+    # Step-scoped match is mandatory: same tool_call_id reused across steps
+    # must not collide on back-fill.
+    assert "AND step_id = %s" in sql
+    # JSONB path match into policy_request.source.tool_call_id.
+    assert "policy_request->'source'->>'tool_call_id' = %s" in sql
+    # Only stamp rows that have not been back-filled yet.
+    assert "AND tool_execution_id IS NULL" in sql
+    assert conn.commits == 1
+
+
+def test_backfill_permission_decision_zero_rows_returns_zero() -> None:
+    conn = _Conn()
+
+    class _NoMatchCursor(_Cursor):
+        def execute(self, query: str, _params: tuple[object, ...] = ()) -> None:  # type: ignore[override]
+            super().execute(query, _params)
+            if "task_permission_decisions" in query and "tool_execution_id = %s" in query:
+                self.rowcount = 0
+
+    conn.cursor_obj = _NoMatchCursor()
+    repo = _repo(conn)
+
+    affected = repo.backfill_permission_decision_tool_execution_id(
+        task_run_id=TASK_ID,
+        step_id=STEP_ID,
+        tool_call_id="call_back_missing",
+        tool_execution_id=TOOL_EXECUTION_ID,
+    )
+    assert affected == 0
+
+
 def test_list_events_orders_by_occurred_at_then_id() -> None:
     conn = _Conn()
     repo = _repo(conn)

@@ -250,7 +250,19 @@ class TaskRunRepository(Protocol):
     def list_permission_decisions(
         self,
         task_run_id: str,
+        *,
+        step_id: str | None = None,
     ) -> list[TaskPermissionDecisionRecord]:
+        ...
+
+    def backfill_permission_decision_tool_execution_id(
+        self,
+        *,
+        task_run_id: str,
+        step_id: str,
+        tool_call_id: str,
+        tool_execution_id: str,
+    ) -> int:
         ...
 
     def append_experiment(

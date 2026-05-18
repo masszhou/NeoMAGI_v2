@@ -41,6 +41,10 @@ class TaskRunStepOutcome:
     error_message: str | None = None
     next_action: str | None = None
     finalize_errors: list[dict[str, str]] = field(default_factory=list)
+    verification_state: str | None = None
+    verification_reason: str | None = None
+    verification_missing_kinds: tuple[str, ...] = ()
+    verification_inconsistent_kinds: tuple[str, ...] = ()
 
 
 class TaskRunStepRunner(Protocol):

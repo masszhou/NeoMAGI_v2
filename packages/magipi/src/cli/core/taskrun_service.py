@@ -713,7 +713,25 @@ def _step_output(
         output["block_reason"] = outcome.block_reason
     if outcome.finalize_errors:
         output["finalize_errors"] = list(outcome.finalize_errors)
+    verification = _verification_block(outcome)
+    if verification is not None:
+        output["verification_state"] = verification
     return output
+
+
+def _verification_block(outcome: TaskRunStepOutcome) -> dict[str, object] | None:
+    # D12: surface state + reason + non-empty kind lists so the step view
+    # is self-contained without joining task_events.
+    if outcome.verification_state is None:
+        return None
+    verification: dict[str, object] = {"state": outcome.verification_state}
+    if outcome.verification_reason:
+        verification["reason"] = outcome.verification_reason
+    if outcome.verification_missing_kinds:
+        verification["missing_kinds"] = list(outcome.verification_missing_kinds)
+    if outcome.verification_inconsistent_kinds:
+        verification["inconsistent_kinds"] = list(outcome.verification_inconsistent_kinds)
+    return verification
 
 
 def _step_conclusion(outcome: TaskRunStepOutcome, status: str) -> str:

@@ -581,6 +581,70 @@ def test_step_done_returns_taskrun_to_pending_and_records_step(tmp_path: Path) -
     ]
 
 
+def test_step_output_carries_verification_missing_kinds(tmp_path: Path) -> None:
+    """I1: outcome.verification_missing_kinds must reach the persisted
+    step.output.verification_state dict so the step view is self-contained
+    and callers don't have to join task_events to know which kinds were
+    missing/inconsistent."""
+
+    repo = _FakeTaskRunRepository()
+    service = _service(repo)
+    service.start("Analyze this repo", tmp_path, permission_profile=_guarded_profile())
+    runner = _FakeRunner(
+        TaskRunStepOutcome(
+            status="blocked",
+            assistant_text="Ran the suite; tests passed.",
+            block_reason="claim lacks supporting evidence",
+            verification_state="missing_evidence",
+            verification_reason="claim mentions test but no successful evidence found",
+            verification_missing_kinds=("test",),
+        )
+    )
+
+    result = service.step(
+        None,
+        tmp_path,
+        runtime_options=TaskRunRuntimeOptions(model_ref="faux/local/faux-1"),
+        runner=runner,
+    )
+
+    assert result.step is not None
+    verification = result.step.output["verification_state"]
+    assert verification["state"] == "missing_evidence"
+    assert verification["missing_kinds"] == ["test"]
+    # Inconsistent kinds were empty → key should be omitted, not [].
+    assert "inconsistent_kinds" not in verification
+
+
+def test_step_output_carries_verification_inconsistent_kinds(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    service = _service(repo)
+    service.start("Analyze this repo", tmp_path, permission_profile=_guarded_profile())
+    runner = _FakeRunner(
+        TaskRunStepOutcome(
+            status="failed",
+            assistant_text="tests passed",
+            error_message="pytest exit 1",
+            verification_state="inconsistent",
+            verification_reason="claim contradicts observed tool errors",
+            verification_inconsistent_kinds=("test",),
+        )
+    )
+
+    result = service.step(
+        None,
+        tmp_path,
+        runtime_options=TaskRunRuntimeOptions(model_ref="faux/local/faux-1"),
+        runner=runner,
+    )
+
+    assert result.step is not None
+    verification = result.step.output["verification_state"]
+    assert verification["state"] == "inconsistent"
+    assert verification["inconsistent_kinds"] == ["test"]
+    assert "missing_kinds" not in verification
+
+
 def test_step_blocked_requires_explicit_id_to_resume(tmp_path: Path) -> None:
     repo = _FakeTaskRunRepository()
     service = _service(repo)

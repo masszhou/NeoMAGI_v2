@@ -15,12 +15,12 @@ from cli.core.compaction.service import (
     CompactionService,
     ProviderSummaryGenerator,
 )
+from cli.core.compaction_event_emitter import (
+    CompactionEventEmitter,
+    InteractiveCompactionEventEmitter,
+)
 from cli.core.session_types import (
-    AutoRetryEndEvent,
-    AutoRetryStartEvent,
     BranchSummaryMessage,
-    CompactionEndEvent,
-    CompactionStartEvent,
     CompactionSummaryMessage,
     MessageEndEvent,
     MessageStartEvent,
@@ -34,6 +34,24 @@ def _now_ms() -> int:
 
 
 class CompactionRuntimeMixin:
+    _compaction_event_emitter: CompactionEventEmitter | None = None
+
+    @property
+    def compaction_event_emitter(self) -> CompactionEventEmitter:
+        """Lazy interactive emitter — keeps the pi-compatible session event
+        shape used by the TUI controller and durable writer (D14 refactor
+        leaves interactive behavior unchanged)."""
+
+        if self._compaction_event_emitter is None:
+            self._compaction_event_emitter = InteractiveCompactionEventEmitter(
+                self._emit_session_event
+            )
+        return self._compaction_event_emitter
+
+    @compaction_event_emitter.setter
+    def compaction_event_emitter(self, value: CompactionEventEmitter) -> None:
+        self._compaction_event_emitter = value
+
     def select_session_leaf(self, entry_id: str) -> SessionRecord:
         self._ensure_idle_for_session_switch()
         if self._session_manager is None or self._durable_session is None:
@@ -74,7 +92,7 @@ class CompactionRuntimeMixin:
         *,
         custom_instructions: str | None,
     ) -> CompactionAppendResult:
-        self._emit_session_event(CompactionStartEvent(reason="manual"))
+        self.compaction_event_emitter.compaction_started(reason="manual")
         try:
             result = await self._compact_session_with_extension_hook(
                 reason="manual",
@@ -111,7 +129,7 @@ class CompactionRuntimeMixin:
         )
         if target_budget is None:
             return
-        self._emit_session_event(CompactionStartEvent(reason="threshold"))
+        self.compaction_event_emitter.compaction_started(reason="threshold")
         try:
             result = await self._compact_session_with_extension_hook(
                 reason="threshold",
@@ -134,15 +152,18 @@ class CompactionRuntimeMixin:
     ) -> Context | None:
         if not is_context_overflow(message, context_window=self._model.context_window):
             if attempt > 1:
-                self._emit_session_event(AutoRetryEndEvent(success=True, attempt=attempt))
+                self.compaction_event_emitter.auto_retry_finished(
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    success=True,
+                )
             return None
         if attempt >= max_attempts:
-            self._emit_session_event(
-                AutoRetryEndEvent(
-                    success=False,
-                    attempt=attempt,
-                    finalError=message.error_message or "context overflow after retry",
-                )
+            self.compaction_event_emitter.auto_retry_finished(
+                attempt=attempt,
+                max_attempts=max_attempts,
+                success=False,
+                final_error=message.error_message or "context overflow after retry",
             )
             return None
         if signal is not None and signal.is_set():
@@ -156,7 +177,7 @@ class CompactionRuntimeMixin:
         attempt: int,
         max_attempts: int,
     ) -> Context | None:
-        self._emit_session_event(CompactionStartEvent(reason="overflow"))
+        self.compaction_event_emitter.compaction_started(reason="overflow")
         try:
             service = self._compaction_service()
             result = await self._compact_session_with_extension_hook(
@@ -170,13 +191,11 @@ class CompactionRuntimeMixin:
         self._refresh_agent_from_durable_session()
         self._emit_compaction_success("overflow", result, will_retry=True)
         await self._emit_session_compact(result)
-        self._emit_session_event(
-            AutoRetryStartEvent(
-                attempt=attempt + 1,
-                maxAttempts=max_attempts,
-                delayMs=0,
-                errorMessage=message.error_message or "context overflow",
-            )
+        self.compaction_event_emitter.auto_retry_started(
+            attempt=attempt + 1,
+            max_attempts=max_attempts,
+            delay_ms=0,
+            error_message=message.error_message or "context overflow",
         )
         return Context(
             systemPrompt=context.system_prompt,
@@ -364,25 +383,14 @@ class CompactionRuntimeMixin:
         *,
         will_retry: bool,
     ) -> None:
-        self._emit_session_event(
-            CompactionEndEvent(
-                reason=reason,
-                result=result.result,
-                aborted=False,
-                willRetry=will_retry,
-            )
+        self.compaction_event_emitter.compaction_succeeded(
+            reason=reason,
+            result=result,
+            will_retry=will_retry,
         )
 
     def _emit_compaction_failure(self, reason: str, exc: Exception) -> None:
-        self._emit_session_event(
-            CompactionEndEvent(
-                reason=reason,
-                result=None,
-                aborted=True,
-                willRetry=False,
-                errorMessage=str(exc),
-            )
-        )
+        self.compaction_event_emitter.compaction_failed(reason=reason, error=exc)
 
 
 __all__ = ["CompactionRuntimeMixin"]

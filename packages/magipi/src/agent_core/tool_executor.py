@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ai_provider.tools import validate_tool_arguments
@@ -45,7 +45,13 @@ class _ImmediateToolCallOutcome:
 class _ExecutedToolCallOutcome:
     result: AgentToolResult
     is_error: bool
-    updates: list[AgentToolResult] = field(default_factory=list)
+
+
+class _UpdateSentinel:
+    __slots__ = ()
+
+
+_UPDATE_SENTINEL = _UpdateSentinel()
 
 
 @dataclass(slots=True)
@@ -176,9 +182,7 @@ async def _execute_and_finalize(
     signal: asyncio.Event | None,
     emit: AgentEventSink,
 ) -> tuple[int, _FinalizedToolCallOutcome]:
-    executed = await execute_prepared_tool_call(preparation, signal)
-    for update in executed.updates:
-        await _emit_tool_execution_update(preparation.tool_call, update, emit)
+    executed = await execute_prepared_tool_call(preparation, signal, emit)
     finalized = await finalize_executed_tool_call(
         current_context,
         assistant_message,
@@ -213,9 +217,7 @@ async def _run_one_tool_call(
             is_error=preparation.is_error,
         )
 
-    executed = await execute_prepared_tool_call(preparation, signal)
-    for update in executed.updates:
-        await _emit_tool_execution_update(tool_call, update, emit)
+    executed = await execute_prepared_tool_call(preparation, signal, emit)
     return await finalize_executed_tool_call(
         current_context,
         assistant_message,
@@ -275,18 +277,21 @@ async def prepare_tool_call(
 async def execute_prepared_tool_call(
     preparation: _PreparedToolCall,
     signal: asyncio.Event | None,
+    emit: AgentEventSink,
 ) -> _ExecutedToolCallOutcome:
-    updates: list[AgentToolResult] = []
-
-    def on_update(partial_result: AgentToolResult) -> None:
-        updates.append(partial_result)
-
     if signal and signal.is_set():
         return _ExecutedToolCallOutcome(
             result=create_error_tool_result("Tool execution was aborted"),
             is_error=True,
-            updates=updates,
         )
+
+    update_queue: asyncio.Queue[AgentToolResult | _UpdateSentinel] = asyncio.Queue()
+    consumer_task = asyncio.create_task(
+        _drain_tool_update_queue(preparation.tool_call, update_queue, emit)
+    )
+
+    def on_update(partial_result: AgentToolResult) -> None:
+        update_queue.put_nowait(partial_result)
 
     try:
         result = await maybe_await(
@@ -301,27 +306,23 @@ async def execute_prepared_tool_call(
             result = AgentToolResult.model_validate(result)
         if signal and signal.is_set():
             if result.is_error:
-                return _ExecutedToolCallOutcome(
-                    result=result,
-                    is_error=True,
-                    updates=updates,
-                )
+                return _ExecutedToolCallOutcome(result=result, is_error=True)
             return _ExecutedToolCallOutcome(
                 result=create_error_tool_result("Tool execution was aborted"),
                 is_error=True,
-                updates=updates,
             )
         return _ExecutedToolCallOutcome(
             result=result,
             is_error=bool(result.is_error),
-            updates=updates,
         )
     except Exception as exc:
         return _ExecutedToolCallOutcome(
             result=create_error_tool_result(str(exc)),
             is_error=True,
-            updates=updates,
         )
+    finally:
+        await update_queue.put(_UPDATE_SENTINEL)
+        await consumer_task
 
 
 async def finalize_executed_tool_call(
@@ -412,6 +413,18 @@ async def _emit_tool_execution_start(tool_call: ToolCall, emit: AgentEventSink) 
             )
         )
     )
+
+
+async def _drain_tool_update_queue(
+    tool_call: ToolCall,
+    update_queue: asyncio.Queue[AgentToolResult | _UpdateSentinel],
+    emit: AgentEventSink,
+) -> None:
+    while True:
+        item = await update_queue.get()
+        if isinstance(item, _UpdateSentinel):
+            return
+        await _emit_tool_execution_update(tool_call, item, emit)
 
 
 async def _emit_tool_execution_update(tool_call: ToolCall, update: AgentToolResult, emit: AgentEventSink) -> None:
