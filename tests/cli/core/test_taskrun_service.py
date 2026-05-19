@@ -328,11 +328,38 @@ class _FakeTaskRunRepository:
         self.events.append(event)
         return event
 
-    def list_events(self, task_run_id: str) -> list[TaskEventRecord]:
-        return sorted(
+    def list_events(
+        self,
+        task_run_id: str,
+        *,
+        after_event_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[TaskEventRecord]:
+        if limit is not None and limit < 1:
+            raise ValueError("event limit must be positive")
+        events = sorted(
             [event for event in self.events if event.task_run_id == task_run_id],
             key=lambda event: (event.occurred_at, event.id),
         )
+        if after_event_id is not None:
+            cursor = next(
+                (event for event in self.events if event.id == after_event_id),
+                None,
+            )
+            if cursor is None:
+                raise KeyError(f"unknown TaskRun event cursor: {after_event_id}")
+            if cursor.task_run_id != task_run_id:
+                raise ValueError(
+                    "TaskRun event cursor does not belong to requested TaskRun"
+                )
+            events = [
+                event
+                for event in events
+                if (event.occurred_at, event.id) > (cursor.occurred_at, cursor.id)
+            ]
+        if limit is not None:
+            events = events[:limit]
+        return events
 
     def append_permission_decision(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,11 @@ import pytest
 import cli.__main__ as cli_main
 import cli.taskrun_commands as taskrun_commands
 from cli.core.taskrun_autorun import TaskRunAutoRunIteration, TaskRunAutoRunResult
+from cli.core.taskrun_event_payloads import (
+    PAYLOAD_VERSIONS,
+    TASK_TOOL_OBSERVED,
+    derived_payload,
+)
 from cli.core.taskrun_projection import TaskRunProjectionResult
 from cli.core.taskrun_service import TaskRunResult
 from cli.core.taskrun_views import (
@@ -482,6 +488,45 @@ def test_taskrun_events_routes_and_prints_jsonl(
     assert len(lines) == 1
     assert '"event_type": "task_run_started"' in lines[0]
     assert '"payload": {"goal": "Analyze this repo"}' in lines[0]
+
+
+def test_taskrun_events_jsonl_preserves_derived_payload_version(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+
+    def fake_events(task_id: str | None, cwd: Path) -> TaskRunEventsResult:
+        service.calls.append(("events", task_id, cwd))
+        return TaskRunEventsResult(
+            task_run=service.result.task_run,
+            events=[
+                TaskEventRecord(
+                    id="019e2200-0000-7000-8000-000000000014",
+                    task_run_id=service.result.task_run.id,
+                    step_id=None,
+                    event_type=TASK_TOOL_OBSERVED,
+                    payload=derived_payload(
+                        TASK_TOOL_OBSERVED,
+                        {"tool_call_id": "tc1"},
+                    ),
+                    occurred_at="2026-05-13T00:00:00+00:00",
+                )
+            ],
+        )
+
+    service.events = fake_events
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["events", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    event = json.loads(captured.out)
+    assert rc == 0
+    assert service.calls[0][0] == "events"
+    assert event["event_type"] == TASK_TOOL_OBSERVED
+    assert event["payload"]["payload_version"] == PAYLOAD_VERSIONS[TASK_TOOL_OBSERVED]
 
 
 def test_taskrun_step_passes_runtime_options_and_prints_step(

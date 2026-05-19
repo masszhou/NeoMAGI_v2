@@ -480,6 +480,36 @@ def test_list_events_orders_by_occurred_at_then_id() -> None:
     assert "ORDER BY occurred_at ASC, id ASC" in sql
 
 
+def test_list_events_after_event_uses_composite_cursor_sql() -> None:
+    class _CursorWithEventCursor(_Cursor):
+        def fetchone(self):
+            if (
+                "SELECT task_run_id, occurred_at, id"
+                in self._last_query
+                and "FROM \"neomagi\".task_events" in self._last_query
+            ):
+                return (TASK_ID, "2026-05-13T00:00:00+00:00", PERMISSION_ID)
+            return super().fetchone()
+
+    conn = _Conn()
+    conn.cursor_obj = _CursorWithEventCursor()
+    repo = _repo(conn)
+
+    assert repo.list_events(TASK_ID, after_event_id=PERMISSION_ID, limit=10) == []
+
+    sql = "\n".join(conn.cursor_obj.queries)
+    assert "SELECT task_run_id, occurred_at, id" in sql
+    assert "WHERE id = %s" in sql
+    assert "AND (occurred_at, id) > (%s, %s)" in sql
+    assert "LIMIT %s" in sql
+    assert conn.cursor_obj._last_params == (
+        TASK_ID,
+        "2026-05-13T00:00:00+00:00",
+        PERMISSION_ID,
+        10,
+    )
+
+
 def test_update_step_status_persists_output_and_conclusion() -> None:
     conn = _Conn()
     repo = _repo(conn)
