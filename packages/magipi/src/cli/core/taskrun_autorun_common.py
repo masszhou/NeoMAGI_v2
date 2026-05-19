@@ -13,6 +13,10 @@ from cli.core.taskrun_experiments import (
     TaskRunExperimentOptions,
     experiment_started_payload,
 )
+from cli.core.taskrun_host_contract import (
+    TaskRunHostContext,
+    event_payload_with_host_context,
+)
 from cli.core.taskrun_projection import TaskRunProjectionResult
 from cli.core.taskrun_step import TaskRunRuntimeOptions
 from policy.permission_profiles import PermissionProfileError, normalize_permission_profile_snapshot
@@ -137,22 +141,26 @@ def append_auto_run_event(
     iteration_index: int,
     step: TaskStepRecord | None = None,
     stop_reason: str | None,
+    host_context: TaskRunHostContext | Mapping[str, object] | None = None,
 ) -> TaskEventRecord:
+    payload = _auto_run_event_payload(
+        record,
+        auto_run_id=auto_run_id,
+        max_steps=max_steps,
+        runtime_options=runtime_options,
+        experiment_options=experiment_options,
+        counters=counters,
+        iteration_index=iteration_index,
+        step=step,
+        stop_reason=stop_reason,
+    )
+    if host_context is not None:
+        payload = event_payload_with_host_context(payload, host_context)
     return service.repository.append_event(
         task_run_id=record.id,
         step_id=step.id if step is not None else None,
         event_type=event_type,
-        payload=_auto_run_event_payload(
-            record,
-            auto_run_id=auto_run_id,
-            max_steps=max_steps,
-            runtime_options=runtime_options,
-            experiment_options=experiment_options,
-            counters=counters,
-            iteration_index=iteration_index,
-            step=step,
-            stop_reason=stop_reason,
-        ),
+        payload=payload,
         occurred_at=service._now_iso(),
     )
 

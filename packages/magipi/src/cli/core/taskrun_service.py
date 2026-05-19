@@ -22,6 +22,11 @@ from cli.core.taskrun_experiment_summary import (
     experiment_next_action,
     experiment_preview,
 )
+from cli.core.taskrun_host_contract import (
+    TaskRunHostContext,
+    event_payload_with_host_context,
+    normalize_host_context,
+)
 from cli.core.taskrun_step import (
     STEP_INSTRUCTION,
     TaskRunRuntimeOptions,
@@ -98,7 +103,9 @@ class TaskRunService:
         cwd: str | Path,
         *,
         permission_profile: Mapping[str, Any] | None = None,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
     ) -> TaskRunResult:
+        host_context = normalize_host_context(host_context)
         goal = goal.strip()
         if not goal:
             raise TaskRunServiceError("TaskRun goal must not be empty")
@@ -120,13 +127,16 @@ class TaskRunService:
         self.repository.append_event(
             task_run_id=record.id,
             event_type="task_run_started",
-            payload={
-                "goal": record.goal,
-                "status": record.status,
-                "workspace_root": record.workspace_root,
-                "agent_session_id": record.agent_session_id,
-                "permission_profile": record.permission_profile,
-            },
+            payload=event_payload_with_host_context(
+                {
+                    "goal": record.goal,
+                    "status": record.status,
+                    "workspace_root": record.workspace_root,
+                    "agent_session_id": record.agent_session_id,
+                    "permission_profile": record.permission_profile,
+                },
+                host_context,
+            ),
         )
         return self._summarize_and_project(record)
 
@@ -186,13 +196,24 @@ class TaskRunService:
             DEFAULT_PERMISSION_PROFILE,
         )
 
-    def events(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunEventsResult:
+    def events(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+        *,
+        after_event_id: str | None = None,
+        limit: int | None = None,
+    ) -> TaskRunEventsResult:
         workspace_root = _workspace_root(cwd)
         self.recover_stale_running(workspace_root)
         record = self._select_task_run(workspace_root, id_or_prefix)
         return TaskRunEventsResult(
             task_run=record,
-            events=self.repository.list_events(record.id),
+            events=self.repository.list_events(
+                record.id,
+                after_event_id=after_event_id,
+                limit=limit,
+            ),
         )
 
     def step(
@@ -202,13 +223,19 @@ class TaskRunService:
         *,
         runtime_options: TaskRunRuntimeOptions | None = None,
         runner: TaskRunStepRunner,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
     ) -> TaskRunResult:
+        host_context = normalize_host_context(host_context)
         workspace_root = _workspace_root(cwd)
         runtime_options = runtime_options or TaskRunRuntimeOptions()
         self.recover_stale_running(workspace_root)
         record = self._select_task_run_for_step(workspace_root, id_or_prefix)
         self._validate_step_ready(record, workspace_root, explicit=bool(id_or_prefix))
-        pre_summary, task_run, step = self._start_step(record, runtime_options)
+        pre_summary, task_run, step = self._start_step(
+            record,
+            runtime_options,
+            host_context=host_context,
+        )
         outcome = self._run_step_runner(
             runner,
             task_run=task_run,
@@ -233,6 +260,7 @@ class TaskRunService:
         options: TaskRunAutoRunOptions,
         runner: TaskRunStepRunner,
         permission_profile: Mapping[str, Any] | None = None,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
     ) -> TaskRunAutoRunResult:
         return run_taskrun_auto_loop(
             self,
@@ -241,9 +269,17 @@ class TaskRunService:
             options=options,
             runner=runner,
             permission_profile=permission_profile,
+            host_context=host_context,
         )
 
-    def close(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunResult:
+    def close(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+        *,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
+    ) -> TaskRunResult:
+        host_context = normalize_host_context(host_context)
         workspace_root = _workspace_root(cwd)
         self.recover_stale_running(workspace_root)
         record = self._select_task_run(workspace_root, id_or_prefix)
@@ -272,11 +308,14 @@ class TaskRunService:
             self.repository.append_event(
                 task_run_id=record.id,
                 event_type="task_run_closed",
-                payload={
-                    "previous_status": previous_status,
-                    "final_status": record.status,
-                    "closed_at": now,
-                },
+                payload=event_payload_with_host_context(
+                    {
+                        "previous_status": previous_status,
+                        "final_status": record.status,
+                        "closed_at": now,
+                    },
+                    host_context,
+                ),
                 occurred_at=now,
             )
         return self._summarize_and_project(record)
@@ -423,6 +462,8 @@ class TaskRunService:
         self,
         record: TaskRunRecord,
         runtime_options: TaskRunRuntimeOptions,
+        *,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
     ) -> tuple[dict[str, object], TaskRunRecord, TaskStepRecord]:
         steps = self.repository.list_steps(record.id)
         pre_summary = self._build_summary(record, steps)
@@ -432,7 +473,11 @@ class TaskRunService:
             title=f"Step {len(steps) + 1}",
             input=_step_input(record, pre_summary, runtime_options),
             started_at=started_at,
-            start_event_payload=_step_started_payload(record.status, runtime_options),
+            start_event_payload=_step_started_payload(
+                record.status,
+                runtime_options,
+                host_context=host_context,
+            ),
         )
         return pre_summary, step_start.task_run, step_start.step
 
@@ -678,11 +723,16 @@ def _step_input(
 def _step_started_payload(
     previous_status: str,
     runtime_options: TaskRunRuntimeOptions,
+    *,
+    host_context: TaskRunHostContext | Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
-        "status_from": previous_status,
-        "model_ref": runtime_options.model_ref,
-    }
+    return event_payload_with_host_context(
+        {
+            "status_from": previous_status,
+            "model_ref": runtime_options.model_ref,
+        },
+        host_context,
+    )
 
 
 def _step_output(

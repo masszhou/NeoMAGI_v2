@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Protocol
 
+from cli.core.taskrun_host_contract import TaskRunHostContext
 from cli.core.taskrun_projection import TaskRunProjectionResult
 from cli.core.taskrun_step import (
     TaskRunRuntimeOptions,
@@ -45,6 +46,8 @@ class TaskRunServiceInternals(Protocol):
         self,
         record: TaskRunRecord,
         runtime_options: TaskRunRuntimeOptions,
+        *,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
     ) -> tuple[dict[str, object], TaskRunRecord, TaskStepRecord]: ...
 
     def _run_step_runner(

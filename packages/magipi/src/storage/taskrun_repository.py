@@ -449,19 +449,58 @@ class PostgresTaskRunRepository:
             raise
         return _task_event_from_row(row)
 
-    def list_events(self, task_run_id: str) -> list[TaskEventRecord]:
+    def list_events(
+        self,
+        task_run_id: str,
+        *,
+        after_event_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[TaskEventRecord]:
+        _validate_uuid("task_run_id", task_run_id)
+        _validate_event_limit(limit)
+        params: list[Any] = [task_run_id]
+        where = "task_run_id = %s"
+        if after_event_id is not None:
+            cursor_occurred_at, cursor_id = self._event_cursor(task_run_id, after_event_id)
+            where += " AND (occurred_at, id) > (%s, %s)"
+            params.extend([cursor_occurred_at, cursor_id])
+        limit_sql = "LIMIT %s" if limit is not None else ""
+        if limit is not None:
+            params.append(limit)
         with self._conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT id, task_run_id, step_id, event_type, payload, occurred_at
                 FROM {self._schema}.task_events
-                WHERE task_run_id = %s
+                WHERE {where}
                 ORDER BY occurred_at ASC, id ASC
+                {limit_sql}
                 """,
-                (task_run_id,),
+                tuple(params),
             )
             rows = cur.fetchall()
         return [_task_event_from_row(row) for row in rows]
+
+    def _event_cursor(self, task_run_id: str, event_id: str) -> tuple[str, str]:
+        _validate_uuid("after_event_id", event_id)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT task_run_id, occurred_at, id
+                FROM {self._schema}.task_events
+                WHERE id = %s
+                """,
+                (event_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise KeyError(f"unknown TaskRun event cursor: {event_id}")
+        cursor_task_run_id = str(row[0])
+        if cursor_task_run_id != task_run_id:
+            raise ValueError(
+                "TaskRun event cursor does not belong to requested TaskRun"
+            )
+        return _iso(row[1]), str(row[2])
 
     def append_permission_decision(
         self,
@@ -705,6 +744,13 @@ def _validate_taskstep_status(status: str) -> None:
 def _validate_uuid(label: str, value: str) -> None:
     if not is_db_uuid(value):
         raise ValueError(f"invalid {label}: {value}")
+
+
+def _validate_event_limit(limit: int | None) -> None:
+    if limit is None:
+        return
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("event limit must be a positive integer")
 
 
 def _task_run_from_row(row: Any) -> TaskRunRecord:

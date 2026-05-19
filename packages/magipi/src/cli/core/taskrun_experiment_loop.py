@@ -37,6 +37,7 @@ from cli.core.taskrun_experiments import (
     parse_metric_lines,
     run_host_command,
 )
+from cli.core.taskrun_host_contract import TaskRunHostContext
 from cli.core.taskrun_service_internals import TaskRunServiceInternals
 from cli.core.taskrun_step import TaskRunStepOutcome, TaskRunStepRunner
 from storage.taskrun_repository import TaskRunRecord, TaskStepRecord
@@ -53,6 +54,7 @@ def execute_experiment_auto_run_iteration(
     counters: AutoRunCounters,
     budget: AutoRunBudget,
     baseline_metrics: dict[str, float] | None,
+    host_context: TaskRunHostContext,
 ) -> tuple[
     TaskRunRecord,
     AutoRunCounters,
@@ -64,7 +66,11 @@ def execute_experiment_auto_run_iteration(
     if experiment_options is None:
         raise AssertionError("experiment iteration requires experiment options")
     validate_auto_run_ready(service, record, workspace_root, explicit=True)
-    pre_summary, running_run, step = service._start_step(record, options.runtime_options)
+    pre_summary, running_run, step = service._start_step(
+        record,
+        options.runtime_options,
+        host_context=host_context,
+    )
     try:
         return _run_experiment_iteration(
             service,

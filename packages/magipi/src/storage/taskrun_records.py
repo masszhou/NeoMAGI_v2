@@ -229,7 +229,13 @@ class TaskRunRepository(Protocol):
     ) -> TaskEventRecord:
         ...
 
-    def list_events(self, task_run_id: str) -> list[TaskEventRecord]:
+    def list_events(
+        self,
+        task_run_id: str,
+        *,
+        after_event_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[TaskEventRecord]:
         ...
 
     def append_permission_decision(

@@ -22,6 +22,7 @@ from cli.core.taskrun_autorun_common import (
     validate_auto_run_ready as _validate_run_ready,
     validate_headless_profile as _validate_headless_profile,
 )
+from cli.core.taskrun_host_contract import TaskRunHostContext, normalize_host_context
 from cli.core.taskrun_experiment_loop import execute_experiment_auto_run_iteration
 from cli.core.taskrun_experiments import (
     TaskRunExperimentAttempt,
@@ -89,8 +90,10 @@ def run_taskrun_auto_loop(
     options: TaskRunAutoRunOptions,
     runner: TaskRunStepRunner,
     permission_profile: Mapping[str, Any] | None = None,
+    host_context: TaskRunHostContext | Mapping[str, object] | None = None,
 ) -> TaskRunAutoRunResult:
     workspace_root = str(cwd)
+    host_context = normalize_host_context(host_context)
     max_steps = _validate_auto_run_max_steps(options.max_steps)
     runtime_options = options.runtime_options
     _validate_experiment_options_for_run(options.experiment_options)
@@ -115,6 +118,7 @@ def run_taskrun_auto_loop(
             stop_reason="budget_exhausted",
             counters=_AutoRunCounters(),
             exit_code=1,
+            host_context=host_context,
         )
     _validate_experiment_profile_for_run(
         record,
@@ -130,6 +134,7 @@ def run_taskrun_auto_loop(
         max_steps=max_steps,
         runtime_options=runtime_options,
         experiment_options=options.experiment_options,
+        host_context=host_context,
     )
     return _execute_auto_run_loop(
         service,
@@ -138,6 +143,7 @@ def run_taskrun_auto_loop(
         auto_run_id=auto_run_id,
         options=replace(options, max_steps=max_steps),
         runner=runner,
+        host_context=host_context,
     )
 
 
@@ -190,6 +196,7 @@ def _record_auto_run_started(
     max_steps: int,
     runtime_options: TaskRunRuntimeOptions,
     experiment_options: TaskRunExperimentOptions | None,
+    host_context: TaskRunHostContext,
 ) -> TaskRunRecord:
     _append_auto_run_event(
         service,
@@ -202,6 +209,7 @@ def _record_auto_run_started(
         counters=_AutoRunCounters(),
         iteration_index=0,
         stop_reason=None,
+        host_context=host_context,
     )
     return service._summarize_and_project(record).task_run
 
@@ -233,6 +241,7 @@ def _execute_auto_run_loop(
     auto_run_id: str,
     options: TaskRunAutoRunOptions,
     runner: TaskRunStepRunner,
+    host_context: TaskRunHostContext,
 ) -> TaskRunAutoRunResult:
     iterations: list[TaskRunAutoRunIteration] = []
     experiment_attempts: list[TaskRunExperimentAttempt] = []
@@ -257,6 +266,7 @@ def _execute_auto_run_loop(
                     counters=counters,
                     budget=budget,
                     baseline_metrics=baseline_metrics,
+                    host_context=host_context,
                 )
             )
             iterations.append(decision[0])
@@ -291,6 +301,7 @@ def _execute_next_auto_run_iteration(
     counters: _AutoRunCounters,
     budget: _AutoRunBudget,
     baseline_metrics: dict[str, float] | None,
+    host_context: TaskRunHostContext,
 ) -> tuple[
     TaskRunRecord,
     _AutoRunCounters,
@@ -308,6 +319,7 @@ def _execute_next_auto_run_iteration(
             runner=runner,
             counters=counters,
             budget=budget,
+            host_context=host_context,
         )
         return record, counters, decision, [], baseline_metrics
     return execute_experiment_auto_run_iteration(
@@ -320,6 +332,7 @@ def _execute_next_auto_run_iteration(
         counters=counters,
         budget=budget,
         baseline_metrics=baseline_metrics,
+        host_context=host_context,
     )
 
 
@@ -333,9 +346,14 @@ def _execute_auto_run_iteration(
     runner: TaskRunStepRunner,
     counters: _AutoRunCounters,
     budget: _AutoRunBudget,
+    host_context: TaskRunHostContext,
 ) -> tuple[TaskRunRecord, _AutoRunCounters, tuple[TaskRunAutoRunIteration, _AutoRunStopDecision]]:
     _validate_run_ready(service, record, workspace_root, explicit=True)
-    pre_summary, running_run, step = service._start_step(record, options.runtime_options)
+    pre_summary, running_run, step = service._start_step(
+        record,
+        options.runtime_options,
+        host_context=host_context,
+    )
     outcome = service._run_step_runner(
         runner,
         task_run=running_run,
@@ -468,6 +486,7 @@ def _start_and_stop_auto_run(
     stop_reason: str,
     counters: _AutoRunCounters,
     exit_code: int,
+    host_context: TaskRunHostContext,
 ) -> TaskRunAutoRunResult:
     options = TaskRunAutoRunOptions(
         max_steps=max_steps,
@@ -485,6 +504,7 @@ def _start_and_stop_auto_run(
         counters=counters,
         iteration_index=0,
         stop_reason=None,
+        host_context=host_context,
     )
     record = service._summarize_and_project(record).task_run
     return _finish_auto_run(
