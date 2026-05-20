@@ -7,6 +7,7 @@ import pytest
 from ai_provider.types import TextContent, ToolResultMessage, UserMessage
 from cli.core.session_manager import SessionManager
 from storage.in_memory_session_repository import InMemorySessionRepository
+import storage.session_jsonl as session_jsonl
 from storage.session_jsonl import SessionJsonlError
 
 
@@ -122,6 +123,32 @@ def test_session_jsonl_allowed_root_blocks_path_escape(tmp_path: Path) -> None:
         manager.export_jsonl(session.id, "../escape.jsonl", allowed_root=tmp_path)
     with pytest.raises(SessionJsonlError, match="escapes allowed root"):
         manager.import_jsonl(tmp_path.parent / "session.jsonl", allowed_root=tmp_path)
+
+
+def test_session_jsonl_export_preserves_existing_target_on_replace_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = InMemorySessionRepository()
+    manager = SessionManager(repo)
+    session = manager.new_session(tmp_path)
+    manager.append_message(
+        session.id,
+        UserMessage(content=[TextContent(text="new content")], timestamp=1),
+    )
+    target = tmp_path / "session.jsonl"
+    target.write_text("old content\n", encoding="utf-8")
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(session_jsonl.os, "replace", fail_replace)
+
+    with pytest.raises(SessionJsonlError, match="failed to write session JSONL"):
+        manager.export_jsonl(session.id, target)
+
+    assert target.read_text(encoding="utf-8") == "old content\n"
+    assert not list(tmp_path.glob(".session.jsonl.*.tmp"))
 
 
 def test_session_jsonl_legacy_compaction_summary_from_id_reads_but_does_not_export(

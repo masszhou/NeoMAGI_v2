@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from cli.core.session_types import (
     MessageEntry,
     SessionEntry,
     SessionEntryAdapter,
-    SessionHeader,
 )
 
 from .config import DatabaseConfig
 from .ids import is_db_uuid, new_db_uuid, provider_cache_affinity_for_session
 from .audit_queries import SessionAuditEventRecord
 from .schema import _quote_identifier
+from .session_persistence_redaction import (
+    redact_entry_for_persistence as _redact_entry_for_persistence,
+    redact_json_for_persistence as _redact_json_for_persistence,
+)
+from .session_records import EntryRecord, SessionRecord, SessionRepository
 from .session_utils import (
     allocate_entry_payload,
     context_participates as _context_participates,
@@ -35,131 +38,6 @@ from .tool_execution_records import (
     _ToolExecutionBase,
     _ToolExecutionEndRequest,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class SessionRecord:
-    id: str
-    cwd: str
-    provider_cache_affinity_id: str
-    created_at: str
-    updated_at: str
-    parent_session_id: str | None = None
-    current_leaf_entry_id: str | None = None
-    display_name: str | None = None
-    source: dict[str, Any] = field(default_factory=dict)
-    deleted_at: str | None = None
-
-    def header(self) -> SessionHeader:
-        parent = (
-            f"neomagi://session/{self.parent_session_id}"
-            if self.parent_session_id
-            else self.source.get("parentSessionPath")
-        )
-        return SessionHeader(
-            id=self.id,
-            timestamp=self.created_at,
-            cwd=self.cwd,
-            parentSession=parent,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class EntryRecord:
-    id: str
-    session_id: str
-    pi_export_id: str
-    entry_type: str
-    payload: SessionEntry
-    occurred_at: str
-    created_at: str
-    parent_entry_id: str | None = None
-    context_participates: bool = True
-
-
-class SessionRepository(Protocol):
-    def create_session(
-        self,
-        *,
-        cwd: str,
-        parent_session_id: str | None = None,
-        provider_cache_affinity_id: str | None = None,
-        source: Mapping[str, Any] | None = None,
-        session_id: str | None = None,
-        created_at: str | None = None,
-    ) -> SessionRecord:
-        ...
-
-    def get_session(
-        self,
-        session_id: str,
-        *,
-        include_taskrun_owned: bool = False,
-    ) -> SessionRecord | None:
-        ...
-
-    def list_recent_sessions(
-        self,
-        *,
-        cwd: str | None = None,
-        limit: int = 20,
-    ) -> list[SessionRecord]:
-        ...
-
-    def update_session_name(self, session_id: str, name: str | None) -> SessionRecord:
-        ...
-
-    def update_session_leaf(self, session_id: str, entry_id: str | None) -> SessionRecord:
-        ...
-
-    def soft_delete_session(self, session_id: str) -> SessionRecord:
-        ...
-
-    def append_entry(
-        self,
-        session_id: str,
-        payload: Mapping[str, Any] | SessionEntry,
-        *,
-        entry_id: str | None = None,
-    ) -> EntryRecord:
-        ...
-
-    def get_entry(self, session_id: str, entry_id: str) -> EntryRecord | None:
-        ...
-
-    def list_entries(self, session_id: str) -> list[EntryRecord]:
-        ...
-
-    def list_tool_executions(self, session_id: str) -> list[ToolExecutionRecord]:
-        ...
-
-    def list_audit_events(self, session_id: str) -> list[SessionAuditEventRecord]:
-        ...
-
-    def record_tool_execution_start(
-        self,
-        *,
-        session_id: str,
-        tool_call_id: str,
-        tool_name: str,
-        args: Any,
-        runtime_session_id: str | None = None,
-        run_id: str | None = None,
-    ) -> ToolExecutionRecord:
-        ...
-
-    def record_tool_execution_end(
-        self,
-        *,
-        session_id: str,
-        tool_call_id: str,
-        tool_name: str,
-        result_content: Any,
-        result_details: Any,
-        is_error: bool,
-        duration_ms: int | None = None,
-    ) -> ToolExecutionRecord:
-        ...
 
 
 class PostgresSessionRepository:
@@ -305,7 +183,10 @@ class PostgresSessionRepository:
         *,
         entry_id: str | None = None,
     ) -> EntryRecord:
-        entry = _validate_entry(payload)
+        entry = _redact_entry_for_persistence(
+            _validate_entry(payload),
+            cwd=self._session_cwd(session_id),
+        )
         existing = self.get_entry(session_id, entry.id)
         if existing is not None:
             return existing
@@ -386,7 +267,7 @@ class PostgresSessionRepository:
                         session_id,
                         tool_call_id,
                         tool_name,
-                        _jsonb(_dump_json(args)),
+                        _jsonb(_redact_json_for_persistence(args, cwd=self._session_cwd(session_id))),
                         now,
                         runtime_session_id,
                         run_id,
@@ -401,7 +282,7 @@ class PostgresSessionRepository:
             session_id=session_id,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            args=_dump_json(args),
+            args=_redact_json_for_persistence(args, cwd=self._session_cwd(session_id)),
             started_at=now,
             runtime_session_id=runtime_session_id,
             run_id=run_id,
@@ -527,19 +408,35 @@ class PostgresSessionRepository:
         request: _ToolExecutionEndRequest,
     ) -> ToolExecutionRecord:
         now = utc_now_iso()
+        cwd = self._session_cwd(request.session_id)
+        redacted_content = _redact_json_for_persistence(request.result_content, cwd=cwd)
+        redacted_details = _redact_json_for_persistence(request.result_details, cwd=cwd)
         base = self._fetch_tool_execution_start(cur, request)
         if base is None:
-            base = self._insert_tool_execution_end_without_start(cur, request, now)
+            base = self._insert_tool_execution_end_without_start(
+                cur,
+                request,
+                now,
+                redacted_content=redacted_content,
+                redacted_details=redacted_details,
+            )
         else:
-            base = self._update_tool_execution_end_tx(cur, request, base, now)
+            base = self._update_tool_execution_end_tx(
+                cur,
+                request,
+                base,
+                now,
+                redacted_content=redacted_content,
+                redacted_details=redacted_details,
+            )
         return ToolExecutionRecord(
             id=base.id,
             session_id=request.session_id,
             tool_call_id=request.tool_call_id,
             tool_name=request.tool_name,
             args=base.args,
-            result_content=_dump_json(request.result_content),
-            result_details=_dump_json(request.result_details),
+            result_content=redacted_content,
+            result_details=redacted_details,
             is_error=request.is_error,
             started_at=base.started_at,
             ended_at=now,
@@ -577,11 +474,23 @@ class PostgresSessionRepository:
             run_id=row[4],
         )
 
+    def _session_cwd(self, session_id: str) -> str | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"SELECT cwd FROM {self._schema}.agent_sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+        return row[0] if row is not None else None
+
     def _insert_tool_execution_end_without_start(
         self,
         cur,
         request: _ToolExecutionEndRequest,
         now: str,
+        *,
+        redacted_content: Any,
+        redacted_details: Any,
     ) -> _ToolExecutionBase:
         record_id = new_db_uuid()
         details = request.details
@@ -604,8 +513,8 @@ class PostgresSessionRepository:
                 request.tool_call_id,
                 request.tool_name,
                 _jsonb(args),
-                _jsonb(_dump_json(request.result_content)),
-                _jsonb(_dump_json(request.result_details)),
+                _jsonb(redacted_content),
+                _jsonb(redacted_details),
                 request.is_error,
                 now,
                 now,
@@ -631,6 +540,9 @@ class PostgresSessionRepository:
         request: _ToolExecutionEndRequest,
         base: _ToolExecutionBase,
         now: str,
+        *,
+        redacted_content: Any,
+        redacted_details: Any,
     ) -> _ToolExecutionBase:
         details = request.details
         runtime_session_id = base.runtime_session_id or details.get("runtimeSessionId")
@@ -645,8 +557,8 @@ class PostgresSessionRepository:
             WHERE id = %s
             """,
             (
-                _jsonb(_dump_json(request.result_content)),
-                _jsonb(_dump_json(request.result_details)),
+                _jsonb(redacted_content),
+                _jsonb(redacted_details),
                 request.is_error,
                 now,
                 request.resolved_duration_ms,
@@ -779,6 +691,7 @@ def _entry_from_row(row: Any) -> EntryRecord:
         context_participates=bool(row[7]),
         created_at=_iso(row[8]),
     )
+
 
 __all__ = [
     "EntryRecord", "PostgresSessionRepository", "SessionAuditEventRecord",

@@ -59,6 +59,38 @@ def test_shell_environment_wins_when_complete(isolate_auto_sources) -> None:
     assert config.host == "db.local"
     assert config.port == 5432
     assert config.schema == "neomagi"
+    assert config.sslmode == "prefer"
+    assert config.connect_kwargs()["sslmode"] == "prefer"
+
+
+def test_database_sslmode_env_override(isolate_auto_sources) -> None:
+    config = load_database_config(
+        env={
+            "DATABASE_HOST": "db.local",
+            "DATABASE_PORT": "5432",
+            "DATABASE_USER": "neo",
+            "DATABASE_PASSWORD": "secret",
+            "DATABASE_NAME": "neomagi",
+            "DATABASE_SSLMODE": "verify-full",
+        },
+    )
+
+    assert config.sslmode == "verify-full"
+    assert config.connect_kwargs()["sslmode"] == "verify-full"
+
+
+def test_database_sslmode_rejects_invalid_value(isolate_auto_sources) -> None:
+    with pytest.raises(DatabaseConfigError, match="DATABASE_SSLMODE"):
+        load_database_config(
+            env={
+                "DATABASE_HOST": "db.local",
+                "DATABASE_PORT": "5432",
+                "DATABASE_USER": "neo",
+                "DATABASE_PASSWORD": "secret",
+                "DATABASE_NAME": "neomagi",
+                "DATABASE_SSLMODE": "maybe",
+            },
+        )
 
 
 def test_partial_shell_environment_fails_fast(isolate_auto_sources) -> None:

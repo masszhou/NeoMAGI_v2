@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .ids import is_db_uuid, new_db_uuid
+from .schema import QuotedIdentifier
 from .session_utils import dump_json as _dump_json
 from .session_utils import jsonb as _jsonb
 from .session_utils import utc_now_iso
@@ -17,7 +18,7 @@ from .session_utils import utc_now_iso
 
 def create_running_step_txn(
     conn: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     task_run_id: str,
     *,
     title: str,
@@ -62,7 +63,7 @@ def create_running_step_txn(
 
 def _create_running_step_rows(
     cur: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     *,
     task_run_id: str,
     step_id: str,
@@ -110,7 +111,7 @@ def _create_running_step_rows(
 
 def update_step_status_txn(
     conn: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     step_id: str,
     *,
     status: str,
@@ -118,7 +119,8 @@ def update_step_status_txn(
     conclusion: str | None,
     ended_at: str | None = None,
 ):
-    from .taskrun_repository import _task_step_from_row, _validate_taskstep_status
+    from .taskrun_repository import _task_step_from_row
+    from .taskrun_row_mapping import _validate_taskstep_status
 
     _validate_uuid("step_id", step_id)
     _validate_taskstep_status(status)
@@ -145,7 +147,7 @@ def update_step_status_txn(
 
 def update_task_run_step_state_txn(
     conn: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     task_run_id: str,
     *,
     status: str,
@@ -153,7 +155,8 @@ def update_task_run_step_state_txn(
     heartbeat_at: str | None,
     updated_at: str | None = None,
 ):
-    from .taskrun_repository import _task_run_from_row, _validate_taskrun_status
+    from .taskrun_repository import _task_run_from_row
+    from .taskrun_row_mapping import _validate_taskrun_status
 
     _validate_uuid("task_run_id", task_run_id)
     if current_step_id is not None:
@@ -182,7 +185,7 @@ def update_task_run_step_state_txn(
 
 def lease_running_task_run_txn(
     conn: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     task_run_id: str,
     *,
     step_id: str,
@@ -213,7 +216,7 @@ def lease_running_task_run_txn(
 
 def find_tool_execution_id(
     conn: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     *,
     session_id: str,
     tool_call_id: str,
@@ -236,7 +239,7 @@ def find_tool_execution_id(
 
 def update_task_run_step_state_tx(
     cur: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     task_run_id: str,
     *,
     status: str,
@@ -264,7 +267,7 @@ def update_task_run_step_state_tx(
 
 def _insert_running_step(
     cur: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     *,
     task_run_id: str,
     step_id: str,
@@ -294,7 +297,7 @@ def _insert_running_step(
 
 def _insert_step_started_event(
     cur: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     *,
     task_run_id: str,
     step_id: str,
@@ -329,7 +332,7 @@ def _insert_step_started_event(
 
 def _update_step_status(
     cur: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     *,
     step_id: str,
     status: str,
@@ -353,7 +356,7 @@ def _update_step_status(
     return cur.fetchone()
 
 
-def _workspace_root(cur: Any, schema: str, task_run_id: str) -> str:
+def _workspace_root(cur: Any, schema: QuotedIdentifier, task_run_id: str) -> str:
     cur.execute(
         f"""
         SELECT workspace_root
@@ -372,7 +375,7 @@ def _lock_workspace(cur: Any, workspace_root: str) -> None:
     cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (workspace_root,))
 
 
-def _require_step_ready_task_run(cur: Any, schema: str, task_run_id: str) -> None:
+def _require_step_ready_task_run(cur: Any, schema: QuotedIdentifier, task_run_id: str) -> None:
     cur.execute(
         f"""
         SELECT status, current_step_id
@@ -396,7 +399,7 @@ def _require_step_ready_task_run(cur: Any, schema: str, task_run_id: str) -> Non
 
 def _require_no_running_workspace_task(
     cur: Any,
-    schema: str,
+    schema: QuotedIdentifier,
     workspace_root: str,
     task_run_id: str,
 ) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .schema import QuotedIdentifier
 from .session_utils import iso as _iso
 
 
@@ -23,7 +24,7 @@ class SessionAuditEventRecord:
     tool_execution_id: str | None = None
 
 
-def list_audit_events(conn, schema: str, session_id: str) -> list[SessionAuditEventRecord]:
+def list_audit_events(conn, schema: QuotedIdentifier, session_id: str) -> list[SessionAuditEventRecord]:
     with conn.cursor() as cur:
         cur.execute(
             f"""

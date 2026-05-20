@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from cli.core.session_types import CURRENT_SESSION_VERSION
 
 from .config import DatabaseConfig
@@ -215,6 +217,17 @@ class SchemaBootstrapError(RuntimeError):
     """Raised when schema bootstrap or version validation fails."""
 
 
+@dataclass(frozen=True, slots=True)
+class QuotedIdentifier:
+    value: str
+
+    def __str__(self) -> str:
+        return self.value
+
+
+_QuotedIdentifier = QuotedIdentifier
+
+
 def ensure_schema(conn, config: DatabaseConfig) -> None:
     """Create the current durable storage table set and verify schema metadata."""
 
@@ -246,13 +259,15 @@ def ensure_schema(conn, config: DatabaseConfig) -> None:
         raise SchemaBootstrapError(f"failed to bootstrap Postgres schema: {exc}") from exc
 
 
-def _create_schema_objects(cur, schema: str) -> None:
-    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+def _create_schema_objects(cur, schema: _QuotedIdentifier) -> None:
+    schema_sql = _schema_sql(schema)
+    cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}")
     for template in _SCHEMA_SQL_TEMPLATES + _TASKRUN_SCHEMA_SQL_TEMPLATES:
-        cur.execute(template.format(schema=schema))
+        cur.execute(template.format(schema=schema_sql))
 
 
-def _create_current_leaf_constraint(cur, schema: str) -> None:
+def _create_current_leaf_constraint(cur, schema: _QuotedIdentifier) -> None:
+    schema_sql = _schema_sql(schema)
     cur.execute(
         f"""
         DO $$
@@ -261,12 +276,12 @@ def _create_current_leaf_constraint(cur, schema: str) -> None:
                 SELECT 1
                 FROM pg_constraint
                 WHERE conname = 'agent_sessions_current_leaf_fk'
-                  AND conrelid = '{schema}.agent_sessions'::regclass
+                  AND conrelid = '{schema_sql}.agent_sessions'::regclass
             ) THEN
-                ALTER TABLE {schema}.agent_sessions
+                ALTER TABLE {schema_sql}.agent_sessions
                 ADD CONSTRAINT agent_sessions_current_leaf_fk
                 FOREIGN KEY (current_leaf_entry_id)
-                REFERENCES {schema}.agent_session_entries(id)
+                REFERENCES {schema_sql}.agent_session_entries(id)
                 DEFERRABLE INITIALLY DEFERRED;
             END IF;
         END
@@ -275,7 +290,8 @@ def _create_current_leaf_constraint(cur, schema: str) -> None:
     )
 
 
-def _create_taskrun_current_step_constraint(cur, schema: str) -> None:
+def _create_taskrun_current_step_constraint(cur, schema: _QuotedIdentifier) -> None:
+    schema_sql = _schema_sql(schema)
     cur.execute(
         f"""
         DO $$
@@ -284,12 +300,12 @@ def _create_taskrun_current_step_constraint(cur, schema: str) -> None:
                 SELECT 1
                 FROM pg_constraint
                 WHERE conname = 'task_runs_current_step_fk'
-                  AND conrelid = '{schema}.task_runs'::regclass
+                  AND conrelid = '{schema_sql}.task_runs'::regclass
             ) THEN
-                ALTER TABLE {schema}.task_runs
+                ALTER TABLE {schema_sql}.task_runs
                 ADD CONSTRAINT task_runs_current_step_fk
                 FOREIGN KEY (current_step_id)
-                REFERENCES {schema}.task_steps(id)
+                REFERENCES {schema_sql}.task_steps(id)
                 DEFERRABLE INITIALLY DEFERRED;
             END IF;
         END
@@ -298,9 +314,10 @@ def _create_taskrun_current_step_constraint(cur, schema: str) -> None:
     )
 
 
-def _upsert_meta(cur, schema: str, key: str, expected: str) -> None:
+def _upsert_meta(cur, schema: _QuotedIdentifier, key: str, expected: str) -> None:
+    schema_sql = _schema_sql(schema)
     cur.execute(
-        f"SELECT value FROM {schema}.agent_schema_meta WHERE key = %s",
+        f"SELECT value FROM {schema_sql}.agent_schema_meta WHERE key = %s",
         (key,),
     )
     row = cur.fetchone()
@@ -313,24 +330,35 @@ def _upsert_meta(cur, schema: str, key: str, expected: str) -> None:
         return
     cur.execute(
         f"""
-        INSERT INTO {schema}.agent_schema_meta(key, value, updated_at)
+        INSERT INTO {schema_sql}.agent_schema_meta(key, value, updated_at)
         VALUES (%s, %s, now())
         """,
         (key, expected),
     )
 
 
-def _quote_identifier(identifier: str) -> str:
+def _quote_identifier(identifier: str) -> QuotedIdentifier:
     if not identifier or not (identifier[0].isalpha() or identifier[0] == "_"):
         raise SchemaBootstrapError(f"invalid PostgreSQL schema identifier: {identifier!r}")
     if not all(ch.isalnum() or ch == "_" for ch in identifier):
         raise SchemaBootstrapError(f"invalid PostgreSQL schema identifier: {identifier!r}")
-    return f'"{identifier}"'
+    return QuotedIdentifier(f'"{identifier}"')
+
+
+def schema_sql(identifier: QuotedIdentifier) -> str:
+    if not isinstance(identifier, QuotedIdentifier):
+        raise SchemaBootstrapError("schema identifier must be quoted by _quote_identifier")
+    return identifier.value
+
+
+_schema_sql = schema_sql
 
 
 __all__ = [
     "NEOMAGI_SESSION_SCHEMA_VERSION",
     "NEOMAGI_TASKRUN_SCHEMA_VERSION",
+    "QuotedIdentifier",
     "SchemaBootstrapError",
     "ensure_schema",
+    "schema_sql",
 ]

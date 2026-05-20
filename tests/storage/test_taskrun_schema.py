@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from storage.config import DatabaseConfig
-from storage.schema import NEOMAGI_TASKRUN_SCHEMA_VERSION, ensure_schema
+from storage.schema import (
+    NEOMAGI_TASKRUN_SCHEMA_VERSION,
+    SchemaBootstrapError,
+    _create_schema_objects,
+    ensure_schema,
+)
 
 
 class _Cursor:
@@ -66,3 +73,8 @@ def test_ensure_schema_bootstraps_taskrun_tables_and_meta() -> None:
     assert ("neomagi_taskrun_schema_version", NEOMAGI_TASKRUN_SCHEMA_VERSION) in meta_params
     assert conn.commits == 1
     assert conn.rollbacks == 0
+
+
+def test_schema_builders_reject_unquoted_identifier_boundary() -> None:
+    with pytest.raises(SchemaBootstrapError, match="must be quoted"):
+        _create_schema_objects(_Cursor(), "neomagi")  # type: ignore[arg-type]

@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import re
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 REDACTED_VALUE = "[redacted]"
 REDACTED_PATH = "[redacted-path]"
+REDACTION_FAILURE_VALUE = "[redaction-failed]"
 
 SECRET_KEY_RULE_ID = "secret_like_key"
 SECRET_VALUE_RULE_ID = "secret_like_value"
 SENSITIVE_PATH_RULE_ID = "sensitive_path"
 SENSITIVE_CONTENT_RULE_ID = "sensitive_path_content"
 OUTSIDE_CWD_PATH_RULE_ID = "outside_cwd_path"
+REDACTION_FAILURE_RULE_ID = "redaction_failure"
 
 _SECRET_KEY_RE = re.compile(
     r"token|secret|password|api[_-]?key|authorization|cookie|access[_-]?token|"
@@ -24,7 +27,10 @@ _SECRET_KEY_RE = re.compile(
 _SECRET_VALUE_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._/+\-]{12,}|"
     r"gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{10,}|"
-    r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)"
+    r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+|"
+    r"AKIA[0-9A-Z]{16}|"
+    r"(?i:[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API[_-]?KEY|"
+    r"ACCESS[_-]?KEY[_-]?ID|SECRET[_-]?ACCESS[_-]?KEY)[A-Za-z0-9_]*\s*=\s*[^\s]+))"
 )
 _LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_/+\-]{24,}")
 _ENV_REF_RE = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)")
@@ -80,6 +86,7 @@ _LOW_ENTROPY_LITERAL_DENYLIST = {
     "dummy",
     "example",
 }
+_LOGGER = logging.getLogger("magipi.redaction")
 
 
 @dataclass(slots=True)
@@ -134,6 +141,20 @@ def redact_for_export(
         sensitive_context=False,
     )
     return redacted, active_report
+
+
+def redact_for_persistence(
+    value: Any,
+    *,
+    cwd: str | Path | None = None,
+) -> tuple[Any, RedactionReport]:
+    try:
+        return redact_for_export(value, cwd=cwd)
+    except Exception:
+        _LOGGER.exception("persistence redaction failed")
+        report = RedactionReport()
+        report.record(REDACTION_FAILURE_RULE_ID, ())
+        return _redaction_failure_marker(value), report
 
 
 def redacted_command_preview(command: str) -> tuple[str, bool]:
@@ -301,8 +322,20 @@ def _is_outside_cwd(value: str, cwd: Path | None) -> bool:
     return False
 
 
+def _redaction_failure_marker(value: Any) -> Any:
+    if isinstance(value, list):
+        return [{"type": "text", "text": REDACTION_FAILURE_VALUE}]
+    if isinstance(value, dict):
+        return {"redactionStatus": "failed", "text": REDACTION_FAILURE_VALUE}
+    if isinstance(value, str):
+        return REDACTION_FAILURE_VALUE
+    return None
+
+
 __all__ = [
     "OUTSIDE_CWD_PATH_RULE_ID",
+    "REDACTION_FAILURE_RULE_ID",
+    "REDACTION_FAILURE_VALUE",
     "REDACTED_PATH",
     "REDACTED_VALUE",
     "RedactionReport",
@@ -311,6 +344,7 @@ __all__ = [
     "SENSITIVE_CONTENT_RULE_ID",
     "SENSITIVE_PATH_RULE_ID",
     "redact_for_export",
+    "redact_for_persistence",
     "redact_literal_values",
     "redact_secret_keys",
     "redacted_command_preview",

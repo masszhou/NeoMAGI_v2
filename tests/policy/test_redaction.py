@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from policy.redaction import (
+    REDACTION_FAILURE_VALUE,
     REDACTED_PATH,
     REDACTED_VALUE,
     redact_for_export,
+    redact_for_persistence,
     redact_literal_values,
     redact_secret_keys,
     redacted_command_preview,
@@ -94,3 +96,25 @@ def test_literal_value_redaction_ignores_low_entropy_values() -> None:
     assert applied is True
     assert "test token key short" in redacted
     assert "real-secret-value" not in redacted
+
+
+def test_persistence_redaction_masks_secret_assignments_in_text() -> None:
+    payload = [{"type": "text", "text": "AWS_SECRET_ACCESS_KEY=fake-secret-value\nsafe"}]
+
+    redacted, report = redact_for_persistence(payload)
+
+    assert "fake-secret-value" not in str(redacted)
+    assert REDACTED_VALUE in redacted[0]["text"]
+    assert "secret_like_value" in report.counts
+
+
+def test_persistence_redaction_fails_closed(monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("redactor failed")
+
+    monkeypatch.setattr("policy.redaction._redact_for_export", boom)
+
+    redacted, report = redact_for_persistence([{"type": "text", "text": "secret"}])
+
+    assert redacted == [{"type": "text", "text": REDACTION_FAILURE_VALUE}]
+    assert report.counts["redaction_failure"] == 1

@@ -30,6 +30,7 @@ class DatabaseConfig:
     password: str
     database: str
     schema: str = "neomagi"
+    sslmode: str = "prefer"
 
     def connect_kwargs(self) -> dict[str, object]:
         return {
@@ -38,6 +39,7 @@ class DatabaseConfig:
             "user": self.user,
             "password": self.password,
             "dbname": self.database,
+            "sslmode": self.sslmode,
         }
 
 
@@ -62,6 +64,7 @@ _REQUIRED_KEYS: tuple[str, ...] = (
     "DATABASE_NAME",
 )
 _SCHEMA_KEY = "DATABASE_SCHEMA"
+_SSLMODE_KEY = "DATABASE_SSLMODE"
 _ENV_FILE_KEY = "NEOMAGI_ENV_FILE"
 _USER_CONFIG_SUBDIR = "neomagi"
 _REPO_MARKER_FILE = "pyproject.toml"
@@ -167,7 +170,7 @@ def would_fall_back_to(
     stripped = {
         k: v
         for k, v in env_values.items()
-        if k not in _REQUIRED_KEYS and k != _SCHEMA_KEY
+        if k not in _REQUIRED_KEYS and k not in {_SCHEMA_KEY, _SSLMODE_KEY}
     }
     configured = (stripped.get(_ENV_FILE_KEY) or "").strip()
     if configured:
@@ -261,6 +264,9 @@ def _collect_shell_values(env_values: Mapping[str, str]) -> dict[str, str] | Non
     schema = (env_values.get(_SCHEMA_KEY) or "").strip()
     if schema:
         values[_SCHEMA_KEY] = schema
+    sslmode = (env_values.get(_SSLMODE_KEY) or "").strip()
+    if sslmode:
+        values[_SSLMODE_KEY] = sslmode
     return values
 
 
@@ -327,6 +333,10 @@ def _build_config(values: Mapping[str, str]) -> DatabaseConfig:
             "(letters, numbers, and underscores; cannot start with a number)"
         )
 
+    sslmode = (values.get(_SSLMODE_KEY) or "prefer").strip() or "prefer"
+    if sslmode not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+        raise DatabaseConfigError("DATABASE_SSLMODE must be a valid PostgreSQL sslmode")
+
     return DatabaseConfig(
         host=str(values["DATABASE_HOST"]),
         port=port,
@@ -334,6 +344,7 @@ def _build_config(values: Mapping[str, str]) -> DatabaseConfig:
         password=str(values["DATABASE_PASSWORD"]),
         database=str(values["DATABASE_NAME"]),
         schema=schema,
+        sslmode=sslmode,
     )
 
 

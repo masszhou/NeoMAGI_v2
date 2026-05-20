@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +37,11 @@ def export_session_jsonl(
         SessionEntryAdapter.validate_python(entry.payload.model_dump(by_alias=True, exclude_none=True))
         for entry in repository.list_entries(session_id)
     ]
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8") as handle:
-        handle.write(json.dumps(header, ensure_ascii=False, separators=(",", ":")) + "\n")
-        for entry in entries:
-            payload = entry.model_dump(by_alias=True, exclude_none=True)
-            handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    lines = [json.dumps(header, ensure_ascii=False, separators=(",", ":"))]
+    for entry in entries:
+        payload = entry.model_dump(by_alias=True, exclude_none=True)
+        lines.append(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    _atomic_write_text(target, "\n".join(lines) + "\n")
     return target
 
 
@@ -119,6 +120,32 @@ def _read_jsonl_objects(source: Path) -> list[dict[str, Any]]:
     if not objects:
         raise SessionJsonlError("session JSONL has no JSON objects")
     return objects
+
+
+def _atomic_write_text(target: Path, body: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        fd, raw_tmp_path = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            text=True,
+        )
+        tmp_path = Path(raw_tmp_path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, target)
+    except OSError as exc:
+        raise SessionJsonlError(f"failed to write session JSONL {target}: {exc}") from exc
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _resolvable_parent_session_id(

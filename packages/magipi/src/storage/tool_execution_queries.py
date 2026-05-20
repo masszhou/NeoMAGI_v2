@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from .schema import QuotedIdentifier
 from .session_utils import iso as _iso
 from .tool_execution_records import ToolExecutionRecord
 
 
-def list_tool_executions(conn, schema: str, session_id: str) -> list[ToolExecutionRecord]:
+def list_tool_executions(conn, schema: QuotedIdentifier, session_id: str) -> list[ToolExecutionRecord]:
     with conn.cursor() as cur:
         cur.execute(
             f"""

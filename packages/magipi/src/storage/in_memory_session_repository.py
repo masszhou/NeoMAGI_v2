@@ -9,6 +9,10 @@ from typing import Any
 from cli.core.session_types import MessageEntry, SessionEntry
 
 from .ids import new_db_uuid, provider_cache_affinity_for_session
+from .session_persistence_redaction import (
+    redact_entry_for_persistence as _redact_entry_for_persistence,
+    redact_json_for_persistence as _redact_json_for_persistence,
+)
 from .session_repository import (
     EntryRecord,
     SessionRecord,
@@ -110,8 +114,8 @@ class InMemorySessionRepository(SessionRepository):
         *,
         entry_id: str | None = None,
     ) -> EntryRecord:
-        self._require_session(session_id)
-        entry = _validate_entry(payload)
+        session = self._require_session(session_id)
+        entry = _redact_entry_for_persistence(_validate_entry(payload), cwd=session.cwd)
         existing = self.get_entry(session_id, entry.id)
         if existing is not None:
             return existing
@@ -171,12 +175,14 @@ class InMemorySessionRepository(SessionRepository):
         runtime_session_id: str | None = None,
         run_id: str | None = None,
     ) -> ToolExecutionRecord:
+        session = self._require_session(session_id)
+        redacted_args = _redact_json_for_persistence(args, cwd=session.cwd)
         record = ToolExecutionRecord(
             id=new_db_uuid(),
             session_id=session_id,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            args=_dump_json(args),
+            args=redacted_args,
             started_at=utc_now_iso(),
             runtime_session_id=runtime_session_id,
             run_id=run_id,
@@ -195,6 +201,9 @@ class InMemorySessionRepository(SessionRepository):
         is_error: bool,
         duration_ms: int | None = None,
     ) -> ToolExecutionRecord:
+        session = self._require_session(session_id)
+        result_content = _redact_json_for_persistence(result_content, cwd=session.cwd)
+        result_details = _redact_json_for_persistence(result_details, cwd=session.cwd)
         details = result_details if isinstance(result_details, dict) else {}
         for index in range(len(self.tool_executions) - 1, -1, -1):
             record = self.tool_executions[index]
