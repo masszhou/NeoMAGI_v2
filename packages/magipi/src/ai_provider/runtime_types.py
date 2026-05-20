@@ -89,6 +89,12 @@ def ensure_stream_options(options: StreamOptions | None = None) -> StreamOptions
     return options if options is not None else StreamOptions()
 
 
+def stream_cancelled(stream: "AssistantMessageEventStream", options: StreamOptions) -> bool:
+    return stream.abort_event.is_set() or (
+        options.signal is not None and options.signal.is_set()
+    )
+
+
 def stream_options_from_simple(
     options: SimpleStreamOptions | None,
     *,
@@ -127,5 +133,6 @@ __all__ = [
     "StreamFunction",
     "StreamOptions",
     "ensure_stream_options",
+    "stream_cancelled",
     "stream_options_from_simple",
 ]

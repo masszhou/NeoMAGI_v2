@@ -6,7 +6,13 @@ from urllib.parse import urlparse
 
 from ai_provider.credentials import resolve_api_key
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention
-from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
+from ai_provider.runtime_types import (
+    SimpleStreamOptions,
+    StreamOptions,
+    ensure_stream_options,
+    stream_cancelled,
+    stream_options_from_simple,
+)
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -29,7 +35,7 @@ from ai_provider.types import (
     ToolResultMessage,
     UserMessage,
 )
-from ai_provider.usage import normalize_anthropic_usage
+from ai_provider.usage import merge_anthropic_usage
 
 from ._shared import (
     clone_message,
@@ -146,13 +152,22 @@ async def _run_anthropic(
     options: StreamOptions,
 ) -> None:
     payload = build_anthropic_messages_params(model, context, options)
+    if stream_cancelled(stream, options):
+        stream.close()
+        return
     payload = await maybe_call_payload(options, payload, model)
     try:
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         source = await _call_anthropic_stream(model, options, payload)
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         await maybe_call_response(options, model)
-        await _parse_anthropic_events(stream, partial, model, source)
+        await _parse_anthropic_events(stream, partial, model, source, options)
     except Exception as exc:
-        if not stream.abort_event.is_set():
+        if not stream_cancelled(stream, options):
             stream.error(str(exc))
 
 
@@ -174,6 +189,7 @@ async def _parse_anthropic_events(
     partial: AssistantMessage,
     model: Model,
     source: object,
+    options: StreamOptions,
 ) -> None:
     state = {"stop_reason": "stop", "tool_json": {}}
     handlers = {
@@ -184,7 +200,7 @@ async def _parse_anthropic_events(
         "message_delta": _handle_message_delta,
     }
     async for event in iterate_provider_stream(source):
-        if stream.abort_event.is_set():
+        if stream_cancelled(stream, options):
             stream.close()
             return
         event_type = event_value(event, "type")
@@ -339,8 +355,8 @@ def _finish_anthropic_stream(
 
 
 def _update_usage(partial: AssistantMessage, model: Model, raw_usage: object | None) -> None:
-    if raw_usage:
-        partial.usage = normalize_anthropic_usage(raw_usage, model)
+    if raw_usage is not None:
+        partial.usage = merge_anthropic_usage(partial.usage, raw_usage, model)
 
 
 def _map_stop_reason(reason: object) -> str | None:

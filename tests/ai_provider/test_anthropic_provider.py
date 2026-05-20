@@ -177,6 +177,40 @@ def test_anthropic_stream_text_fixture() -> None:
     asyncio.run(run())
 
 
+def test_anthropic_stream_delta_usage_does_not_clear_input_or_cache() -> None:
+    async def run() -> None:
+        model = get_model("anthropic", "claude-haiku-4-5-20251001")
+        fake = FakeAnthropicClient(
+            [
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_prod_delta",
+                        "usage": {
+                            "input_tokens": 100,
+                            "cache_read_input_tokens": 20,
+                            "cache_creation_input_tokens": 10,
+                        },
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 7}},
+                {"type": "message_stop"},
+            ]
+        )
+
+        result = await stream_anthropic_messages(model, _context(), StreamOptions(client=fake)).result()
+
+        assert result.usage.input == 100
+        assert result.usage.output == 7
+        assert result.usage.cache_read == 20
+        assert result.usage.cache_write == 10
+
+    asyncio.run(run())
+
+
 def test_anthropic_stream_text_and_tool_call() -> None:
     async def run() -> None:
         fixture = _stream_fixture("provider_stream_tool_call")

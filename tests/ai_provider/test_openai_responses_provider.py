@@ -257,6 +257,28 @@ def test_openai_responses_stream_text_and_tool_call() -> None:
     asyncio.run(run())
 
 
+def test_openai_responses_honors_signal_before_provider_call() -> None:
+    async def run() -> None:
+        signal = asyncio.Event()
+        signal.set()
+        model = get_model("openai", "gpt-4o-mini")
+        fake = FakeOpenAIClient(OPENAI_RESPONSES_TEXT_TOOL_EVENTS)
+
+        stream = stream_openai_responses(
+            model,
+            _context(),
+            StreamOptions(client=fake, signal=signal),
+        )
+        events = [event.type async for event in stream]
+        result = await stream.result()
+
+        assert fake.responses.last_payload is None
+        assert events == ["start", "error"]
+        assert result.stop_reason == "aborted"
+
+    asyncio.run(run())
+
+
 def test_openai_responses_stream_done_arguments_and_text_phase_fixture() -> None:
     async def run() -> None:
         fixture = _stream_fixture("openai_responses_stream_tool_call")

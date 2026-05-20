@@ -8,7 +8,13 @@ from urllib.parse import urlparse
 from ai_provider.credentials import resolve_api_key
 from ai_provider.models import OpenAICompletionsCompat, parse_openai_completions_compat
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
-from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
+from ai_provider.runtime_types import (
+    SimpleStreamOptions,
+    StreamOptions,
+    ensure_stream_options,
+    stream_cancelled,
+    stream_options_from_simple,
+)
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -137,13 +143,22 @@ async def _run_openai_completions(
     options: StreamOptions,
 ) -> None:
     payload, headers = build_openai_completions_params(model, context, options)
+    if stream_cancelled(stream, options):
+        stream.close()
+        return
     payload = await maybe_call_payload(options, payload, model)
     try:
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         source = await _call_openai_completions_stream(model, options, payload, headers)
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         await maybe_call_response(options, model, headers=headers)
-        await _parse_completion_chunks(stream, partial, model, source)
+        await _parse_completion_chunks(stream, partial, model, source, options)
     except Exception as exc:
-        if not stream.abort_event.is_set():
+        if not stream_cancelled(stream, options):
             stream.error(str(exc))
 
 
@@ -168,6 +183,7 @@ async def _parse_completion_chunks(
     partial: AssistantMessage,
     model: Model,
     source: object,
+    options: StreamOptions,
 ) -> None:
     state: dict[str, object] = {
         "text_index": None,
@@ -179,7 +195,7 @@ async def _parse_completion_chunks(
     }
 
     async for chunk in iterate_provider_stream(source):
-        if stream.abort_event.is_set():
+        if stream_cancelled(stream, options):
             stream.close()
             return
         usage = event_value(chunk, "usage")

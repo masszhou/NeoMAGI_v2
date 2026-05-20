@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ai_provider.model_registry import get_model
 from ai_provider.usage import (
+    merge_anthropic_usage,
     normalize_anthropic_usage,
     normalize_openai_completions_usage,
     normalize_openai_responses_usage,
@@ -34,6 +35,31 @@ def test_anthropic_usage_fixture() -> None:
     _assert_usage(normalize_anthropic_usage(row["raw"], model), row["expected"])
 
 
+def test_anthropic_delta_merge_preserves_start_cache_usage() -> None:
+    model = get_model("anthropic", "claude-haiku-4-5-20251001")
+    start = merge_anthropic_usage(
+        None,
+        {
+            "input_tokens": 100,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 10,
+        },
+        model,
+    )
+
+    merged = merge_anthropic_usage(start, {"output_tokens": 7}, model)
+
+    assert merged.input == 100
+    assert merged.output == 7
+    assert merged.cache_read == 20
+    assert merged.cache_write == 10
+    assert merged.total_tokens == 137
+    assert merged.cost.total == (
+        merged.cost.input + merged.cost.output + merged.cost.cache_read + merged.cost.cache_write
+    )
+
+
 def test_openai_responses_usage_fixture() -> None:
     row = _load("openai_responses.json")
     model = get_model("openai", "gpt-4o-mini")
@@ -52,4 +78,3 @@ def test_openai_compatible_cache_write_fixture() -> None:
     usage = normalize_openai_completions_usage(row["raw"], model)
     _assert_usage(usage, row["expected"])
     assert usage.cache_read == 60
-

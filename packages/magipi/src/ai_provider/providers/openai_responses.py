@@ -7,7 +7,13 @@ from urllib.parse import urlparse
 
 from ai_provider.credentials import resolve_api_key
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
-from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
+from ai_provider.runtime_types import (
+    SimpleStreamOptions,
+    StreamOptions,
+    ensure_stream_options,
+    stream_cancelled,
+    stream_options_from_simple,
+)
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -129,13 +135,22 @@ async def _run_openai_responses(
     options: StreamOptions,
 ) -> None:
     payload, headers = build_openai_responses_params(model, context, options)
+    if stream_cancelled(stream, options):
+        stream.close()
+        return
     payload = await maybe_call_payload(options, payload, model)
     try:
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         source = await _call_openai_responses_stream(model, options, payload, headers)
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         await maybe_call_response(options, model, headers=headers)
-        await _parse_response_events(stream, partial, model, source)
+        await _parse_response_events(stream, partial, model, source, options)
     except Exception as exc:
-        if not stream.abort_event.is_set():
+        if not stream_cancelled(stream, options):
             stream.error(str(exc))
 
 
@@ -160,6 +175,7 @@ async def _parse_response_events(
     partial: AssistantMessage,
     model: Model,
     source: object,
+    options: StreamOptions,
 ) -> None:
     state: dict[str, object] = {
         "text_index": None,
@@ -182,7 +198,7 @@ async def _parse_response_events(
     }
 
     async for event in iterate_provider_stream(source):
-        if stream.abort_event.is_set():
+        if stream_cancelled(stream, options):
             stream.close()
             return
         handler = handlers.get(event_value(event, "type"))

@@ -38,6 +38,17 @@ def _get(raw: Any, key: str, default: Any = None) -> Any:
     return getattr(raw, key, default)
 
 
+def _has(raw: Any, key: str) -> bool:
+    if raw is None:
+        return False
+    if isinstance(raw, dict):
+        return key in raw
+    fields_set = getattr(raw, "model_fields_set", None)
+    if fields_set is not None:
+        return key in fields_set
+    return hasattr(raw, key)
+
+
 def _details(raw: Any, key: str) -> Any:
     return _get(raw, key, {}) or {}
 
@@ -66,6 +77,29 @@ def normalize_anthropic_usage(raw: Any, model: Model) -> Usage:
         cache_read=cache_read,
         cache_write=cache_write,
     )
+
+
+def merge_anthropic_usage(current: Usage | None, raw: Any, model: Model) -> Usage:
+    """Merge Anthropic stream usage without zeroing absent delta fields."""
+
+    usage = current.model_copy(deep=True) if current is not None else _usage(
+        model,
+        input=0,
+        output=0,
+        cache_read=0,
+        cache_write=0,
+    )
+    if _has(raw, "input_tokens"):
+        usage.input = max(_as_int(_get(raw, "input_tokens")), 0)
+    if _has(raw, "output_tokens"):
+        usage.output = max(_as_int(_get(raw, "output_tokens")), 0)
+    if _has(raw, "cache_read_input_tokens"):
+        usage.cache_read = max(_as_int(_get(raw, "cache_read_input_tokens")), 0)
+    if _has(raw, "cache_creation_input_tokens"):
+        usage.cache_write = max(_as_int(_get(raw, "cache_creation_input_tokens")), 0)
+    usage.total_tokens = usage.input + usage.output + usage.cache_read + usage.cache_write
+    usage.cost = calculate_cost(model, usage)
+    return usage
 
 
 def normalize_openai_responses_usage(raw: Any, model: Model) -> Usage:
@@ -115,6 +149,7 @@ def normalize_faux_usage(raw: Any, model: Model) -> Usage:
 __all__ = [
     "PER_MILLION",
     "calculate_cost",
+    "merge_anthropic_usage",
     "normalize_anthropic_usage",
     "normalize_faux_usage",
     "normalize_openai_completions_usage",

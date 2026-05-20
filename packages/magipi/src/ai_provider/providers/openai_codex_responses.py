@@ -18,7 +18,13 @@ from urllib.request import Request, urlopen
 from ai_provider.credentials import resolve_api_key
 from ai_provider.oauth import extract_openai_account_id
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
-from ai_provider.runtime_types import SimpleStreamOptions, StreamOptions, ensure_stream_options, stream_options_from_simple
+from ai_provider.runtime_types import (
+    SimpleStreamOptions,
+    StreamOptions,
+    ensure_stream_options,
+    stream_cancelled,
+    stream_options_from_simple,
+)
 from ai_provider.streaming import AssistantMessageEventStream
 from ai_provider.types import (
     AssistantMessage,
@@ -130,14 +136,23 @@ async def _run_openai_codex_responses(
 ) -> None:
     try:
         payload, headers = build_openai_codex_responses_params(model, context, options)
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         payload = await maybe_call_payload(options, payload, model)
         _validate_codex_request_payload(payload)
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         source = await _call_openai_codex_stream(model, options, payload, headers)
+        if stream_cancelled(stream, options):
+            stream.close()
+            return
         await maybe_call_response(options, model, headers=_public_response_headers(headers))
         mapped = _map_codex_events(source)
-        await _parse_response_events(stream, partial, model, mapped)
+        await _parse_response_events(stream, partial, model, mapped, options)
     except Exception as exc:
-        if not stream.abort_event.is_set():
+        if not stream_cancelled(stream, options):
             stream.error(str(exc))
 
 
