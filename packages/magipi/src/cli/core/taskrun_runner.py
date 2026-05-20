@@ -7,22 +7,24 @@ import json
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from agent_core import Agent, AgentOptions
 from ai_provider.credentials import resolve_api_key
 from ai_provider.model_registry import resolve_model
-from ai_provider.types import TextContent, UserMessage
-from cli.core.session_manager import SessionManager
-from cli.core.session_types import CustomMessage
-from dataclasses import replace
-
-from cli.core.taskrun_agent_session import StepEventCollector, TaskRunAgentSession
+from ai_provider.overflow import is_context_overflow
+from ai_provider.types import Context, TextContent, UserMessage
+from cli.core.compaction.service import CompactionService, ProviderSummaryGenerator
+from cli.core.compaction_event_emitter import TaskRunCompactionEventEmitter
 from cli.core.evidence_classifier import (
     VERIFICATION_SUPPORTED,
     EvidenceObservation,
 )
+from cli.core.session_manager import SessionManager
+from cli.core.session_types import CustomMessage
+from cli.core.taskrun_agent_session import StepEventCollector, TaskRunAgentSession
 from cli.core.taskrun_event_payloads import (
     TASK_STEP_BLOCKER_DETECTED,
     TASK_STEP_EVIDENCE_MISSING,
@@ -44,10 +46,10 @@ from cli.core.taskrun_policy_hook import (
     chain_event_hooks,
 )
 from cli.core.taskrun_service import (
-    STEP_INSTRUCTION,
     TaskRunStepContext,
     TaskRunStepOutcome,
 )
+from cli.core.taskrun_step import STEP_INSTRUCTION
 from cli.interactive.extension_runtime import _DEFAULT_SYSTEM_PROMPT
 from cli.interactive.session_writer import DurableSessionEventWriter
 from cli.resources.system_prompt import SystemPromptParts, build_system_prompt
@@ -86,14 +88,13 @@ class TaskRunHeadlessRunner:
     def run(self, context: TaskRunStepContext) -> TaskRunStepOutcome:
         runtime_session_id = f"runtime-{uuid.uuid4()}"
         artifact_store = RuntimeArtifactStore(runtime_session_id)
-        self._append_taskrun_summary(context)
-        agent, writer, policy_resolution_store = self._prepare_agent(
-            context,
-            runtime_session_id=runtime_session_id,
-            artifact_store=artifact_store,
-        )
-        collector = StepEventCollector()
         try:
+            agent, writer, policy_resolution_store = self._prepare_agent(
+                context,
+                runtime_session_id=runtime_session_id,
+                artifact_store=artifact_store,
+            )
+            collector = StepEventCollector()
             return asyncio.run(
                 self._run_session(
                     agent=agent,
@@ -114,30 +115,88 @@ class TaskRunHeadlessRunner:
         runtime_session_id: str,
         artifact_store: RuntimeArtifactStore,
     ) -> tuple[Agent, DurableSessionEventWriter, PolicyResolutionStore]:
-        model = resolve_model(context.runtime_options.model_ref)
-        session = self.session_manager.resume_session(context.task_run.agent_session_id)
-        session_context = self.session_manager.build_session_context(
-            context.task_run.agent_session_id
-        )
-        messages = convert_coding_messages_to_llm(list(session_context.messages))
+        model, session, messages, compaction_emitter = self._prepare_session_messages(context)
         audit_sink = self.audit_sink_factory(context.task_run.agent_session_id)
         agent_ref: list[Agent] = []
 
         def active_run_id() -> str | None:
             return agent_ref[0].active_run_id if agent_ref else None
 
-        writer = DurableSessionEventWriter(
-            manager=self.session_manager,
-            session_id_provider=lambda: context.task_run.agent_session_id,
-            runtime_session_id_provider=lambda: runtime_session_id,
-            run_id_provider=active_run_id,
-        )
+        writer = self._create_durable_writer(context, runtime_session_id, active_run_id)
         policy_resolution_store = PolicyResolutionStore()
         budget_state = PermissionBudgetState()
-        tools = self._create_tools(
+        tools, before_tool_call = self._create_tools_and_policy_hook(
             context,
             runtime_session_id=runtime_session_id,
             run_id_provider=active_run_id,
+            audit_sink=audit_sink,
+            artifact_store=artifact_store,
+            policy_resolution_store=policy_resolution_store,
+            budget_state=budget_state,
+        )
+        agent = self._create_agent(
+            context,
+            session,
+            model,
+            messages,
+            tools,
+            before_tool_call=before_tool_call,
+            recover_assistant_response=self._recover_assistant_response(
+                context,
+                model=model,
+                emitter=compaction_emitter,
+            ),
+        )
+        agent_ref.append(agent)
+        return agent, writer, policy_resolution_store
+
+    def _prepare_session_messages(
+        self,
+        context: TaskRunStepContext,
+    ):
+        model = resolve_model(context.runtime_options.model_ref)
+        session = self.session_manager.resume_session(context.task_run.agent_session_id)
+        emitter = TaskRunCompactionEventEmitter(
+            task_repository=self.task_repository,
+            task_run_id=context.task_run.id,
+            step_id=context.step.id,
+        )
+        self._auto_compact_before_prompt(context, model=model, emitter=emitter)
+        self._append_taskrun_summary(context)
+        session_context = self.session_manager.build_session_context(
+            context.task_run.agent_session_id
+        )
+        messages = convert_coding_messages_to_llm(list(session_context.messages))
+        return model, session, messages, emitter
+
+    def _create_durable_writer(
+        self,
+        context: TaskRunStepContext,
+        runtime_session_id: str,
+        run_id_provider: Callable[[], str | None],
+    ) -> DurableSessionEventWriter:
+        return DurableSessionEventWriter(
+            manager=self.session_manager,
+            session_id_provider=lambda: context.task_run.agent_session_id,
+            runtime_session_id_provider=lambda: runtime_session_id,
+            run_id_provider=run_id_provider,
+        )
+
+    def _create_tools_and_policy_hook(
+        self,
+        context: TaskRunStepContext,
+        *,
+        runtime_session_id: str,
+        run_id_provider: Callable[[], str | None],
+        audit_sink: AuditSink,
+        artifact_store: RuntimeArtifactStore,
+        policy_resolution_store: PolicyResolutionStore,
+        budget_state: PermissionBudgetState,
+    ):
+        tools = self._create_tools(
+            context,
+            runtime_session_id=runtime_session_id,
+            run_id_provider=run_id_provider,
             audit_sink=audit_sink,
             artifact_store=artifact_store,
             policy_resolution_store=policy_resolution_store,
@@ -154,18 +213,132 @@ class TaskRunHeadlessRunner:
             policy_resolution_store=policy_resolution_store,
             cwd=str(self.cwd),
             runtime_session_id=runtime_session_id,
-            run_id_provider=active_run_id,
+            run_id_provider=run_id_provider,
         )
-        agent = self._create_agent(
-            context,
-            session,
-            model,
-            messages,
-            tools,
-            before_tool_call=before_tool_call,
+        return tools, before_tool_call
+
+    def _auto_compact_before_prompt(
+        self,
+        context: TaskRunStepContext,
+        *,
+        model: Any,
+        emitter: TaskRunCompactionEventEmitter,
+    ) -> None:
+        service = self._compaction_service(model)
+        target_budget = service.auto_compaction_budget(
+            context.task_run.agent_session_id,
+            prompt_text=STEP_INSTRUCTION,
+            context_window=model.context_window,
         )
-        agent_ref.append(agent)
-        return agent, writer, policy_resolution_store
+        if target_budget is None:
+            return
+        emitter.compaction_started(reason="threshold")
+        try:
+            result = asyncio.run(
+                service.compact_session(
+                    context.task_run.agent_session_id,
+                    reason="threshold",
+                    target_budget=target_budget,
+                )
+            )
+        except Exception as exc:
+            emitter.compaction_failed(reason="threshold", error=exc)
+            raise
+        emitter.compaction_succeeded(reason="threshold", result=result, will_retry=False)
+
+    def _recover_assistant_response(
+        self,
+        context: TaskRunStepContext,
+        *,
+        model: Any,
+        emitter: TaskRunCompactionEventEmitter,
+    ):
+        async def recover(
+            message: Any,
+            llm_context: Any,
+            attempt: int,
+            max_attempts: int,
+            signal: Any,
+        ):
+            if not is_context_overflow(message, context_window=model.context_window):
+                if attempt > 1:
+                    emitter.auto_retry_finished(
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        success=True,
+                    )
+                return None
+            if attempt >= max_attempts:
+                emitter.auto_retry_finished(
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    success=False,
+                    final_error=message.error_message or "context overflow after retry",
+                )
+                return None
+            if signal is not None and signal.is_set():
+                return None
+            return await self._compact_for_overflow_retry(
+                context,
+                model=model,
+                llm_context=llm_context,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                message=message,
+                emitter=emitter,
+            )
+
+        return recover
+
+    async def _compact_for_overflow_retry(
+        self,
+        context: TaskRunStepContext,
+        *,
+        model: Any,
+        llm_context: Any,
+        attempt: int,
+        max_attempts: int,
+        message: Any,
+        emitter: TaskRunCompactionEventEmitter,
+    ):
+        emitter.compaction_started(reason="overflow")
+        service = self._compaction_service(model)
+        try:
+            result = await service.compact_session(
+                context.task_run.agent_session_id,
+                reason="overflow",
+                target_budget=service.settings.target_budget(model.context_window),
+                force=True,
+            )
+        except Exception as exc:
+            emitter.compaction_failed(reason="overflow", error=exc)
+            return None
+        emitter.compaction_succeeded(reason="overflow", result=result, will_retry=True)
+        emitter.auto_retry_started(
+            attempt=attempt + 1,
+            max_attempts=max_attempts,
+            delay_ms=0,
+            error_message=message.error_message or "context overflow",
+        )
+        session_context = self.session_manager.build_session_context(
+            context.task_run.agent_session_id
+        )
+        return Context(
+            systemPrompt=llm_context.system_prompt,
+            messages=convert_coding_messages_to_llm(list(session_context.messages)),
+            tools=llm_context.tools,
+        )
+
+    def _compaction_service(self, model: Any) -> CompactionService:
+        return CompactionService(
+            manager=self.session_manager,
+            model=model,
+            generator=ProviderSummaryGenerator(
+                get_api_key=lambda _provider: None
+                if model.provider == "faux"
+                else resolve_api_key(model),
+            ),
+        )
 
     async def _run_session(
         self,
@@ -212,6 +385,7 @@ class TaskRunHeadlessRunner:
             collector=collector,
             event_hook=chain_event_hooks(back_fill_hook, evidence_hook),
             policy_resolution_store=policy_resolution_store,
+            cancel_requested=context.cancel_requested,
         )
         session_ref.append(session)
         outcome = await session.run(_step_instruction_message())
@@ -237,10 +411,32 @@ class TaskRunHeadlessRunner:
             step_id=context.step.id,
         )
         null_decisions = [
-            decision for decision in decisions if decision.tool_execution_id is None
+            decision
+            for decision in decisions
+            if decision.tool_execution_id is None
+            and _requires_agent_tool_execution_backfill(decision.policy_request)
         ]
         if not null_decisions:
             return outcome
+        self._emit_back_fill_blocker(context, null_decisions)
+        finalize_errors = self._back_fill_finalize_errors(outcome, len(null_decisions))
+        # If the lifecycle already failed (e.g. back-fill hook raised and
+        # tripped the listener-error sink), the more specific ``failed``
+        # status wins — we still record the invariant for diagnostics.
+        if outcome.status != "done":
+            return replace(outcome, finalize_errors=finalize_errors)
+        return replace(
+            outcome,
+            status="blocked",
+            block_reason="permission decisions missing tool_execution_id back-fill",
+            finalize_errors=finalize_errors,
+        )
+
+    def _emit_back_fill_blocker(
+        self,
+        context: TaskRunStepContext,
+        null_decisions: list[Any],
+    ) -> None:
         tool_call_ids = [
             ((decision.policy_request or {}).get("source") or {}).get("tool_call_id", "?")
             for decision in null_decisions
@@ -257,27 +453,22 @@ class TaskRunHeadlessRunner:
                 },
             ),
         )
-        finalize_errors = list(outcome.finalize_errors) + [
+
+    @staticmethod
+    def _back_fill_finalize_errors(
+        outcome: TaskRunStepOutcome,
+        null_row_count: int,
+    ) -> list[dict[str, object]]:
+        return list(outcome.finalize_errors) + [
             {
                 "sink": "permission_decision_back_fill",
                 "exceptionClass": "BackFillInvariantViolation",
                 "message": (
-                    f"{len(null_decisions)} permission decision(s) without "
+                    f"{null_row_count} permission decision(s) without "
                     "tool_execution_id at step finalize"
                 ),
             }
         ]
-        # If the lifecycle already failed (e.g. back-fill hook raised and
-        # tripped the listener-error sink), the more specific ``failed``
-        # status wins — we still record the invariant for diagnostics.
-        if outcome.status != "done":
-            return replace(outcome, finalize_errors=finalize_errors)
-        return replace(
-            outcome,
-            status="blocked",
-            block_reason="permission decisions missing tool_execution_id back-fill",
-            finalize_errors=finalize_errors,
-        )
 
     def _emit_step_outcome_events(
         self,
@@ -425,6 +616,7 @@ class TaskRunHeadlessRunner:
         tools: list[Any],
         *,
         before_tool_call: Any | None = None,
+        recover_assistant_response: Any | None = None,
     ) -> Agent:
         return self.agent_factory(
             AgentOptions(
@@ -441,6 +633,7 @@ class TaskRunHeadlessRunner:
                 if model.provider == "faux"
                 else resolve_api_key(model),
                 before_tool_call=before_tool_call,
+                recover_assistant_response=recover_assistant_response,
             )
         )
 
@@ -488,6 +681,15 @@ def _step_instruction_message() -> UserMessage:
         content=[TextContent(text=STEP_INSTRUCTION)],
         timestamp=_now_ms(),
     )
+
+
+def _requires_agent_tool_execution_backfill(policy_request: Any) -> bool:
+    if not isinstance(policy_request, dict):
+        return True
+    source = policy_request.get("source")
+    if not isinstance(source, dict):
+        return True
+    return source.get("decision_subject") != "host_command"
 
 
 def _taskrun_summary_block(context: TaskRunStepContext) -> str:

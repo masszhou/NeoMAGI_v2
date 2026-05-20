@@ -108,16 +108,13 @@ def run_taskrun_auto_loop(
     auto_run_id = new_db_uuid()
 
     if _deadline_expired(budget.deadline_utc, service.clock()):
-        return _start_and_stop_auto_run(
+        return _stop_auto_run_for_expired_deadline(
             service,
             record,
             auto_run_id=auto_run_id,
             max_steps=max_steps,
             runtime_options=runtime_options,
             experiment_options=options.experiment_options,
-            stop_reason="budget_exhausted",
-            counters=_AutoRunCounters(),
-            exit_code=1,
             host_context=host_context,
         )
     _validate_experiment_profile_for_run(
@@ -143,6 +140,30 @@ def run_taskrun_auto_loop(
         auto_run_id=auto_run_id,
         options=replace(options, max_steps=max_steps),
         runner=runner,
+        host_context=host_context,
+    )
+
+
+def _stop_auto_run_for_expired_deadline(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    *,
+    auto_run_id: str,
+    max_steps: int,
+    runtime_options: TaskRunRuntimeOptions,
+    experiment_options: TaskRunExperimentOptions | None,
+    host_context: TaskRunHostContext,
+) -> TaskRunAutoRunResult:
+    return _start_and_stop_auto_run(
+        service,
+        record,
+        auto_run_id=auto_run_id,
+        max_steps=max_steps,
+        runtime_options=runtime_options,
+        experiment_options=experiment_options,
+        stop_reason="budget_exhausted",
+        counters=_AutoRunCounters(),
+        exit_code=1,
         host_context=host_context,
     )
 

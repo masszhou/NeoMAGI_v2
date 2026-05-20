@@ -238,6 +238,14 @@ class TaskRunRepository(Protocol):
     ) -> list[TaskEventRecord]:
         ...
 
+    def cancel_requested_exists(
+        self,
+        task_run_id: str,
+        *,
+        step_id: str | None = None,
+    ) -> bool:
+        ...
+
     def append_permission_decision(
         self,
         *,

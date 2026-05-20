@@ -11,11 +11,16 @@ import asyncio
 import hashlib
 import math
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
 from cli.core.taskrun_experiment_revert import safe_revert_check
+from cli.core.taskrun_host_audit import (
+    elapsed_ms as _elapsed_ms,
+    record_host_command_audit as _record_host_command_audit,
+)
 from policy.permission_profiles import PermissionProfileResolver
 from policy.redaction import redacted_command_preview
 from policy.sandbox import run_shell_command
@@ -64,6 +69,9 @@ class HostCommandResult:
     policy_effect: str
     reason: str | None
     permission_decision_id: str | None
+    duration_ms: int = 0
+    started_at: str | None = None
+    ended_at: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -253,6 +261,7 @@ def command_record(result: HostCommandResult) -> dict[str, object]:
         "policyEffect": result.policy_effect,
         "reason": result.reason,
         "permissionDecisionId": result.permission_decision_id,
+        "durationMs": result.duration_ms,
         "outputSha256": _sha256(result.output),
         "outputPreview": _preview(result.output),
     }
@@ -277,6 +286,8 @@ def run_host_command(
         command=command,
         timeout=timeout,
     )
+    started_at = service._now_iso()
+    started_monotonic = time.monotonic()
     resolution = _resolve_host_policy(service, task_run, step, request)
     result = _host_command_result(
         resolution,
@@ -285,7 +296,14 @@ def run_host_command(
         workspace_root=task_run.workspace_root,
         timeout=timeout,
     )
+    result = replace(
+        result,
+        started_at=started_at,
+        ended_at=service._now_iso(),
+        duration_ms=result.duration_ms or _elapsed_ms(started_monotonic),
+    )
     _append_host_command_event(service, task_run, step, auto_run_id, result)
+    _record_host_command_audit(service, auto_run_id, result)
     return result
 
 
@@ -371,6 +389,7 @@ def _execute_allowed_host_command(
         "timeout": timeout,
     }
     cwd = Path(resolution.decision.resolved_paths.get("cwd", workspace_root))
+    started_monotonic = time.monotonic()
     try:
         sandbox = asyncio.run(
             run_shell_command(
@@ -392,6 +411,7 @@ def _execute_allowed_host_command(
             policy_effect=resolution.decision.effect,
             reason=f"host command failed: {exc}",
             permission_decision_id=resolution.permission_decision_id,
+            duration_ms=_elapsed_ms(started_monotonic),
         )
     return HostCommandResult(
         phase=phase,
@@ -403,6 +423,7 @@ def _execute_allowed_host_command(
         policy_effect=resolution.decision.effect,
         reason=None,
         permission_decision_id=resolution.permission_decision_id,
+        duration_ms=_elapsed_ms(started_monotonic),
     )
 
 
@@ -446,6 +467,7 @@ def _host_policy_request(
         actor="extension",
         source={
             "host": "task_run",
+            "decision_subject": "host_command",
             "phase": phase,
             "task_run_id": task_run_id,
             "step_id": step_id,

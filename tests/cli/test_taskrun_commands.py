@@ -137,6 +137,10 @@ class _FakeService:
         self.calls.append(("close", task_id, cwd))
         return self.result
 
+    def cancel(self, task_id: str | None, cwd: Path) -> TaskRunResult:
+        self.calls.append(("cancel", task_id, cwd))
+        return self.result
+
     def step(
         self,
         task_id: str | None,
@@ -638,6 +642,20 @@ def test_taskrun_run_passes_experiment_options(
     assert options.metric_direction == "lower"
     assert options.min_delta == 0.5
     assert options.revert_on_regression is True
+
+
+def test_taskrun_cancel_routes_optional_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["cancel", "019e2200"], prog="magipi")
+
+    assert rc == 0
+    assert service.calls[0][0] == "cancel"
+    assert service.calls[0][1] == "019e2200"
 
 
 def test_taskrun_run_requires_metric_and_direction_for_experiment_before_db(

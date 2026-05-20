@@ -27,8 +27,30 @@ from cli.core.taskrun_host_contract import (
     event_payload_with_host_context,
     normalize_host_context,
 )
+from cli.core.taskrun_service_helpers import (
+    ambiguous_message as _ambiguous_message,
+    cancel_requested_outcome as _cancel_requested_outcome,
+    cancelled_outcome as _cancelled_outcome,
+    datetime_iso as _datetime_iso,
+    failed_outcome as _failed_outcome,
+    is_task_run_id_prefix as _is_task_run_id_prefix,
+    normalize_step_outcome_status as _normalize_step_outcome_status,
+    parse_datetime as _parse_datetime,
+    step_input as _step_input,
+    step_output as _step_output,
+    step_started_payload as _step_started_payload,
+    validate_headless_profile as _validate_headless_profile,
+    workspace_root as _workspace_root,
+)
+from cli.core.taskrun_service_finalization import (
+    append_run_cancelled_event as _append_run_cancelled_event,
+    append_step_finalized_event as _append_step_finalized_event,
+    close_cancelled_run as _close_cancelled_run,
+    next_task_status_after_step as _next_task_status_after_step,
+    update_finalized_step as _update_finalized_step,
+    update_run_after_step as _update_run_after_step,
+)
 from cli.core.taskrun_step import (
-    STEP_INSTRUCTION,
     TaskRunRuntimeOptions,
     TaskRunStepContext,
     TaskRunStepOutcome,
@@ -42,8 +64,6 @@ from cli.core.taskrun_views import (
     build_taskrun_history,
     build_taskrun_list,
     build_taskrun_next,
-    next_action_for_status,
-    preview_text,
     step_summary,
     taskrun_next_action,
 )
@@ -53,6 +73,7 @@ from policy.permission_profiles import (
     build_permission_profile_snapshot,
     normalize_permission_profile_snapshot,
 )
+from policy.audit import AuditSink
 from storage.ids import is_db_uuid
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
@@ -91,11 +112,13 @@ class TaskRunService:
         projection_writer: TaskRunProjectionWriter | None = None,
         clock: Callable[[], datetime] | None = None,
         stale_threshold: timedelta = STALE_RUNNING_THRESHOLD,
+        host_command_audit_sink: AuditSink | None = None,
     ) -> None:
         self.repository = repository
         self.projection_writer = projection_writer or TaskRunProjectionWriter()
         self.clock = clock or (lambda: datetime.now(UTC))
         self.stale_threshold = stale_threshold
+        self.host_command_audit_sink = host_command_audit_sink
 
     def start(
         self,
@@ -320,6 +343,65 @@ class TaskRunService:
             )
         return self._summarize_and_project(record)
 
+    def cancel(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+        *,
+        host_context: TaskRunHostContext | Mapping[str, object] | None = None,
+    ) -> TaskRunResult:
+        host_context = normalize_host_context(host_context)
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run(workspace_root, id_or_prefix)
+        if record.status in TERMINAL_TASKRUN_STATUSES:
+            return self._summarize_and_project(
+                record,
+                update_summary=False,
+                rebuild_projection=False,
+            )
+        now = self._now_iso()
+        if record.status == "running":
+            if not self._cancel_requested(record.id, record.current_step_id):
+                self.repository.append_event(
+                    task_run_id=record.id,
+                    step_id=record.current_step_id,
+                    event_type="task_run_cancel_requested",
+                    payload=event_payload_with_host_context(
+                        {
+                            "previous_status": record.status,
+                            "current_step_id": record.current_step_id,
+                            "requested_at": now,
+                        },
+                        host_context,
+                    ),
+                    occurred_at=now,
+                )
+            return self._summarize_and_project(record)
+
+        previous_status = record.status
+        record = self.repository.update_task_run_status(
+            record.id,
+            status="cancelled",
+            heartbeat_at=None,
+            closed_at=now,
+            updated_at=now,
+        )
+        self.repository.append_event(
+            task_run_id=record.id,
+            event_type="task_run_cancelled",
+            payload=event_payload_with_host_context(
+                {
+                    "previous_status": previous_status,
+                    "final_status": record.status,
+                    "cancelled_at": now,
+                },
+                host_context,
+            ),
+            occurred_at=now,
+        )
+        return self._summarize_and_project(record)
+
     def recover_stale_running(self, cwd: str | Path) -> list[TaskRunRecord]:
         workspace_root = _workspace_root(cwd)
         now_dt = self.clock()
@@ -498,8 +580,11 @@ class TaskRunService:
                 heartbeat_at=self._now_iso(),
             )
 
+        def cancel_requested() -> bool:
+            return self._cancel_requested(task_run.id, step.id)
+
         try:
-            return runner.run(
+            outcome = runner.run(
                 TaskRunStepContext(
                     task_run=task_run,
                     step=step,
@@ -507,8 +592,12 @@ class TaskRunService:
                     runtime_options=runtime_options,
                     workspace_root=workspace_root,
                     heartbeat=heartbeat,
+                    cancel_requested=cancel_requested,
                 )
             )
+            if cancel_requested() and outcome.status != "cancelled":
+                return _cancel_requested_outcome(task_run.id)
+            return outcome
         except KeyboardInterrupt:
             return _cancelled_outcome(task_run.id)
         except Exception as exc:
@@ -527,45 +616,45 @@ class TaskRunService:
         status = _normalize_step_outcome_status(outcome.status)
         ended_at = self._now_iso()
         output = _step_output(outcome, task_run.id, status)
-        conclusion = _step_conclusion(outcome, status)
-        updated_step = self.repository.update_step_status(
+        updated_step = _update_finalized_step(
+            self.repository,
+            step,
+            status,
+            output,
+            outcome,
+            ended_at,
+        )
+        cancel_requested = status == "cancelled" and self._cancel_requested(
+            task_run.id,
             step.id,
-            status=status,
-            output=output,
-            conclusion=conclusion,
+        )
+        next_task_status = _next_task_status_after_step(status, cancel_requested)
+        updated_run = _update_run_after_step(
+            self.repository,
+            task_run,
+            next_task_status=next_task_status,
             ended_at=ended_at,
         )
-        next_task_status = "pending" if status == "done" else "blocked"
-        updated_run = self.repository.update_task_run_step_state(
-            task_run.id,
-            status=next_task_status,
-            current_step_id=None,
-            heartbeat_at=ended_at,
-            updated_at=ended_at,
+        if cancel_requested:
+            updated_run = _close_cancelled_run(self.repository, updated_run, ended_at)
+        _append_step_finalized_event(
+            self.repository,
+            updated_run,
+            updated_step,
+            previous_status=previous_status,
+            next_task_status=next_task_status,
+            runtime_options=runtime_options,
+            outcome=outcome,
+            output=output,
+            ended_at=ended_at,
         )
-        event_type = {
-            "done": "task_step_completed",
-            "failed": "task_step_failed",
-            "blocked": "task_step_blocked",
-            "cancelled": "task_step_cancelled",
-        }[status]
-        self.repository.append_event(
-            task_run_id=updated_run.id,
-            step_id=updated_step.id,
-            event_type=event_type,
-            payload={
-                "step_id": updated_step.id,
-                "step_index": updated_step.step_index,
-                "status_from": "running",
-                "status_to": status,
-                "task_status_from": previous_status,
-                "task_status_to": next_task_status,
-                "model_ref": runtime_options.model_ref,
-                "run_id": outcome.run_id,
-                "reason": output.get("reason"),
-            },
-            occurred_at=ended_at,
-        )
+        if cancel_requested:
+            _append_run_cancelled_event(
+                self.repository,
+                updated_run,
+                updated_step,
+                ended_at,
+            )
         result = self._summarize_and_project(updated_run, rebuild_projection=rebuild_projection)
         matching_step = next(
             (candidate for candidate in result.steps if candidate.id == updated_step.id),
@@ -664,187 +753,8 @@ class TaskRunService:
             return True
         return heartbeat <= now_dt - self.stale_threshold
 
+    def _cancel_requested(self, task_run_id: str, step_id: str | None = None) -> bool:
+        return self.repository.cancel_requested_exists(task_run_id, step_id=step_id)
+
     def _now_iso(self) -> str:
         return _datetime_iso(self.clock())
-
-
-def _workspace_root(cwd: str | Path) -> str:
-    return str(Path(cwd).resolve())
-
-
-def _datetime_iso(value: datetime) -> str:
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC).isoformat()
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
-def _validate_headless_profile(
-    permission_profile: Mapping[str, Any],
-    *,
-    command: str,
-) -> None:
-    profile = _normalize_profile(permission_profile)
-    if not bool(profile.get("nonInteractive")):
-        raise TaskRunServiceError(
-            f"taskrun {command} is headless and cannot use interactive permission profile; "
-            "create a TaskRun with --permission guarded or --permission full"
-        )
-
-
-def _step_input(
-    record: TaskRunRecord,
-    summary: Mapping[str, object],
-    runtime_options: TaskRunRuntimeOptions,
-) -> dict[str, object]:
-    return {
-        "goal": record.goal,
-        "summary": dict(summary),
-        "instruction": STEP_INSTRUCTION,
-        "permission_profile": dict(record.permission_profile or {}),
-        "model": runtime_options.model_ref,
-        "thinking_level": runtime_options.thinking_level,
-        "cache_retention": runtime_options.cache_retention,
-    }
-
-
-def _step_started_payload(
-    previous_status: str,
-    runtime_options: TaskRunRuntimeOptions,
-    *,
-    host_context: TaskRunHostContext | Mapping[str, object] | None = None,
-) -> dict[str, object]:
-    return event_payload_with_host_context(
-        {
-            "status_from": previous_status,
-            "model_ref": runtime_options.model_ref,
-        },
-        host_context,
-    )
-
-
-def _step_output(
-    outcome: TaskRunStepOutcome,
-    task_run_id: str,
-    status: str,
-) -> dict[str, object]:
-    reason = (
-        outcome.block_reason
-        if status == "blocked"
-        else outcome.error_message if status in {"failed", "cancelled"} else None
-    )
-    next_action = outcome.next_action or next_action_for_status(task_run_id, status, reason)
-    output: dict[str, object] = {
-        "status": status,
-        "assistant_text_preview": preview_text(outcome.assistant_text),
-        "tool_count": outcome.tool_count,
-        "permission_decision_count": outcome.permission_decision_count,
-        "next_action": next_action,
-    }
-    if outcome.run_id:
-        output["run_id"] = outcome.run_id
-    if reason:
-        output["reason"] = reason
-    if outcome.error_message:
-        output["error_message"] = outcome.error_message
-    if outcome.block_reason:
-        output["block_reason"] = outcome.block_reason
-    if outcome.finalize_errors:
-        output["finalize_errors"] = list(outcome.finalize_errors)
-    verification = _verification_block(outcome)
-    if verification is not None:
-        output["verification_state"] = verification
-    return output
-
-
-def _verification_block(outcome: TaskRunStepOutcome) -> dict[str, object] | None:
-    # D12: surface state + reason + non-empty kind lists so the step view
-    # is self-contained without joining task_events.
-    if outcome.verification_state is None:
-        return None
-    verification: dict[str, object] = {"state": outcome.verification_state}
-    if outcome.verification_reason:
-        verification["reason"] = outcome.verification_reason
-    if outcome.verification_missing_kinds:
-        verification["missing_kinds"] = list(outcome.verification_missing_kinds)
-    if outcome.verification_inconsistent_kinds:
-        verification["inconsistent_kinds"] = list(outcome.verification_inconsistent_kinds)
-    return verification
-
-
-def _step_conclusion(outcome: TaskRunStepOutcome, status: str) -> str:
-    if status == "done":
-        return preview_text(outcome.assistant_text) or "manual step completed"
-    if status == "blocked":
-        return preview_text(outcome.block_reason) or "manual step blocked"
-    if status == "cancelled":
-        return preview_text(outcome.error_message) or "manual step cancelled"
-    return preview_text(outcome.error_message) or "manual step failed"
-
-
-def _normalize_step_outcome_status(status: str) -> str:
-    if status not in {"done", "failed", "blocked", "cancelled"}:
-        raise TaskRunServiceError(f"invalid step outcome status: {status}")
-    return status
-
-
-def _normalize_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        return normalize_permission_profile_snapshot(profile)
-    except PermissionProfileError as exc:
-        raise TaskRunServiceError(str(exc)) from exc
-
-
-def _cancelled_outcome(task_run_id: str) -> TaskRunStepOutcome:
-    return TaskRunStepOutcome(
-        status="cancelled",
-        error_message="cancelled by user interrupt",
-        next_action=(
-            "Resolve the cancellation context, then run "
-            f"`magipi taskrun step {task_run_id[:8]}` to continue."
-        ),
-    )
-
-
-def _failed_outcome(task_run_id: str, exc: Exception) -> TaskRunStepOutcome:
-    return TaskRunStepOutcome(
-        status="failed",
-        error_message=str(exc),
-        next_action=(
-            "Inspect the failure, then run "
-            f"`magipi taskrun step {task_run_id[:8]}` to retry manually."
-        ),
-    )
-
-
-def _ambiguous_message(prefix: str, matches: list[TaskRunRecord]) -> str:
-    details = [
-        f"{record.id} {record.status} {_goal_preview(record.goal)}"
-        for record in matches
-    ]
-    return prefix + "; pass an id. Candidates: " + "; ".join(details)
-
-
-def _goal_preview(goal: str, limit: int = 64) -> str:
-    collapsed = " ".join(goal.split())
-    if len(collapsed) <= limit:
-        return collapsed
-    return collapsed[: limit - 3] + "..."
-
-
-def _is_task_run_id_prefix(value: str) -> bool:
-    if len(value) < 8:
-        return False
-    return all(char in "0123456789abcdefABCDEF-" for char in value)

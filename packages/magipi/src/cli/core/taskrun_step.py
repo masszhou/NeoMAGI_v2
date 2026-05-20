@@ -13,6 +13,10 @@ from storage.taskrun_repository import TaskRunRecord, TaskStepRecord
 STEP_INSTRUCTION = "Take exactly one bounded step toward the TaskRun goal."
 
 
+def _never_cancel_requested() -> bool:
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class TaskRunRuntimeOptions:
     model_ref: str = DEFAULT_MODEL_REF
@@ -28,6 +32,7 @@ class TaskRunStepContext:
     runtime_options: TaskRunRuntimeOptions
     workspace_root: str
     heartbeat: Callable[[], None]
+    cancel_requested: Callable[[], bool] = _never_cancel_requested
 
 
 @dataclass(frozen=True, slots=True)

@@ -29,6 +29,14 @@ from .taskrun_records import (
     TaskRunStepStartResult,
     TaskStepRecord,
 )
+from .taskrun_row_mapping import (
+    _validate_taskrun_status,
+    task_event_from_row as _task_event_from_row,
+    task_experiment_from_row as _task_experiment_from_row,
+    task_permission_decision_from_row as _task_permission_decision_from_row,
+    task_run_from_row as _task_run_from_row,
+    task_step_from_row as _task_step_from_row,
+)
 
 
 class PostgresTaskRunRepository:
@@ -481,6 +489,37 @@ class PostgresTaskRunRepository:
             rows = cur.fetchall()
         return [_task_event_from_row(row) for row in rows]
 
+    def cancel_requested_exists(
+        self,
+        task_run_id: str,
+        *,
+        step_id: str | None = None,
+    ) -> bool:
+        _validate_uuid("task_run_id", task_run_id)
+        params: list[Any] = [task_run_id]
+        step_filter = ""
+        if step_id is not None:
+            step_filter = """
+                AND (
+                    step_id = %s
+                    OR payload->>'current_step_id' = %s
+                )
+            """
+            params.extend([step_id, step_id])
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT 1
+                FROM {self._schema}.task_events
+                WHERE task_run_id = %s
+                  AND event_type = 'task_run_cancel_requested'
+                  {step_filter}
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            return cur.fetchone() is not None
+
     def _event_cursor(self, task_run_id: str, event_id: str) -> tuple[str, str]:
         _validate_uuid("after_event_id", event_id)
         with self._conn.cursor() as cur:
@@ -731,16 +770,6 @@ class PostgresTaskRunRepository:
         )
 
 
-def _validate_taskrun_status(status: str) -> None:
-    if status not in TASKRUN_STATUSES:
-        raise ValueError(f"invalid TaskRun status: {status}")
-
-
-def _validate_taskstep_status(status: str) -> None:
-    if status not in TASKSTEP_STATUSES:
-        raise ValueError(f"invalid TaskStep status: {status}")
-
-
 def _validate_uuid(label: str, value: str) -> None:
     if not is_db_uuid(value):
         raise ValueError(f"invalid {label}: {value}")
@@ -751,83 +780,6 @@ def _validate_event_limit(limit: int | None) -> None:
         return
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("event limit must be a positive integer")
-
-
-def _task_run_from_row(row: Any) -> TaskRunRecord:
-    _validate_taskrun_status(row[4])
-    return TaskRunRecord(
-        id=str(row[0]),
-        workspace_root=row[1],
-        agent_session_id=str(row[2]),
-        goal=row[3],
-        status=row[4],
-        permission_profile=dict(row[5] or {}),
-        budget=dict(row[6] or {}),
-        stop_conditions=dict(row[7] or {}),
-        current_step_id=str(row[8]) if row[8] is not None else None,
-        summary=dict(row[9] or {}),
-        heartbeat_at=_iso(row[10]) if row[10] is not None else None,
-        created_at=_iso(row[11]),
-        updated_at=_iso(row[12]),
-        closed_at=_iso(row[13]) if row[13] is not None else None,
-    )
-
-
-def _task_step_from_row(row: Any) -> TaskStepRecord:
-    _validate_taskstep_status(row[4])
-    return TaskStepRecord(
-        id=str(row[0]),
-        task_run_id=str(row[1]),
-        step_index=int(row[2]),
-        title=row[3],
-        status=row[4],
-        input=dict(row[5] or {}),
-        output=dict(row[6] or {}),
-        conclusion=row[7],
-        started_at=_iso(row[8]) if row[8] is not None else None,
-        ended_at=_iso(row[9]) if row[9] is not None else None,
-    )
-
-
-def _task_event_from_row(row: Any) -> TaskEventRecord:
-    return TaskEventRecord(
-        id=str(row[0]),
-        task_run_id=str(row[1]),
-        step_id=str(row[2]) if row[2] is not None else None,
-        event_type=row[3],
-        payload=dict(row[4] or {}),
-        occurred_at=_iso(row[5]),
-    )
-
-
-def _task_permission_decision_from_row(row: Any) -> TaskPermissionDecisionRecord:
-    return TaskPermissionDecisionRecord(
-        id=str(row[0]),
-        task_run_id=str(row[1]),
-        step_id=str(row[2]) if row[2] is not None else None,
-        tool_execution_id=str(row[3]) if row[3] is not None else None,
-        policy_request=dict(row[4] or {}),
-        raw_decision=dict(row[5] or {}),
-        resolved_decision=dict(row[6] or {}),
-        profile_name=row[7],
-        occurred_at=_iso(row[8]),
-    )
-
-
-def _task_experiment_from_row(row: Any) -> TaskExperimentRecord:
-    return TaskExperimentRecord(
-        id=str(row[0]),
-        task_run_id=str(row[1]),
-        step_id=str(row[2]),
-        hypothesis=row[3],
-        change=dict(row[4] or {}),
-        command=dict(row[5] or {}),
-        metrics=dict(row[6] or {}),
-        result=dict(row[7] or {}),
-        decision=row[8],
-        diff_ref=dict(row[9] or {}),
-        created_at=_iso(row[10]),
-    )
 
 
 __all__ = [

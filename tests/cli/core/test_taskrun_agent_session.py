@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 from agent_core import Agent, RuntimeAgentTool
@@ -290,6 +291,51 @@ def test_cancel_aborts_agent() -> None:
         # bookkeeping so the agent run terminates cleanly without raising.
 
     asyncio.run(run())
+
+
+def test_cancel_requested_callback_marks_outcome_cancelled() -> None:
+    async def run() -> None:
+        _, manager = _session_manager()
+        writer = _build_writer(manager)
+        agent = Agent(
+            model=_model(),
+            stream_fn=_stream_no_tool(),
+        )
+        session = TaskRunAgentSession(
+            agent=agent,
+            durable_writer=writer,
+            heartbeat=lambda: None,
+            cancel_requested=lambda: True,
+        )
+
+        outcome = await session.run(_prompt())
+
+        assert outcome.status == "cancelled"
+        assert outcome.error_message == "cancelled by TaskRun cancel request"
+
+    asyncio.run(run())
+
+
+def test_cancel_requested_is_throttled_for_token_delta_events() -> None:
+    checks = {"count": 0}
+    aborts: list[bool] = []
+    session = TaskRunAgentSession(
+        agent=SimpleNamespace(active_run_id=None, abort=lambda: aborts.append(True)),
+        durable_writer=SimpleNamespace(record=lambda _event: None),
+        heartbeat=lambda: None,
+        cancel_requested=lambda: checks.__setitem__("count", checks["count"] + 1) or False,
+    )
+
+    for _ in range(20):
+        session._on_event(SimpleNamespace(type="message_update"), asyncio.Event())  # noqa: SLF001
+
+    session._on_event(  # noqa: SLF001
+        SimpleNamespace(type="tool_execution_start"),
+        asyncio.Event(),
+    )
+
+    assert checks["count"] == 2
+    assert aborts == []
 
 
 def test_step_event_collector_finalize_errors_collapse_to_failed() -> None:

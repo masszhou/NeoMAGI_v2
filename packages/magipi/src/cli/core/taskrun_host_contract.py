@@ -144,8 +144,8 @@ TASKRUN_OPERATION_MANIFEST: Final[tuple[TaskRunOperationManifestItem, ...]] = (
     ),
     TaskRunOperationManifestItem(
         "cancel",
-        "deferred_to_p3",
-        "requires remote interrupt and daemon lifecycle semantics",
+        "implemented",
+        "TaskRunService.cancel / magipi taskrun cancel; event-backed local interrupt request",
     ),
     TaskRunOperationManifestItem(
         "archive",
@@ -159,8 +159,8 @@ TASKRUN_OPERATION_MANIFEST: Final[tuple[TaskRunOperationManifestItem, ...]] = (
     ),
     TaskRunOperationManifestItem(
         "compaction_in_headless_step",
-        "deferred_to_p2_followup",
-        "D14 emitter is present; headless trigger wiring remains a P2 follow-up",
+        "implemented",
+        "TaskRunHeadlessRunner wires D14 compaction and auto-retry derived events",
     ),
 )
 TASKRUN_OPERATION_MANIFEST_BY_NAME: Final[dict[str, TaskRunOperationManifestItem]] = {

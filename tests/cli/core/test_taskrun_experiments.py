@@ -21,6 +21,7 @@ from cli.core.taskrun_service import (
     TaskRunStepContext,
     TaskRunStepOutcome,
 )
+from policy.audit import InMemoryAuditSink
 from policy.permission_profiles import build_permission_profile_snapshot
 from test_taskrun_service import _FakeTaskRunRepository, _seed_record, _service
 
@@ -99,13 +100,52 @@ def test_host_command_records_extension_permission_source(tmp_path: Path) -> Non
     )
 
     assert result.succeeded is True
+    assert result.duration_ms >= 0
     decision = repo.permission_decisions[0]
     assert decision.tool_execution_id is None
     assert decision.step_id == step.id
     assert decision.policy_request["actor"] == "extension"
     assert decision.policy_request["source"]["host"] == "task_run"
+    assert decision.policy_request["source"]["decision_subject"] == "host_command"
     assert decision.policy_request["source"]["phase"] == "baseline"
     assert decision.resolved_decision["effect"] == "allow"
+
+
+def test_host_command_records_audit_sink_with_redacted_preview(tmp_path: Path) -> None:
+    repo = _FakeTaskRunRepository()
+    sink = InMemoryAuditSink()
+    profile = build_permission_profile_snapshot(
+        "full",
+        {
+            "paths": {"allow": ["$WORKSPACE/**"]},
+            "commands": {"allow": ["printf"]},
+        },
+        sources=["builtin", "project"],
+        explicit_scope=True,
+        explicit_scope_keys=["commands", "paths"],
+    )
+    record = _seed_record(repo, tmp_path, permission_profile=profile)
+    service = _service(repo)
+    service.host_command_audit_sink = sink
+    _summary, running, step = service._start_step(record, TaskRunRuntimeOptions())
+    secret = "sk-" + ("A" * 40)
+
+    result = run_host_command(
+        service,
+        running,
+        step,
+        auto_run_id="019e2200-0000-7000-8000-000000000999",
+        phase="baseline",
+        command=f"printf '{secret}\\n'",
+    )
+
+    assert result.duration_ms >= 0
+    assert len(sink.records) == 1
+    record = sink.records[0]
+    assert record.tool_name == "host_command"
+    assert record.args["phase"] == "baseline"
+    assert secret not in record.args["commandPreview"]
+    assert record.duration_ms == result.duration_ms
 
 
 def test_experiment_auto_run_records_fresh_baseline_and_keep(

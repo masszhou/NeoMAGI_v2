@@ -32,6 +32,7 @@ Pattern:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +61,16 @@ from cli.tools.policy_resolution_store import PolicyResolutionStore
 
 
 _QUEUE_SENTINEL: Any = object()
+_CANCEL_POLL_INTERVAL_SECONDS = 0.25
+_CANCEL_POLL_EVENT_TYPES = frozenset(
+    {
+        "agent_end",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_end",
+        "turn_end",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -87,6 +98,7 @@ class StepEventCollector:
     tool_count: int = 0
     permission_count: int = 0
     run_id: str | None = None
+    cancel_reason: str | None = None
     listener_errors: list[dict[str, str]] = field(default_factory=list)
     evidence_observations: list[EvidenceObservation] = field(default_factory=list)
 
@@ -134,6 +146,10 @@ class StepEventCollector:
             self.block_reason = reason
         self.permission_count += 1
 
+    def note_cancel_request(self, reason: str) -> None:
+        if not self.cancel_reason:
+            self.cancel_reason = reason
+
     def _record_tool_result(self, result: Any, is_error: bool) -> None:
         details = (
             result.get("details") if isinstance(result, dict)
@@ -160,24 +176,18 @@ class StepEventCollector:
         # the inconsistent / error states only surface if we compute the
         # verification before the early-return lifecycle dispatch.
         verification = self._compute_verification()
-        base = {
-            "assistant_text": self.assistant_text,
-            "run_id": self.run_id,
-            "tool_count": self.tool_count,
-            "permission_decision_count": self.permission_count,
-            "verification_state": verification.state,
-            "verification_reason": verification.reason,
-            # Carry the kind lists straight through so the runner does not
-            # re-derive them from claim text (which lost the inconsistent
-            # vs. missing distinction in the previous round).
-            "verification_missing_kinds": tuple(verification.missing_kinds),
-            "verification_inconsistent_kinds": tuple(verification.inconsistent_kinds),
-        }
+        base = self._outcome_base(verification)
         if self.listener_errors:
             return TaskRunStepOutcome(
                 status="failed",
                 error_message="step finalization sink failed",
                 finalize_errors=list(self.listener_errors),
+                **base,
+            )
+        if self.cancel_reason:
+            return TaskRunStepOutcome(
+                status="cancelled",
+                error_message=self.cancel_reason,
                 **base,
             )
         if self.error_message:
@@ -212,6 +222,21 @@ class StepEventCollector:
             **base,
         )
 
+    def _outcome_base(self, verification: VerificationResult) -> dict[str, Any]:
+        return {
+            "assistant_text": self.assistant_text,
+            "run_id": self.run_id,
+            "tool_count": self.tool_count,
+            "permission_decision_count": self.permission_count,
+            "verification_state": verification.state,
+            "verification_reason": verification.reason,
+            # Carry the kind lists straight through so the runner does not
+            # re-derive them from claim text (which lost the inconsistent
+            # vs. missing distinction in the previous round).
+            "verification_missing_kinds": tuple(verification.missing_kinds),
+            "verification_inconsistent_kinds": tuple(verification.inconsistent_kinds),
+        }
+
     def _compute_verification(self) -> VerificationResult:
         return infer_verification_state(
             assistant_text=self.assistant_text,
@@ -233,10 +258,14 @@ class TaskRunAgentSession:
         collector: StepEventCollector | None = None,
         event_hook: Callable[[AgentEvent], Awaitable[None] | None] | None = None,
         policy_resolution_store: PolicyResolutionStore | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> None:
         self._agent = agent
         self._writer = durable_writer
         self._heartbeat = heartbeat
+        self._cancel_requested = cancel_requested or (lambda: False)
+        self._cancel_requested_seen = False
+        self._last_cancel_poll_at = 0.0
         self._collector = collector or StepEventCollector()
         self._event_hook = event_hook
         self._policy_resolution_store = policy_resolution_store
@@ -275,6 +304,8 @@ class TaskRunAgentSession:
         self._consumer_task = asyncio.create_task(self._consume_events())
         self._unsubscribe = self._agent.subscribe(self._on_event)
         try:
+            if self._check_cancel_requested(force=True):
+                return self._collector.outcome()
             await self._agent.prompt(prompt_message)
         finally:
             await self._drain_and_close_consumer()
@@ -307,6 +338,7 @@ class TaskRunAgentSession:
             self._heartbeat()
         except Exception as exc:
             self._collector.listener_errors.append(_listener_error("heartbeat", exc))
+        self._check_cancel_requested(event)
         if isinstance(event, ToolExecutionStartEvent):
             self._tool_call_state[event.tool_call_id] = ToolCallState(
                 tool_name=event.tool_name,
@@ -375,6 +407,40 @@ class TaskRunAgentSession:
         result = self._event_hook(event)
         if isinstance(result, Awaitable):
             await result
+
+    def _check_cancel_requested(
+        self,
+        event: AgentEvent | None = None,
+        *,
+        force: bool = False,
+    ) -> bool:
+        if self._cancel_requested_seen:
+            return True
+        if not force and not self._should_poll_cancel(event):
+            return False
+        try:
+            requested = self._cancel_requested()
+        except Exception as exc:
+            self._collector.listener_errors.append(
+                _listener_error("cancel_request_check", exc)
+            )
+            return False
+        if not requested:
+            return False
+        self._cancel_requested_seen = True
+        self._collector.note_cancel_request("cancelled by TaskRun cancel request")
+        self.cancel()
+        return True
+
+    def _should_poll_cancel(self, event: AgentEvent | None) -> bool:
+        now = time.monotonic()
+        if event is not None and getattr(event, "type", None) in _CANCEL_POLL_EVENT_TYPES:
+            self._last_cancel_poll_at = now
+            return True
+        if now - self._last_cancel_poll_at < _CANCEL_POLL_INTERVAL_SECONDS:
+            return False
+        self._last_cancel_poll_at = now
+        return True
 
 
 def _apply_verification_to_lifecycle(state: str) -> tuple[str, str | None, str | None]:

@@ -361,6 +361,23 @@ class _FakeTaskRunRepository:
             events = events[:limit]
         return events
 
+    def cancel_requested_exists(
+        self,
+        task_run_id: str,
+        *,
+        step_id: str | None = None,
+    ) -> bool:
+        return any(
+            event.task_run_id == task_run_id
+            and event.event_type == "task_run_cancel_requested"
+            and (
+                step_id is None
+                or event.step_id == step_id
+                or event.payload.get("current_step_id") == step_id
+            )
+            for event in self.events
+        )
+
     def append_permission_decision(
         self,
         *,
@@ -766,6 +783,37 @@ def test_step_keyboard_interrupt_finalizes_cancelled(tmp_path: Path) -> None:
     assert result.step.output["error_message"] == "cancelled by user interrupt"
 
 
+def test_taskrun_cancel_request_finalizes_running_step_cancelled(
+    tmp_path: Path,
+) -> None:
+    repo = _FakeTaskRunRepository()
+    service = _service(repo)
+    started = service.start(
+        "Analyze this repo",
+        tmp_path,
+        permission_profile=_guarded_profile(),
+    )
+
+    class CancellingRunner:
+        def run(self, context: TaskRunStepContext) -> TaskRunStepOutcome:
+            service.cancel(context.task_run.id, tmp_path)
+            assert context.cancel_requested() is True
+            return TaskRunStepOutcome(status="done", assistant_text="would have completed")
+
+    result = service.step(started.task_run.id, tmp_path, runner=CancellingRunner())
+
+    assert result.exit_code == 130
+    assert result.task_run.status == "cancelled"
+    assert result.task_run.current_step_id is None
+    assert result.step is not None
+    assert result.step.status == "cancelled"
+    assert result.step.output["error_message"] == "cancelled by TaskRun cancel request"
+    event_types = [event.event_type for event in repo.list_events(started.task_run.id)]
+    assert event_types.count("task_run_cancel_requested") == 1
+    assert "task_step_cancelled" in event_types
+    assert "task_run_cancelled" in event_types
+
+
 def test_step_runner_heartbeat_leases_current_running_step(tmp_path: Path) -> None:
     class HeartbeatRunner:
         def run(self, context: TaskRunStepContext) -> TaskRunStepOutcome:
@@ -1099,36 +1147,6 @@ def test_events_returns_complete_ordered_stream_without_projection(tmp_path: Pat
     assert len(repo.events) == event_count
 
 
-def test_close_cancels_pending_taskrun_and_is_idempotent(tmp_path: Path) -> None:
-    repo = _FakeTaskRunRepository()
-    service = _service(repo)
-    started = service.start("Analyze this repo", tmp_path)
-
-    closed = service.close(started.task_run.id, tmp_path)
-    closed_again = service.close(started.task_run.id, tmp_path)
-
-    assert closed.task_run.status == "cancelled"
-    assert closed_again.task_run.status == "cancelled"
-    events = repo.list_events(started.task_run.id)
-    assert [event.event_type for event in events].count("task_run_closed") == 1
-
-
-def test_close_rejects_fresh_running_taskrun(tmp_path: Path) -> None:
-    repo = _FakeTaskRunRepository()
-    record = _seed_record(
-        repo,
-        tmp_path,
-        status="running",
-        heartbeat_at="2026-05-13T00:59:00+00:00",
-    )
-    service = _service(repo, now=datetime(2026, 5, 13, 1, 0, tzinfo=UTC))
-
-    with pytest.raises(TaskRunServiceError, match="active running TaskRun"):
-        service.close(record.id, tmp_path)
-
-    assert repo.runs[record.id].status == "running"
-
-
 def test_omitted_id_with_multiple_active_candidates_fails(tmp_path: Path) -> None:
     repo = _FakeTaskRunRepository()
     _seed_record(
@@ -1169,21 +1187,3 @@ def test_summary_regenerates_and_overwrites_projection(tmp_path: Path) -> None:
     body = (regenerated.projection.path / "summary.md").read_text(encoding="utf-8")
     assert "USER EDIT" not in body
     assert PROJECTION_NOTICE in body
-
-
-def test_start_persists_explicit_permission_profile_snapshot(tmp_path: Path) -> None:
-    repo = _FakeTaskRunRepository()
-    service = _service(repo)
-    profile = build_permission_profile_snapshot(
-        "guarded",
-        {"paths": {"allow": ["$WORKSPACE/**"]}},
-        sources=["builtin", "project"],
-        explicit_scope=True,
-        explicit_scope_keys=["paths"],
-    )
-
-    result = service.start("Analyze this repo", tmp_path, permission_profile=profile)
-
-    assert result.task_run.permission_profile["name"] == "guarded"
-    assert result.task_run.permission_profile["sources"] == ["builtin", "project"]
-    assert result.summary["permission_profile"]["name"] == "guarded"

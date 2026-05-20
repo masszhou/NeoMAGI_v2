@@ -55,24 +55,24 @@ def test_operation_manifest_matches_current_service_surface() -> None:
         "events",
         "step",
         "run",
+        "cancel",
         "close",
+        "compaction_in_headless_step",
     }
     covered_by = {"set_permission_profile", "resume"}
-    deferred_to_p3 = {"cancel", "archive", "cleanup"}
+    deferred_to_p3 = {"archive", "cleanup"}
 
     manifest = TASKRUN_OPERATION_MANIFEST_BY_NAME
-    assert set(manifest) == implemented | covered_by | deferred_to_p3 | {
-        "compaction_in_headless_step"
-    }
+    assert set(manifest) == implemented | covered_by | deferred_to_p3
     assert {name for name, item in manifest.items() if item.status == "implemented"} == implemented
     assert {name for name, item in manifest.items() if item.status == "covered_by"} == covered_by
     assert {
         name for name, item in manifest.items() if item.status == "deferred_to_p3"
     } == deferred_to_p3
-    assert manifest["compaction_in_headless_step"].status == "deferred_to_p2_followup"
-    assert "D14 emitter" in manifest["compaction_in_headless_step"].evidence_or_reason
+    assert "D14 compaction" in manifest["compaction_in_headless_step"].evidence_or_reason
 
-    for operation in implemented:
+    service_operations = implemented - {"compaction_in_headless_step"}
+    for operation in service_operations:
         assert hasattr(TaskRunService, operation), operation
     for operation in deferred_to_p3:
         assert not hasattr(TaskRunService, operation), operation
@@ -364,7 +364,7 @@ def test_cli_adapter_does_not_use_snapshot_as_render_path() -> None:
     assert "channel" not in source.lower()
 
 
-def test_d14_headless_trigger_remains_deferred_but_emitter_exists() -> None:
+def test_d14_headless_trigger_wires_taskrun_emitter() -> None:
     runner_source = (
         REPO_ROOT / "packages/magipi/src/cli/core/taskrun_runner.py"
     ).read_text(encoding="utf-8")
@@ -372,8 +372,8 @@ def test_d14_headless_trigger_remains_deferred_but_emitter_exists() -> None:
         REPO_ROOT / "packages/magipi/src/cli/core/compaction_event_emitter.py"
     ).read_text(encoding="utf-8")
 
-    assert "TaskRunCompactionEventEmitter" not in runner_source
-    assert "recover_assistant_response" not in runner_source
+    assert "TaskRunCompactionEventEmitter" in runner_source
+    assert "recover_assistant_response" in runner_source
     assert "TaskRunCompactionEventEmitter" in emitter_source
 
 

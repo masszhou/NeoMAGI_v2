@@ -22,6 +22,8 @@ KEY_HISTORY_EVENT_TYPES = frozenset(
         "task_run_started",
         "task_run_blocked_stale",
         "task_run_closed",
+        "task_run_cancel_requested",
+        "task_run_cancelled",
         "task_run_permission_profile_updated",
         "task_run_auto_run_started",
         "task_run_auto_run_iteration_finished",

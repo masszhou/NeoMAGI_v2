@@ -88,7 +88,7 @@ def execute_experiment_auto_run_iteration(
             workspace_root=workspace_root,
         )
     except KeyboardInterrupt:
-        return _finalize_experiment_iteration(
+        return _finalize_interrupted_experiment_iteration(
             service,
             record,
             running_run,
@@ -97,14 +97,39 @@ def execute_experiment_auto_run_iteration(
             options=options,
             counters=counters,
             budget=budget,
-            outcome=TaskRunStepOutcome(
-                status="cancelled",
-                error_message="cancelled by user interrupt",
-            ),
-            experiment_stop_reason="user_cancelled",
-            attempts=[],
             baseline_metrics=baseline_metrics,
         )
+
+
+def _finalize_interrupted_experiment_iteration(
+    service: TaskRunServiceInternals,
+    record: TaskRunRecord,
+    running_run: TaskRunRecord,
+    step: TaskStepRecord,
+    *,
+    auto_run_id: str,
+    options: TaskRunAutoRunOptions,
+    counters: AutoRunCounters,
+    budget: AutoRunBudget,
+    baseline_metrics: dict[str, float] | None,
+):
+    return _finalize_experiment_iteration(
+        service,
+        record,
+        running_run,
+        step,
+        auto_run_id=auto_run_id,
+        options=options,
+        counters=counters,
+        budget=budget,
+        outcome=TaskRunStepOutcome(
+            status="cancelled",
+            error_message="cancelled by user interrupt",
+        ),
+        experiment_stop_reason="user_cancelled",
+        attempts=[],
+        baseline_metrics=baseline_metrics,
+    )
 
 
 def _run_experiment_iteration(

@@ -157,6 +157,7 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     _add_read_commands(sub)
     _add_step_command(sub)
     _add_run_command(sub)
+    _add_cancel_command(sub)
     _add_close_command(sub)
     return parser
 
@@ -293,6 +294,11 @@ def _add_close_command(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     close.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
 
 
+def _add_cancel_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    cancel = sub.add_parser("cancel", help="Cancel a pending or running TaskRun.")
+    cancel.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+
+
 def _parse_auto_run_max_steps(value: str) -> int:
     try:
         parsed = int(value)
@@ -366,6 +372,8 @@ def _dispatch(
                 runner=runner,
                 permission_profile=permission_profile,
             )
+        case "cancel":
+            return service.cancel(args.id, cwd)
         case "close":
             return service.close(args.id, cwd)
         case _:

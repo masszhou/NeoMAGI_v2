@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from agent_core import Agent, AgentOptions
-from ai_provider.providers.faux import faux_tool_call, stream_faux
+from ai_provider.providers.faux import faux_assistant_message, faux_tool_call, stream_faux
 from ai_provider.runtime_types import SimpleStreamOptions
-from ai_provider.types import Context, Model
+from ai_provider.types import Context, Model, TextContent, UserMessage
 from cli.core.session_manager import SessionManager
 from cli.core.taskrun_runner import TaskRunHeadlessRunner
 from cli.core.taskrun_service import TaskRunRuntimeOptions, TaskRunStepContext
@@ -121,6 +122,30 @@ def test_headless_runner_writes_taskrun_summary_context_and_messages(tmp_path: P
     provider_text = captured["options"].messages[0].content[0].text
     assert "<taskrun-context type=\"taskRunSummary\"" in provider_text
     assert TASK_ID in provider_text
+
+
+def test_headless_runner_compaction_failure_does_not_append_taskrun_summary(
+    tmp_path: Path,
+) -> None:
+    sessions = InMemorySessionRepository()
+    sessions.create_session(cwd=str(tmp_path), session_id=SESSION_ID, source={"taskRunOwned": True})
+    manager = SessionManager(sessions, include_taskrun_owned=True)
+    repo = _TaskRepo(sessions)
+
+    class FailingCompactionRunner(TaskRunHeadlessRunner):
+        def _auto_compact_before_prompt(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("compaction failed")
+
+    runner = FailingCompactionRunner(
+        session_manager=manager,
+        task_repository=repo,
+        cwd=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="compaction failed"):
+        runner.run(_context(tmp_path))
+
+    assert sessions.list_entries(SESSION_ID) == []
 
 
 def test_headless_runner_records_permission_with_step_and_tool_execution_id(
@@ -552,6 +577,58 @@ def test_finalize_invariant_writes_blocker_when_permission_decision_null(
     assert payload["detail"]["tool_call_ids"] == ["orphan_call"]
 
 
+def test_finalize_invariant_ignores_host_command_permission_decisions(
+    tmp_path: Path,
+) -> None:
+    sessions = InMemorySessionRepository()
+    sessions.create_session(cwd=str(tmp_path), session_id=SESSION_ID, source={"taskRunOwned": True})
+    manager = SessionManager(sessions, include_taskrun_owned=True)
+    repo = _TaskRepo(sessions)
+    repo.permission_records.append(
+        {
+            "task_run_id": TASK_ID,
+            "step_id": STEP_ID,
+            "tool_execution_id": None,
+            "policy_request": {
+                "source": {
+                    "host": "task_run",
+                    "decision_subject": "host_command",
+                    "phase": "baseline",
+                }
+            },
+            "raw_decision": {"effect": "allow"},
+            "resolved_decision": {"effect": "allow"},
+            "profile_name": "guarded",
+            "occurred_at": "2026-05-18T00:00:00+00:00",
+        }
+    )
+
+    def stream_fn(model: Model, context: Context, options: SimpleStreamOptions | None = None):
+        return stream_faux(
+            model,
+            context,
+            SimpleStreamOptions(metadata={"response": "Status update."}),
+        )
+
+    def agent_factory(options: AgentOptions) -> Agent:
+        options.stream_fn = stream_fn
+        return Agent(options)
+
+    runner = TaskRunHeadlessRunner(
+        session_manager=manager,
+        task_repository=repo,
+        cwd=tmp_path,
+        agent_factory=agent_factory,
+    )
+
+    outcome = runner.run(_context(tmp_path))
+
+    assert outcome.status == "done"
+    assert not any(
+        event["event_type"] == "task_step_blocker_detected" for event in repo.events
+    )
+
+
 def test_headless_runner_marks_step_done_when_no_claim(tmp_path: Path) -> None:
     """Sanity: bland assistant text → no claim → verification supported."""
 
@@ -585,6 +662,66 @@ def test_headless_runner_marks_step_done_when_no_claim(tmp_path: Path) -> None:
     event_types = {event["event_type"] for event in repo.events}
     assert "task_step_outcome_supported" in event_types
     assert "task_step_outcome_unsupported" not in event_types
+
+
+def test_headless_runner_records_overflow_compaction_and_auto_retry(
+    tmp_path: Path,
+) -> None:
+    sessions = InMemorySessionRepository()
+    sessions.create_session(cwd=str(tmp_path), session_id=SESSION_ID, source={"taskRunOwned": True})
+    manager = SessionManager(sessions, include_taskrun_owned=True)
+    manager.append_message(
+        SESSION_ID,
+        UserMessage(content=[TextContent(text="old context")], timestamp=1),
+    )
+    manager.append_message(
+        SESSION_ID,
+        UserMessage(content=[TextContent(text="recent context")], timestamp=2),
+    )
+    repo = _TaskRepo(sessions)
+    calls = {"n": 0}
+
+    def stream_fn(model: Model, context: Context, options: SimpleStreamOptions | None = None):
+        del options
+        calls["n"] += 1
+        if calls["n"] == 1:
+            overflow = faux_assistant_message("", model)
+            overflow.stop_reason = "error"
+            overflow.error_message = "prompt is too long"
+            return stream_faux(
+                model,
+                context,
+                SimpleStreamOptions(metadata={"response": overflow}),
+            )
+        return stream_faux(
+            model,
+            context,
+            SimpleStreamOptions(metadata={"response": "Recovered after compaction."}),
+        )
+
+    def agent_factory(options: AgentOptions) -> Agent:
+        options.stream_fn = stream_fn
+        return Agent(options)
+
+    runner = TaskRunHeadlessRunner(
+        session_manager=manager,
+        task_repository=repo,
+        cwd=tmp_path,
+        agent_factory=agent_factory,
+    )
+
+    outcome = runner.run(_context(tmp_path))
+
+    assert calls["n"] == 2
+    assert outcome.status == "done"
+    event_types = [event["event_type"] for event in repo.events]
+    assert "task_runtime_compaction_observed" in event_types
+    assert "task_runtime_auto_retry_observed" in event_types
+    retry_event = next(
+        event for event in repo.events
+        if event["event_type"] == "task_runtime_auto_retry_observed"
+    )
+    assert retry_event["payload"]["success"] is True
 
 
 def _context(tmp_path: Path) -> TaskRunStepContext:
