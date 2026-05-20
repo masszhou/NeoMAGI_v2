@@ -12,6 +12,7 @@ import pytest
 
 import ai_provider.auth_storage as auth_storage_module
 from ai_provider.auth_storage import (
+    AUTH_PATH_ENV,
     default_auth_path,
     load_auth_storage,
     resolve_auth_path,
@@ -31,6 +32,45 @@ def _jwt_with_account(account_id: str) -> str:
 def _b64_json(data: Mapping[str, Any]) -> str:
     raw = json.dumps(data, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+class _FakeKeyringBackend:
+    pass
+
+
+class _FakeKeyringModule:
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], str] = {}
+
+    def get_keyring(self):
+        return _FakeKeyringBackend()
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self.values.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self.values[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        self.values.pop((service, username), None)
+
+
+def _isolate_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(auth_storage_module.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(auth_storage_module, "LEGACY_AUTH_PATH", home / ".neomagi" / "auth.json")
+    monkeypatch.setattr(auth_storage_module.sys, "platform", "linux")
+    monkeypatch.delenv(AUTH_PATH_ENV, raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    auth_storage_module._WARNED_FILE_FALLBACK = False
+    return home
+
+
+def _install_fake_keyring(monkeypatch: pytest.MonkeyPatch) -> _FakeKeyringModule:
+    fake = _FakeKeyringModule()
+    monkeypatch.setitem(sys.modules, "keyring", fake)
+    return fake
 
 
 def test_save_oauth_credentials_uses_pi_compatible_shape(tmp_path: Path) -> None:
@@ -59,6 +99,50 @@ def test_save_oauth_credentials_uses_pi_compatible_shape(tmp_path: Path) -> None
     }
     assert stat.S_IMODE(auth_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(auth_path.parent.stat().st_mode) == 0o700
+
+
+def test_default_auth_storage_prefers_keyring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+    fake = _install_fake_keyring(monkeypatch)
+
+    save_api_key("openai", "sk-keyring-default")
+
+    assert load_auth_storage()["openai"]["key"] == "sk-keyring-default"
+    stored_payloads = [json.loads(value) for value in fake.values.values()]
+    assert any(payload.get("openai", {}).get("key") == "sk-keyring-default" for payload in stored_payloads)
+
+
+def test_neomagi_auth_path_forces_file_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+    fake = _install_fake_keyring(monkeypatch)
+    auth_path = tmp_path / "forced.json"
+    monkeypatch.setenv(AUTH_PATH_ENV, str(auth_path))
+
+    save_api_key("openai", "sk-file-forced")
+
+    assert json.loads(auth_path.read_text(encoding="utf-8"))["openai"]["key"] == "sk-file-forced"
+    assert all("sk-file-forced" not in value for value in fake.values.values())
+
+
+def test_legacy_file_migrates_to_keyring_marker_without_plaintext(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = _isolate_home(monkeypatch, tmp_path)
+    fake = _install_fake_keyring(monkeypatch)
+    legacy = home / ".config" / "neomagi" / "auth.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"openai": {"type": "api_key", "key": "sk-legacy-secret"}}\n', encoding="utf-8")
+    legacy.chmod(0o600)
+
+    storage = load_auth_storage()
+
+    assert storage["openai"]["key"] == "sk-legacy-secret"
+    marker_text = legacy.read_text(encoding="utf-8")
+    marker = json.loads(marker_text)
+    assert marker["migrated_to_keyring"] is True
+    assert "sk-legacy-secret" not in marker_text
+    assert any("sk-legacy-secret" in value for value in fake.values.values())
 
 
 def test_resolve_stored_api_key_returns_fresh_oauth_access(tmp_path: Path) -> None:

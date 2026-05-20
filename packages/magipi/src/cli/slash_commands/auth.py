@@ -10,6 +10,7 @@ from typing import Any
 
 from ai_provider.auth_storage import (
     OPENAI_CODEX_PROVIDER,
+    auth_storage_status,
     delete_credential,
     list_credentials,
     resolve_auth_path,
@@ -129,7 +130,7 @@ def _finish_openai_codex_login(value: str) -> None:
     )
     save_oauth_credentials(OPENAI_CODEX_PROVIDER, credentials)
     _LAST_OPENAI_CODEX_CALLBACK_ERROR = None
-    _LAST_OPENAI_CODEX_SAVE_PATH = str(resolve_auth_path())
+    _LAST_OPENAI_CODEX_SAVE_PATH = _backend_summary()
     pending.server.close()
     _PENDING_OPENAI_CODEX = None
 
@@ -150,7 +151,7 @@ def _wait_for_callback(pending: _PendingOAuth, notify: _OAuthNotify | None = Non
         )
         save_oauth_credentials(OPENAI_CODEX_PROVIDER, credentials)
         _LAST_OPENAI_CODEX_CALLBACK_ERROR = None
-        _LAST_OPENAI_CODEX_SAVE_PATH = str(resolve_auth_path())
+        _LAST_OPENAI_CODEX_SAVE_PATH = _backend_summary()
         _notify(
             notify,
             f"OpenAI Codex OAuth credential saved: {_LAST_OPENAI_CODEX_SAVE_PATH}",
@@ -169,9 +170,11 @@ def _wait_for_callback(pending: _PendingOAuth, notify: _OAuthNotify | None = Non
 
 
 def _auth_status_lines() -> str:
-    auth_path = resolve_auth_path()
+    status = auth_storage_status()
     credentials = list_credentials()
-    diagnostics = [f"path: {auth_path}"]
+    diagnostics = [f"backend: {_backend_summary(status)}"]
+    if status.get("backend") == "file":
+        diagnostics.append("file fallback: 0600 JSON; use OS keyring when available")
     if _LAST_OPENAI_CODEX_CALLBACK_ERROR:
         diagnostics.append(f"last openai-codex oauth error: {_LAST_OPENAI_CODEX_CALLBACK_ERROR}")
     elif _LAST_OPENAI_CODEX_SAVE_PATH:
@@ -183,6 +186,14 @@ def _auth_status_lines() -> str:
         lines.append(f"- {provider}: {_entry_summary(entry)}")
     lines.extend(diagnostics)
     return "\n".join(lines)
+
+
+def _backend_summary(status: dict[str, Any] | None = None) -> str:
+    status = status or auth_storage_status()
+    if status.get("backend") == "keyring":
+        return f"keyring:{status.get('service')}/{status.get('username')}"
+    path = status.get("path") or str(resolve_auth_path())
+    return f"file:{path}"
 
 
 def _controller_notifier(controller: Any) -> _OAuthNotify:

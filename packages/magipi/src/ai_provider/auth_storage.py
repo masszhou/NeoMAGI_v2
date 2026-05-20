@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Protocol, TextIO
 
 from .oauth import (
     OAuthCredentials,
@@ -29,10 +31,90 @@ AUTH_DIR_MODE = 0o700
 _USER_CONFIG_SUBDIR = "neomagi"
 LEGACY_AUTH_PATH = Path.home() / ".neomagi" / "auth.json"
 OPENAI_CODEX_PROVIDER = "openai-codex"
+KEYRING_SERVICE = "neomagi-pi"
+KEYRING_USERNAME = "auth-storage-v1"
+_MIGRATED_MARKER_KEY = "migrated_to_keyring"
+_LOGGER = logging.getLogger("magipi.auth")
+_WARNED_FILE_FALLBACK = False
 
 
 class AuthStorageError(RuntimeError):
     """Raised when local auth storage cannot be read or written safely."""
+
+
+class CredentialStore(Protocol):
+    backend: str
+
+    def load(self) -> dict[str, dict[str, Any]]: ...
+    def save(self, storage: Mapping[str, Mapping[str, Any]]) -> None: ...
+    def delete_all(self) -> None: ...
+    def status(self) -> dict[str, Any]: ...
+
+
+class FileCredentialStore:
+    backend = "file"
+
+    def __init__(self, path: Path, *, forced: bool = False) -> None:
+        self.path = path
+        self.forced = forced
+
+    def load(self) -> dict[str, dict[str, Any]]:
+        if not self.path.exists():
+            return {}
+        with _locked_existing_auth_file(self.path) as file:
+            return _read_storage(file)
+
+    def save(self, storage: Mapping[str, Mapping[str, Any]]) -> None:
+        with _locked_auth_file(self.path) as file:
+            _write_storage(file, _normalize_storage(storage))
+
+    def delete_all(self) -> None:
+        self.save({})
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "path": str(self.path),
+            "forced": self.forced,
+            "secure": False,
+        }
+
+
+class KeyringCredentialStore:
+    backend = "keyring"
+
+    def __init__(self, keyring_module: Any) -> None:
+        self._keyring = keyring_module
+
+    def load(self) -> dict[str, dict[str, Any]]:
+        raw = self._keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AuthStorageError("keyring auth storage is not valid JSON") from exc
+        return _normalize_storage(parsed)
+
+    def save(self, storage: Mapping[str, Mapping[str, Any]]) -> None:
+        payload = json.dumps(_normalize_storage(storage), indent=2, sort_keys=True)
+        self._keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, payload)
+
+    def delete_all(self) -> None:
+        try:
+            self._keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        except Exception:
+            return
+
+    def status(self) -> dict[str, Any]:
+        backend = self._keyring.get_keyring()
+        return {
+            "backend": self.backend,
+            "service": KEYRING_SERVICE,
+            "username": KEYRING_USERNAME,
+            "keyringBackend": f"{type(backend).__module__}.{type(backend).__name__}",
+            "secure": True,
+        }
 
 
 def _user_config_auth_path(env: Mapping[str, str] | None = None) -> Path:
@@ -116,20 +198,14 @@ def _migrate_legacy_auth(new_path: Path) -> bool:
 def load_auth_storage(
     path: str | os.PathLike[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    resolved = resolve_auth_path(path)
-    if not resolved.exists():
-        return {}
-    with _locked_existing_auth_file(resolved) as file:
-        return _read_storage(file)
+    return _credential_store(path).load()
 
 
 def save_auth_storage(
     storage: Mapping[str, Mapping[str, Any]],
     path: str | os.PathLike[str] | None = None,
 ) -> None:
-    resolved = resolve_auth_path(path)
-    with _locked_auth_file(resolved) as file:
-        _write_storage(file, _normalize_storage(storage))
+    _credential_store(path).save(storage)
 
 
 def save_oauth_credentials(
@@ -210,20 +286,16 @@ def resolve_stored_api_key(
     *,
     now_ms: Callable[[], int] | None = None,
 ) -> str | None:
-    resolved = resolve_auth_path(path)
-    if not resolved.exists():
+    storage = load_auth_storage(path)
+    entry = storage.get(provider)
+    if not entry:
         return None
-    with _locked_existing_auth_file(resolved) as file:
-        storage = _read_storage(file)
-        entry = storage.get(provider)
-        if not entry:
-            return None
-        api_key = _resolve_entry_api_key(provider, entry, now_ms or _now_ms)
-        if isinstance(api_key, OAuthCredentials):
-            storage[provider] = {"type": "oauth", **api_key.to_mapping()}
-            _write_storage(file, storage)
-            return api_key.access
-        return api_key
+    api_key = _resolve_entry_api_key(provider, entry, now_ms or _now_ms)
+    if isinstance(api_key, OAuthCredentials):
+        storage[provider] = {"type": "oauth", **api_key.to_mapping()}
+        save_auth_storage(storage, path)
+        return api_key.access
+    return api_key
 
 
 def _resolve_entry_api_key(
@@ -248,11 +320,89 @@ def _mutate_auth_storage(
     mutate: Callable[[dict[str, dict[str, Any]]], None],
     path: str | os.PathLike[str] | None,
 ) -> None:
-    resolved = resolve_auth_path(path)
-    with _locked_auth_file(resolved) as file:
-        storage = _read_storage(file)
-        mutate(storage)
-        _write_storage(file, storage)
+    storage = load_auth_storage(path)
+    mutate(storage)
+    save_auth_storage(storage, path)
+
+
+def auth_storage_status(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    return _credential_store(path).status()
+
+
+def _credential_store(path: str | os.PathLike[str] | None) -> CredentialStore:
+    if path is not None or os.environ.get(AUTH_PATH_ENV):
+        return FileCredentialStore(resolve_auth_path(path), forced=True)
+    keyring_module = _load_keyring_module()
+    if keyring_module is not None and _keyring_is_available(keyring_module):
+        store = KeyringCredentialStore(keyring_module)
+        _migrate_file_auth_to_keyring(store)
+        return store
+    _warn_file_fallback()
+    return FileCredentialStore(resolve_auth_path(path), forced=False)
+
+
+def _load_keyring_module() -> Any | None:
+    try:
+        import keyring
+    except ModuleNotFoundError:
+        return None
+    return keyring
+
+
+def _keyring_is_available(keyring_module: Any) -> bool:
+    try:
+        backend = keyring_module.get_keyring()
+    except Exception:
+        return False
+    backend_ref = f"{type(backend).__module__}.{type(backend).__name__}".lower()
+    if "keyring.backends.fail" in backend_ref or "plaintext" in backend_ref or "keyrings.alt.file" in backend_ref:
+        return False
+    probe_user = f"{KEYRING_USERNAME}-probe-{os.getpid()}"
+    try:
+        keyring_module.set_password(KEYRING_SERVICE, probe_user, "ok")
+        keyring_module.get_password(KEYRING_SERVICE, probe_user)
+        keyring_module.delete_password(KEYRING_SERVICE, probe_user)
+    except Exception:
+        return False
+    return True
+
+
+def _migrate_file_auth_to_keyring(store: KeyringCredentialStore) -> None:
+    file_path = default_auth_path()
+    if not file_path.exists():
+        return
+    file_store = FileCredentialStore(file_path)
+    try:
+        storage = file_store.load()
+    except AuthStorageError:
+        return
+    if not storage:
+        return
+    store.save(storage)
+    marker = {
+        _MIGRATED_MARKER_KEY: True,
+        "migrated_at": datetime.now(UTC).isoformat(),
+        "backend": "keyring",
+        "service": KEYRING_SERVICE,
+        "username": KEYRING_USERNAME,
+    }
+    with _locked_auth_file(file_path) as file:
+        file.seek(0)
+        file.truncate()
+        json.dump(marker, file, indent=2, sort_keys=True)
+        file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+
+
+def _warn_file_fallback() -> None:
+    global _WARNED_FILE_FALLBACK
+    if _WARNED_FILE_FALLBACK:
+        return
+    _WARNED_FILE_FALLBACK = True
+    message = "secure keyring unavailable; falling back to 0600 JSON auth storage"
+    _LOGGER.warning(message)
+    sys.stderr.write(f"warning: {message}\n")
 
 
 @contextmanager
@@ -314,6 +464,8 @@ def _write_storage(file: TextIO, storage: Mapping[str, Mapping[str, Any]]) -> No
 def _normalize_storage(raw: object) -> dict[str, dict[str, Any]]:
     if not isinstance(raw, Mapping):
         raise AuthStorageError("auth storage root must be a JSON object")
+    if raw.get(_MIGRATED_MARKER_KEY) is True:
+        return {}
     storage: dict[str, dict[str, Any]] = {}
     for provider, entry in raw.items():
         if not isinstance(provider, str) or not isinstance(entry, Mapping):
@@ -349,6 +501,7 @@ __all__ = [
     "DEFAULT_AUTH_PATH",
     "LEGACY_AUTH_PATH",
     "credential_status",
+    "auth_storage_status",
     "default_auth_path",
     "delete_credential",
     "list_credentials",
