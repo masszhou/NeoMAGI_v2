@@ -7,9 +7,11 @@ from agent_core import Agent, RuntimeAgentTool
 from agent_core.cache_affinity import derive_provider_cache_affinity_id, mint_provider_cache_affinity_id
 from agent_core.types import AgentEventAdapter, AgentToolResult
 from ai_provider.model_registry import get_model
-from ai_provider.providers.faux import faux_tool_call, stream_faux
+from ai_provider.providers.faux import faux_assistant_message, faux_tool_call, stream_faux
 from ai_provider.runtime_types import SimpleStreamOptions
+from ai_provider.streaming import create_assistant_message_event_stream
 from ai_provider.types import Context, Model, TextContent, ToolResultMessage, UserMessage
+from ai_provider.types import StreamDone
 
 
 def _model() -> Model:
@@ -227,13 +229,30 @@ def test_wait_for_idle_waits_for_agent_end_listener_and_listener_errors_settle()
                 await asyncio.sleep(0.01)
                 raise RuntimeError("listener failed")
 
+        async def second_listener(event: Any, _signal: asyncio.Event) -> None:
+            if event.type == "agent_end":
+                raise ValueError("second listener failed")
+
         agent.subscribe(listener)
+        agent.subscribe(second_listener)
         await agent.prompt("hello")
         await agent.wait_for_idle()
 
         assert saw_streaming_at_agent_end == [True]
         assert agent.state.is_streaming is False
-        assert agent.state.error_message == "listener failed"
+        assert agent.state.error_message == "second listener failed"
+        assert agent._listener_errors == [  # noqa: SLF001
+            {
+                "eventType": "agent_end",
+                "errorType": "RuntimeError",
+                "message": "listener failed",
+            },
+            {
+                "eventType": "agent_end",
+                "errorType": "ValueError",
+                "message": "second listener failed",
+            },
+        ]
 
     asyncio.run(run())
 
@@ -258,6 +277,52 @@ def test_abort_during_stream_preserves_partial_and_returns_to_idle() -> None:
         assert assistant.content[0].text
         assert agent.state.pending_tool_calls == []
         assert agent.state.is_streaming is False
+
+    asyncio.run(run())
+
+
+def test_abort_before_stream_registration_closes_new_stream() -> None:
+    async def run() -> None:
+        stream_fn_entered = asyncio.Event()
+        allow_stream_return = asyncio.Event()
+
+        async def stream_fn(
+            model: Model,
+            context: Context,
+            options: SimpleStreamOptions | None = None,
+        ):
+            del context, options
+            stream_fn_entered.set()
+            await allow_stream_return.wait()
+            stream = create_assistant_message_event_stream(
+                initial=faux_assistant_message("", model)
+            )
+
+            async def finish_late() -> None:
+                await asyncio.sleep(0)
+                stream.push(
+                    StreamDone(
+                        reason="stop",
+                        message=faux_assistant_message("late success", model),
+                    )
+                )
+
+            asyncio.create_task(finish_late())
+            return stream
+
+        agent = Agent(model=_model(), stream_fn=stream_fn)
+        prompt_task = asyncio.create_task(agent.prompt("hello"))
+        await asyncio.wait_for(stream_fn_entered.wait(), timeout=1.0)
+        agent.abort()
+        allow_stream_return.set()
+        await prompt_task
+
+        assistant = agent.state.messages[-1]
+        assert assistant.role == "assistant"
+        assert assistant.stop_reason == "aborted"
+        assert assistant.error_message == "Request was aborted"
+        assert agent.state.is_streaming is False
+        assert agent.active_run_id is None
 
     asyncio.run(run())
 

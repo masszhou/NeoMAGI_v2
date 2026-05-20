@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -28,6 +29,8 @@ from .types import (
 )
 
 Listener = Callable[[AgentEvent, asyncio.Event], Awaitable[None] | None]
+
+_logger = logging.getLogger("magipi.agent")
 
 
 def _now_ms() -> int:
@@ -111,6 +114,7 @@ class Agent:
         self._steering_queue = _PendingMessageQueue(options.steering_mode)
         self._follow_up_queue = _PendingMessageQueue(options.follow_up_mode)
         self._listeners: list[Listener] = []
+        self._listener_errors: list[dict[str, str]] = []
         self._active_run: ActiveRun | None = None
 
     @property
@@ -216,7 +220,15 @@ class Agent:
 
     def abort(self) -> None:
         if self._active_run is None:
+            _logger.debug("agent abort ignored because no run is active")
             return
+        _logger.debug(
+            "agent abort requested",
+            extra={
+                "run_id": self._active_run.id,
+                "stream_registered": self._active_run.stream is not None,
+            },
+        )
         self._active_run.signal.set()
         if self._active_run.stream is not None:
             self._active_run.stream.close()
@@ -327,6 +339,18 @@ class Agent:
                 if isinstance(result, Awaitable):
                     await result
             except Exception as exc:
+                event_type = getattr(event, "type", type(event).__name__)
+                self._listener_errors.append(
+                    {
+                        "eventType": str(event_type),
+                        "errorType": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+                _logger.exception(
+                    "agent listener failed",
+                    extra={"event_type": event_type},
+                )
                 self._state.error_message = str(exc)
 
     def _reduce_state(self, event: AgentEvent) -> None:
@@ -409,8 +433,11 @@ class Agent:
         )
 
     def _register_stream(self, stream: Any) -> None:
-        if self._active_run is not None:
-            self._active_run.stream = stream
+        if self._active_run is None:
+            return
+        self._active_run.stream = stream
+        if self._active_run.signal.is_set():
+            stream.close()
 
     def _normalize_prompt_input(
         self,

@@ -14,6 +14,61 @@ from agent_core.types import (
 )
 
 
+EXPECTED_AGENT_EVENT_FACE = [
+    ("AgentStartEvent", "agent_start", [("type", None)]),
+    ("AgentEndEvent", "agent_end", [("type", None), ("messages", None)]),
+    ("TurnStartEvent", "turn_start", [("type", None)]),
+    (
+        "TurnEndEvent",
+        "turn_end",
+        [("type", None), ("message", None), ("tool_results", "toolResults")],
+    ),
+    ("MessageStartEvent", "message_start", [("type", None), ("message", None)]),
+    (
+        "MessageUpdateEvent",
+        "message_update",
+        [
+            ("type", None),
+            ("message", None),
+            ("assistant_message_event", "assistantMessageEvent"),
+        ],
+    ),
+    ("MessageEndEvent", "message_end", [("type", None), ("message", None)]),
+    (
+        "ToolExecutionStartEvent",
+        "tool_execution_start",
+        [
+            ("type", None),
+            ("tool_call_id", "toolCallId"),
+            ("tool_name", "toolName"),
+            ("args", None),
+        ],
+    ),
+    (
+        "ToolExecutionUpdateEvent",
+        "tool_execution_update",
+        [
+            ("type", None),
+            ("tool_call_id", "toolCallId"),
+            ("tool_name", "toolName"),
+            ("args", None),
+            ("partial_result", "partialResult"),
+        ],
+    ),
+    (
+        "ToolExecutionEndEvent",
+        "tool_execution_end",
+        [
+            ("type", None),
+            ("tool_call_id", "toolCallId"),
+            ("tool_name", "toolName"),
+            ("result", None),
+            ("is_error", "isError"),
+        ],
+    ),
+]
+
+
 def test_agent_core_event_protocol_face_is_pinned_by_adr_0023() -> None:
     """ADR-0023: do not drift agent_core protocol face without a new ADR.
 
@@ -29,63 +84,7 @@ def test_agent_core_event_protocol_face_is_pinned_by_adr_0023() -> None:
             _model_field_aliases(cls),
         )
         for cls in get_args(core_types.AgentEvent)
-    ] == [
-        ("AgentStartEvent", "agent_start", [("type", None)]),
-        ("AgentEndEvent", "agent_end", [("type", None), ("messages", None)]),
-        ("TurnStartEvent", "turn_start", [("type", None)]),
-        (
-            "TurnEndEvent",
-            "turn_end",
-            [("type", None), ("message", None), ("tool_results", "toolResults")],
-        ),
-        (
-            "MessageStartEvent",
-            "message_start",
-            [("type", None), ("message", None)],
-        ),
-        (
-            "MessageUpdateEvent",
-            "message_update",
-            [
-                ("type", None),
-                ("message", None),
-                ("assistant_message_event", "assistantMessageEvent"),
-            ],
-        ),
-        ("MessageEndEvent", "message_end", [("type", None), ("message", None)]),
-        (
-            "ToolExecutionStartEvent",
-            "tool_execution_start",
-            [
-                ("type", None),
-                ("tool_call_id", "toolCallId"),
-                ("tool_name", "toolName"),
-                ("args", None),
-            ],
-        ),
-        (
-            "ToolExecutionUpdateEvent",
-            "tool_execution_update",
-            [
-                ("type", None),
-                ("tool_call_id", "toolCallId"),
-                ("tool_name", "toolName"),
-                ("args", None),
-                ("partial_result", "partialResult"),
-            ],
-        ),
-        (
-            "ToolExecutionEndEvent",
-            "tool_execution_end",
-            [
-                ("type", None),
-                ("tool_call_id", "toolCallId"),
-                ("tool_name", "toolName"),
-                ("result", None),
-                ("is_error", "isError"),
-            ],
-        ),
-    ]
+    ] == EXPECTED_AGENT_EVENT_FACE
 
 
 def test_agent_core_hook_context_protocol_face_is_pinned_by_adr_0023() -> None:
