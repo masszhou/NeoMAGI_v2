@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import Future
 
 from agent_core import Agent
 from ai_provider.auth_storage import AUTH_PATH_ENV
@@ -135,3 +136,15 @@ def test_runtime_reset_mints_new_session_and_drops_old_queue() -> None:
     assert before != after
     assert runtime.state.queued_steering == ()
     assert runtime.state.queued_follow_up == ()
+
+
+def test_runtime_reset_logs_active_future_timeout(caplog) -> None:
+    runtime = InteractiveAgentRuntime()
+    try:
+        runtime._active_future = Future()  # noqa: SLF001
+        with caplog.at_level("WARNING", logger="magipi.interactive.runtime"):
+            runtime.reset(wait_timeout=0)
+    finally:
+        runtime.shutdown()
+
+    assert "runtime reset timed out waiting for active future" in caplog.text

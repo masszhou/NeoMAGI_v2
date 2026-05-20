@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import queue
 import threading
-import time
 import uuid
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +22,6 @@ from ai_provider.types import (
     CacheRetention,
     TextContent,
     ThinkingLevel,
-    Usage,
-    UsageCost,
     UserMessage,
 )
 from cli.core.session_types import (
@@ -56,34 +53,17 @@ from .extension_runtime import ExtensionRuntimeMixin, PreparedPrompt
 from .export_runtime import SessionExportRuntimeMixin
 from .model_runtime import ModelRuntimeMixin
 from .runtime_events import agent_event_to_session_event
+from .runtime_state import (
+    RuntimeState,
+    display_name as _display_name,
+    empty_usage as _empty_usage,
+    leaf_ref as _leaf_ref,
+    now_ms as _now_ms,
+    tool_text as _tool_text,
+)
 from .session_writer import DurableSessionEventWriter
 
-
-@dataclass(frozen=True, slots=True)
-class RuntimeState:
-    is_running: bool
-    queued_steering: tuple[str, ...]
-    queued_follow_up: tuple[str, ...]
-    model_ref: str
-    runtime_session_id: str
-    provider_cache_affinity_id: str | None
-    durable_session_id: str | None = None
-    current_leaf_entry_id: str | None = None
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _empty_usage() -> Usage:
-    return Usage(
-        input=0,
-        output=0,
-        cacheRead=0,
-        cacheWrite=0,
-        totalTokens=0,
-        cost=UsageCost(input=0, output=0, cacheRead=0, cacheWrite=0, total=0),
-    )
+_logger = logging.getLogger("magipi.interactive.runtime")
 
 
 class InteractiveAgentRuntime(
@@ -178,22 +158,27 @@ class InteractiveAgentRuntime(
 
     @property
     def footer_summary(self) -> str:
-        cache = resolve_cache_retention(self._cache_retention)
-        extensions = ""
-        if self._extension_runner is not None:
-            extension_count = len(self._extension_runner.runtime.extensions)
+        with self._lock:
+            cache = resolve_cache_retention(self._cache_retention)
+            model_ref = self._model_ref
+            thinking_level = self._thinking_level
+            extension_runner = self._extension_runner
             diagnostics_count = len(self._extension_diagnostics)
-            extensions = f"  extensions={extension_count}"
-            if diagnostics_count:
-                extensions += f" diagnostics={diagnostics_count}"
-        durable = (
-            f"  session={short_session_id(self._durable_session.id)}"
-            f" name={_display_name(self._durable_session.display_name)}"
-            if self._durable_session is not None
-            else ""
-        )
+            durable_session = self._durable_session
+            extensions = ""
+            if extension_runner is not None:
+                extension_count = len(extension_runner.runtime.extensions)
+                extensions = f"  extensions={extension_count}"
+                if diagnostics_count:
+                    extensions += f" diagnostics={diagnostics_count}"
+            durable = (
+                f"  session={short_session_id(durable_session.id)}"
+                f" name={_display_name(durable_session.display_name)}"
+                if durable_session is not None
+                else ""
+            )
         return (
-            f"runtime: {self._model_ref}  thinking={self._thinking_level}  "
+            f"runtime: {model_ref}  thinking={thinking_level}  "
             f"cache={cache}{extensions}{durable}"
         )
 
@@ -288,13 +273,16 @@ class InteractiveAgentRuntime(
         with self._lock:
             future = self._active_future if self._is_running_locked() else None
             if future is not None:
+                _logger.debug("runtime reset aborting active future")
                 self._loop.call_soon_threadsafe(self._agent.abort)
 
         if future is not None:
             try:
                 future.result(timeout=wait_timeout)
-            except (FutureTimeoutError, Exception):
-                pass
+            except FutureTimeoutError:
+                _logger.warning("runtime reset timed out waiting for active future")
+            except Exception:
+                _logger.exception("runtime reset active future failed while aborting")
 
         with self._lock:
             self._generation += 1
@@ -314,9 +302,10 @@ class InteractiveAgentRuntime(
             self._enqueue_queue_update_locked()
 
     def session_stats(self):
-        if self._session_manager is None or self._durable_session is None:
-            return None
-        return self._session_manager.session_stats(self._durable_session.id)
+        with self._lock:
+            if self._session_manager is None or self._durable_session is None:
+                return None
+            return self._session_manager.session_stats(self._durable_session.id)
 
     def list_recent_sessions(self, *, limit: int = 10) -> list[SessionRecord]:
         if self._session_manager is None:
@@ -324,14 +313,15 @@ class InteractiveAgentRuntime(
         return self._session_manager.list_recent_sessions(cwd=str(self._cwd), limit=limit)
 
     def rename_session(self, name: str | None) -> SessionRecord:
-        self._ensure_idle_for_session_switch()
-        if self._session_manager is None or self._durable_session is None:
-            raise RuntimeError("durable session manager is not available")
-        self._durable_session = self._session_manager.rename_session(
-            self._durable_session.id,
-            name,
-        )
-        return self._durable_session
+        with self._lock:
+            self._ensure_idle_for_session_switch()
+            if self._session_manager is None or self._durable_session is None:
+                raise RuntimeError("durable session manager is not available")
+            self._durable_session = self._session_manager.rename_session(
+                self._durable_session.id,
+                name,
+            )
+            return self._durable_session
 
     def resume_session(self, session_id: str) -> SessionRecord:
         self._ensure_idle_for_session_switch()
@@ -342,25 +332,28 @@ class InteractiveAgentRuntime(
         return session
 
     def fork_session(self, entry_id: str) -> BranchSessionResult:
-        self._ensure_idle_for_session_switch()
-        if self._session_manager is None or self._durable_session is None:
-            raise RuntimeError("durable session manager is not available")
-        result = self._session_manager.fork_session(self._durable_session.id, entry_id)
-        self._activate_durable_session(result.session)
-        return result
+        with self._lock:
+            self._ensure_idle_for_session_switch()
+            if self._session_manager is None or self._durable_session is None:
+                raise RuntimeError("durable session manager is not available")
+            result = self._session_manager.fork_session(self._durable_session.id, entry_id)
+            self._activate_durable_session(result.session)
+            return result
 
     def clone_session(self) -> BranchSessionResult:
-        self._ensure_idle_for_session_switch()
-        if self._session_manager is None or self._durable_session is None:
-            raise RuntimeError("durable session manager is not available")
-        result = self._session_manager.clone_session(self._durable_session.id)
-        self._activate_durable_session(result.session)
-        return result
+        with self._lock:
+            self._ensure_idle_for_session_switch()
+            if self._session_manager is None or self._durable_session is None:
+                raise RuntimeError("durable session manager is not available")
+            result = self._session_manager.clone_session(self._durable_session.id)
+            self._activate_durable_session(result.session)
+            return result
 
     def session_tree(self):
-        if self._session_manager is None or self._durable_session is None:
-            return []
-        return self._session_manager.session_tree(self._durable_session.id)
+        with self._lock:
+            if self._session_manager is None or self._durable_session is None:
+                return []
+            return self._session_manager.session_tree(self._durable_session.id)
 
     def drain_events(self) -> list[AgentSessionEvent]:
         events: list[AgentSessionEvent] = []
@@ -374,6 +367,7 @@ class InteractiveAgentRuntime(
         with self._lock:
             if self._closed:
                 return
+        _logger.debug("runtime shutdown starting")
         self._emit_extension_session_shutdown("quit")
         with self._lock:
             if self._closed:
@@ -386,8 +380,10 @@ class InteractiveAgentRuntime(
         if future is not None:
             try:
                 future.result(timeout=timeout)
-            except (FutureTimeoutError, Exception):
-                pass
+            except FutureTimeoutError:
+                _logger.warning("runtime shutdown timed out waiting for active future")
+            except Exception:
+                _logger.exception("runtime shutdown active future failed while aborting")
 
         if self._thread.is_alive():
             cancel_future = asyncio.run_coroutine_threadsafe(
@@ -396,14 +392,20 @@ class InteractiveAgentRuntime(
             )
             try:
                 cancel_future.result(timeout=timeout)
-            except (FutureTimeoutError, Exception):
-                pass
+            except FutureTimeoutError:
+                _logger.warning("runtime shutdown timed out cancelling pending tasks")
+            except Exception:
+                _logger.exception("runtime shutdown pending task cancellation failed")
 
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=timeout)
-        if not self._thread.is_alive():
-            self._loop.close()
+        if self._thread.is_alive():
+            _logger.warning(
+                "runtime shutdown timed out joining runtime thread; "
+                "loop close remains owned by runtime thread"
+            )
         self._artifact_store.cleanup()
+        _logger.debug("runtime shutdown complete")
 
     def run_user_bash(self, command: str, *, exclude_from_context: bool) -> None:
         if not command.strip():
@@ -422,7 +424,10 @@ class InteractiveAgentRuntime(
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.close()
 
     async def _run_prompt(self, prepared: PreparedPrompt, generation: int) -> None:
         try:
@@ -474,7 +479,16 @@ class InteractiveAgentRuntime(
         for task in tasks:
             task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result,
+                    asyncio.CancelledError,
+                ):
+                    _logger.warning(
+                        "runtime pending task ended with exception during cancellation",
+                        exc_info=(type(result), result, result.__traceback__),
+                    )
 
     def _build_agent(self, generation: int) -> Agent:
         agent_ref: list[Agent] = []
@@ -678,15 +692,16 @@ class InteractiveAgentRuntime(
             wake()
 
     def _emit_session_event(self, event: AgentSessionEvent) -> None:
-        if self._session_writer is not None:
-            self._session_writer.record(event)
-            if self._durable_session is not None and self._session_manager is not None:
-                refreshed = self._session_manager.repository.get_session(
-                    self._durable_session.id
-                )
-                if refreshed is not None:
-                    self._durable_session = refreshed
-        self._events.put(event)
+        with self._lock:
+            if self._session_writer is not None:
+                self._session_writer.record(event)
+                if self._durable_session is not None and self._session_manager is not None:
+                    refreshed = self._session_manager.repository.get_session(
+                        self._durable_session.id
+                    )
+                    if refreshed is not None:
+                        self._durable_session = refreshed
+            self._events.put(event)
         self._notify_wake()
 
     def _start_durable_session(self) -> SessionRecord | None:
@@ -772,26 +787,5 @@ class InteractiveAgentRuntime(
             content=[TextContent(text=text)],
             timestamp=_now_ms(),
         )
-
-
-def _tool_text(result: Any) -> str:
-    parts = []
-    for block in result.content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            parts.append(str(block.get("text", "")))
-        elif getattr(block, "type", None) == "text":
-            parts.append(str(block.text))
-    return "\n".join(parts)
-
-
-def _display_name(value: str | None) -> str:
-    return value or "(unnamed)"
-
-
-def _leaf_ref(value: str | None) -> str:
-    if not value:
-        return "none"
-    return f"entry:{value[:8]}"
-
 
 __all__ = ["InteractiveAgentRuntime", "RuntimeState"]

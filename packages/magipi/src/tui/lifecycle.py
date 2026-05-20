@@ -16,6 +16,7 @@ per ADR-0015 §影响 `packages/magipi/src/tui/terminal.py`); this module never 
 from __future__ import annotations
 
 import atexit
+import logging
 import signal
 import sys
 import traceback
@@ -25,6 +26,8 @@ from types import FrameType
 from typing import Iterator
 
 from .app import TUIApp
+
+_logger = logging.getLogger("magipi.tui.lifecycle")
 
 
 @contextmanager
@@ -84,9 +87,12 @@ def _make_cleanup(
             if on_exit is not None:
                 on_exit()
         except Exception:
-            pass
-        _place_cursor_after_frame(app)
-        app.terminal.exit()
+            _logger.warning("TUI lifecycle on_exit callback failed", exc_info=True)
+        try:
+            _place_cursor_after_frame(app)
+            app.terminal.exit()
+        except Exception:
+            _logger.warning("TUI terminal restore failed", exc_info=True)
 
     return cleanup
 
@@ -102,7 +108,7 @@ def _install_exit_signal_handlers(app: TUIApp) -> tuple[object, object]:
         signal.signal(signal.SIGINT, _on_signal)
         signal.signal(signal.SIGTERM, _on_signal)
     except (ValueError, OSError):
-        pass
+        _logger.warning("TUI signal handler installation failed", exc_info=True)
     return old_int, old_term
 
 
@@ -111,7 +117,7 @@ def _restore_exit_signal_handlers(old_int: object, old_term: object) -> None:
         signal.signal(signal.SIGINT, old_int)  # type: ignore[arg-type]
         signal.signal(signal.SIGTERM, old_term)  # type: ignore[arg-type]
     except (ValueError, OSError, TypeError):
-        pass
+        _logger.warning("TUI signal handler restoration failed", exc_info=True)
 
 
 def _place_cursor_after_frame(app: TUIApp) -> None:
