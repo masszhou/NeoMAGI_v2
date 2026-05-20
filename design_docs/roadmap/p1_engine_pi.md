@@ -86,7 +86,7 @@ P1 完成后，用户应该可以把 NeoMAGI 当作一个可日常使用的本�
   - `@` 触发的 fuzzy 文件搜索；
   - `!cmd` 和 `!!cmd` bash mode 的视觉状态与提交入口；
   - Shift+Enter 多行输入；
-  - Ctrl+V 图片粘贴入口；
+  - 图片粘贴入口 deferred（P1 仅保留 metadata-only / deferred contract）；
   - markdown/code block 渲染；
   - tool call / tool result 渲染；
   - overlay / selector / settings list；
@@ -199,7 +199,7 @@ P1 完成后，用户应该可以把 NeoMAGI 当作一个可日常使用的本�
 - 支持 `/` slash command 提示。
 - 支持 `@` 触发的 fuzzy 文件搜索。
 - 支持 `!cmd` bash mode 和 `!!cmd` 本地执行但不送入 LLM context 的模式提示。
-- 支持 Ctrl+V 图片粘贴入口；P1 可降级为临时文件引用或 placeholder。
+- 图片粘贴入口 deferred；P1 仅保留 metadata-only / deferred contract，不绑定 Ctrl+V。
 - assistant 文本以 streaming 方式出现。
 - thinking、tool call、tool result、error、abort 都有清晰展示。
 - overlay / selector 可用于 session、model、settings、confirm 等交互。
@@ -269,7 +269,7 @@ P1 完成后，用户应该可以把 NeoMAGI 当作一个可日常使用的本�
 - extension 可以注册 tool。
 - extension 可以注册 provider。
 - extension 可以注册 slash command。
-- extension 可以注册 keybinding，且不能覆盖核心不可让渡键位。
+- extension 可以注册 keybinding metadata，且不能覆盖核心不可让渡键位；live TUI shortcut binding deferred。
 - extension 可以订阅 lifecycle / session / agent / tool / user_bash 事件。
 - extension 可以拦截 session before-fork / before-switch / before-tree / before-compact。
 - extension 可以注册 widget、footer、header、status line、overlay 和 custom tool renderer。
@@ -394,7 +394,7 @@ Critical path：
 - 终端 lifecycle 和退出恢复。
 - 多行输入、Shift+Enter、slash command、`@` fuzzy file search。
 - `!` / `!!` bash mode 的 UI 状态与 mock execution display。
-- Ctrl+V 图片粘贴入口。
+- 图片粘贴入口 deferred（P1 不绑定 Ctrl+V）。
 - assistant streaming 渲染。
 - thinking / tool execution 渲染。
 - overlay / selector。
@@ -548,7 +548,7 @@ Critical path：
 - extension loader。
 - extension tool / command / event API。
 - extension provider registration。
-- extension keybinding / widget / footer / header / status line / overlay API。
+- extension keybinding metadata / widget / footer / header / status line / overlay API。
 - custom tool renderer。
 - session before-* hook。
 - system prompt replacement / context transform hook。
@@ -566,7 +566,7 @@ Critical path：
 - extension 注册工具走统一 policy。
 - skills 和 prompt templates 能影响 prompt context。
 - user_bash extension 可以拦截 `!` / `!!`。
-- extension keybinding 不覆盖核心不可让渡键位。
+- extension keybinding metadata 不覆盖核心不可让渡键位；live TUI shortcut binding deferred。
 
 ### P1-M9：Settings / Auth / Models
 

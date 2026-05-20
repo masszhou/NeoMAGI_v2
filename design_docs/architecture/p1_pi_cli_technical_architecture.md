@@ -759,7 +759,7 @@ Python naming may use snake_case, but the exposed protocol must cover Pi's compl
 | `on(event, handler)` | `on(event, handler)` | subscribe to typed extension events |
 | `registerTool(tool)` | `register_tool(tool)` | add LLM-callable tool through policy/audit wrapper |
 | `registerCommand(name, options)` | `register_command(name, options)` | add slash command after builtin priority |
-| `registerShortcut(keyId, {description?, handler})` | `register_shortcut(key_id, ...)` | register runtime keybinding |
+| `registerShortcut(keyId, {description?, handler})` | `register_shortcut(key_id, ...)` | record shortcut metadata; live TUI keybinding is deferred |
 | `registerFlag(name, {description?, type, default?})` | `register_flag(name, ...)` | register CLI/runtime flag |
 | `getFlag(name)` | `get_flag(name)` | read registered flag value |
 | `registerMessageRenderer(customType, renderer)` | `register_message_renderer(custom_type, renderer)` | render `CustomMessageEntry`; separate from tool renderers |

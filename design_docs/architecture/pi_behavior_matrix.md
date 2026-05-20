@@ -130,7 +130,7 @@ Pi 用 TypeScript `Promise<X>` 标注的方法，Python `Protocol` 一律声明�
 | 1 | `on(event, handler)` | `on(event, handler)` | 1040–1077 | 6 类 25+ 重载，见 §E |
 | 2 | `registerTool(tool)` | `register_tool(tool)` | 1083–1086 | 走 policy/audit wrapper |
 | 3 | `registerCommand(name, options)` | `register_command(name, options)` | 1092 | builtin 优先 |
-| 4 | `registerShortcut(keyId, opts)` | `register_shortcut(key_id, opts)` | 1095–1102 | `description?`、`handler` |
+| 4 | `registerShortcut(keyId, opts)` | `register_shortcut(key_id, opts)` | 1095–1102 | metadata-only before live TUI keybinding; refuses core-key collisions |
 | 5 | `registerFlag(name, opts)` | `register_flag(name, opts)` | 1104–1112 | `type: "boolean" \| "string"`、`default?` |
 | 6 | `getFlag(name)` | `get_flag(name)` | 1114 | 返回 `bool \| str \| None` |
 | 7 | `registerMessageRenderer(customType, renderer)` | `register_message_renderer(custom_type, renderer)` | 1119–1121 | 仅渲染 `CustomMessageEntry`，与 tool renderer 分离 |

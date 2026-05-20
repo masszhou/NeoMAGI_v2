@@ -59,13 +59,14 @@ PI_BUILTIN_COMMANDS: tuple[tuple[str, str, str | None], ...] = (
     ("new", "Start a new session", None),
     ("compact", "Manual compaction", None),
     ("resume", "Resume a previous session", None),
+    ("taskrun", "Inspect or control local TaskRuns", None),
     ("reload", "Reload extensions / skills / prompts / themes", "M8"),
     ("quit", "Quit NeoMAGI", None),
 )
-"""Behavior matrix § A — 21 Pi builtin commands. ``stub_milestone`` is
-non-null for those whose runtime arrives in a later milestone; M1 still
-registers them so autocomplete is complete (and the user gets a clear
-"tracked in M{X}" message when they try to invoke)."""
+"""Behavior matrix § A — Pi builtin commands plus the local TaskRun bridge.
+``stub_milestone`` is non-null for those whose runtime arrives in a later
+milestone; M1 still registers them so autocomplete is complete (and the user
+gets a clear "tracked in M{X}" message when they try to invoke)."""
 
 LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
     {
@@ -88,6 +89,7 @@ LIVE_BUILTIN_COMMANDS: frozenset[str] = frozenset(
         "session",
         "settings",
         "share",
+        "taskrun",
         "tree",
     }
 )
@@ -167,7 +169,7 @@ def register_builtin_commands(
     *,
     play_targets: Sequence[str] = (),
 ) -> None:
-    """Register all 21 Pi builtin commands + ``/play`` (M1-only)."""
+    """Register Pi builtin commands + the local ``/taskrun`` bridge + ``/play``."""
 
     from .play import make_play_handler
 
@@ -208,6 +210,7 @@ def _live_builtin_handlers() -> dict[str, CommandHandler]:
     from .session import handle_name, handle_session
     from .settings import handle_settings
     from .share import handle_share
+    from .taskrun import handle_taskrun
     from .tree import handle_tree
 
     return {
@@ -230,6 +233,7 @@ def _live_builtin_handlers() -> dict[str, CommandHandler]:
         "session": handle_session,
         "settings": handle_settings,
         "share": handle_share,
+        "taskrun": handle_taskrun,
         "tree": handle_tree,
     }
 

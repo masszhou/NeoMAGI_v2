@@ -337,8 +337,9 @@ def test_slash_new_clears_messages_and_resets_state() -> None:
 
 def test_slash_hotkeys_opens_settings_overlay_with_keymap_rows() -> None:
     """Typing ``/hotkeys`` must open the ``SettingsList`` overlay populated
-    from ``default_bindings()``."""
+    from implemented key bindings."""
 
+    from tui.keymap import Action
     from tui.keymap import default_bindings
     from tui.overlay import SettingsList
 
@@ -346,9 +347,12 @@ def test_slash_hotkeys_opens_settings_overlay_with_keymap_rows() -> None:
     _type_command(app, "/hotkeys")
     overlays = [o for o in app._overlays if isinstance(o, SettingsList)]  # noqa: SLF001
     assert len(overlays) == 1
-    expected_keys = {b.key for b in default_bindings()}
+    expected_keys = {
+        b.key for b in default_bindings() if b.action is not Action.PASTE_IMAGE
+    }
     actual_keys = {row.label for row in overlays[0].rows}
     assert expected_keys.issubset(actual_keys)
+    assert "Ctrl+V" not in actual_keys
 
 
 def test_slash_play_with_known_fixture_drives_harness_synchronously() -> None:

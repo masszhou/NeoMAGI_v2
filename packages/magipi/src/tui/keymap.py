@@ -97,7 +97,6 @@ def default_bindings() -> list[KeyBinding]:
         KeyBinding("/", Action.SLASH_TRIGGER, core=True),
         KeyBinding("@", Action.AT_TRIGGER, core=True),
         KeyBinding("!", Action.BANG_TRIGGER, core=True),
-        KeyBinding("Ctrl+V", Action.PASTE_IMAGE, core=True),
     ]
 
 
