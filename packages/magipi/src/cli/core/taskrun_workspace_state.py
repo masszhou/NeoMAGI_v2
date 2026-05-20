@@ -14,9 +14,19 @@ def workspace_state(workspace_root: str, projection_path: Path) -> dict[str, obj
         "projection_path": str(projection_path),
         "git": {"status": "unknown"},
     }
+    if workspace_root.startswith("-"):
+        return state
     try:
         result = subprocess.run(
-            ["git", "-C", workspace_root, "status", "--short", "--untracked-files=no"],
+            [
+                "git",
+                "-C",
+                workspace_root,
+                "status",
+                "--short",
+                "--untracked-files=no",
+                "--",
+            ],
             capture_output=True,
             text=True,
             timeout=2.0,

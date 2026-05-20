@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .path_policy import resolve_cwd, resolve_cwd_path
+from .sensitive_paths import sensitive_path_reason
 from .types import PolicyDecision, PolicyRequest
 
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -51,6 +52,13 @@ _DIRECT_SENSITIVE_PATHS = (
     "/etc/shadow",
     "/private/etc/hosts",
 )
+_SENSITIVE_ENV_PREFIXES = ("DYLD_",)
+_SENSITIVE_ENV_NAMES = {
+    "PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+}
 _URL_RE = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"`]+")
 _FILE_ACCESS_RE = re.compile(
     r"\b(?:open|Path|readFileSync|readFile|file_get_contents|File\.read|IO\.read)"
@@ -144,10 +152,16 @@ def _top_level_block(command: str, tokens: list[str]) -> _BlockedCommand | None:
         return _BlockedCommand(f"{tokens[0]} is blocked by shell policy")
     if any(token == "sudo" for token in tokens):
         return _BlockedCommand("sudo is blocked by shell policy")
+    env_block = _blocked_env_override(tokens)
+    if env_block is not None:
+        return env_block
     for pattern in _DESTRUCTIVE_PATTERNS:
         if pattern.search(command):
             return _BlockedCommand("destructive shell command is blocked by policy")
     for token in tokens:
+        sensitive_reason = sensitive_path_reason(token)
+        if sensitive_reason is not None:
+            return _BlockedCommand(sensitive_reason, path_literal=token)
         if _is_privileged_path(token):
             return _BlockedCommand(
                 f"privileged path is blocked by shell policy: {token}",
@@ -176,6 +190,9 @@ def _blocked_output_path_reason(command: str, cwd: Path) -> str | None:
     if tokens is None:
         return "shell command cannot be parsed safely"
     for index, token in enumerate(tokens):
+        reason = _blocked_network_upload_reason(tokens, index, cwd)
+        if reason:
+            return reason
         reason = _blocked_output_option_reason(tokens, index, cwd)
         if reason:
             return reason
@@ -199,6 +216,47 @@ def _output_option_target(tokens: list[str], index: int) -> str | None:
     if token.startswith("--output="):
         return token.split("=", 1)[1]
     return _compact_output_option_target(token)
+
+
+def _blocked_network_upload_reason(tokens: list[str], index: int, cwd: Path) -> str | None:
+    target = _network_upload_target(tokens, index)
+    if target is None:
+        return None
+    if target.startswith("@"):
+        target = target[1:]
+    if not target or target == "-":
+        return None
+    sensitive_reason = sensitive_path_reason(target, cwd=cwd)
+    if sensitive_reason is not None:
+        return sensitive_reason
+    if _path_escapes(target, cwd):
+        return f"shell upload path escapes cwd: {target}"
+    return None
+
+
+def _network_upload_target(tokens: list[str], index: int) -> str | None:
+    token = tokens[index]
+    if token in {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form"}:
+        if index + 1 >= len(tokens):
+            return None
+        return _extract_upload_file_argument(tokens[index + 1])
+    for prefix in ("--data=", "--data-raw=", "--data-binary=", "--data-urlencode=", "-F", "--form="):
+        if token.startswith(prefix):
+            return _extract_upload_file_argument(token.split("=", 1)[1] if "=" in token else token[2:])
+    if token in {"-T", "--upload-file", "--post-file"} and index + 1 < len(tokens):
+        return tokens[index + 1]
+    for prefix in ("--upload-file=", "--post-file=", "--post-data="):
+        if token.startswith(prefix):
+            return token.split("=", 1)[1]
+    return None
+
+
+def _extract_upload_file_argument(value: str) -> str | None:
+    if value.startswith("@"):
+        return value
+    if "=@" in value:
+        return value.split("=@", 1)[1]
+    return None
 
 
 def _blocked_redirect_reason(tokens: list[str], index: int, cwd: Path) -> str | None:
@@ -230,6 +288,52 @@ def _is_privileged_path(token: str) -> bool:
         return False
     path = token.split("=", 1)[-1].rstrip("/") or "/"
     return path == "/" or any(path == base or path.startswith(f"{base}/") for base in _PRIVILEGED_PATHS)
+
+
+def _blocked_env_override(tokens: list[str]) -> _BlockedCommand | None:
+    for token in _leading_env_assignment_tokens(tokens):
+        name = token.split("=", 1)[0]
+        if _is_sensitive_env_name(name):
+            return _BlockedCommand(f"environment override is blocked by shell policy: {name}")
+    return None
+
+
+def _leading_env_assignment_tokens(tokens: list[str]) -> list[str]:
+    if not tokens:
+        return []
+    assignments: list[str] = []
+    index = 0
+    if _command_basename(tokens[0]) == "env":
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token in {"-i", "--ignore-environment"}:
+                index += 1
+                continue
+            if token == "-u" and index + 1 < len(tokens):
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            if _is_env_assignment(token):
+                assignments.append(token)
+                index += 1
+                continue
+            break
+        return assignments
+    while index < len(tokens) and _is_env_assignment(tokens[index]):
+        assignments.append(tokens[index])
+        index += 1
+    return assignments
+
+
+def _is_env_assignment(token: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token))
+
+
+def _is_sensitive_env_name(name: str) -> bool:
+    return name in _SENSITIVE_ENV_NAMES or any(name.startswith(prefix) for prefix in _SENSITIVE_ENV_PREFIXES)
 
 
 def _shell_wrapper_script(tokens: list[str]) -> str | None:

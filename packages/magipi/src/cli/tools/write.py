@@ -11,6 +11,7 @@ from agent_core.types import AgentToolResult
 from ._result import resolved_path_details, text_result
 from .definitions import ToolDefinition, ToolExecutionContext, object_schema
 from .mutation_queue import with_file_mutation_queue
+from .safe_file_ops import logical_mutation_key, safe_atomic_write_text
 
 
 def create_write_tool_definition() -> ToolDefinition:
@@ -39,26 +40,24 @@ async def execute_write(
     resolved = Path(context.policy_decision.resolved_paths.get("path", ""))
     logical_path = str(args.get("path") or ".")
     return await with_file_mutation_queue(
-        resolved,
-        lambda: _write_file(args, resolved, logical_path, signal),
+        logical_mutation_key(context.cwd, logical_path),
+        lambda: _write_file(args, context.cwd, resolved, logical_path, signal),
     )
 
 
 async def _write_file(
     args: dict[str, Any],
+    cwd: str,
     resolved: Path,
     logical_path: str,
     signal: AbortSignal | None,
 ) -> AgentToolResult:
     if signal is not None and signal.is_set():
         return text_result("Operation aborted", details=resolved_path_details(logical_path, resolved), is_error=True)
-    if not resolved.parent.exists():
-        return text_result(
-            f"Parent directory does not exist: {resolved.parent}",
-            details=resolved_path_details(logical_path, resolved),
-            is_error=True,
-        )
-    resolved.write_text(str(args["content"]), encoding="utf-8")
+    try:
+        resolved = safe_atomic_write_text(cwd, logical_path, str(args["content"]))
+    except Exception as exc:
+        return text_result(str(exc), details=resolved_path_details(logical_path, resolved), is_error=True)
     details = resolved_path_details(logical_path, resolved)
     return text_result(f"Successfully wrote {len(str(args['content']))} bytes to {logical_path}.", details=details)
 

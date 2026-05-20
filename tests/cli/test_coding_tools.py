@@ -22,6 +22,7 @@ from cli.tools import (
     create_coding_tools,
     create_read_only_tools,
 )
+from cli.tools import safe_file_ops
 from cli.tools.context import convert_coding_messages_to_llm
 from cli.tools.definitions import SkillEnvGrant, ToolDefinition, object_schema
 from cli.tools.edit import prepare_edit_arguments
@@ -354,6 +355,88 @@ def test_edit_and_write_are_cwd_bound_and_preserve_locked_details(tmp_path: Path
         assert blocked.details["policyDecision"]["effect"] == "block"
 
     asyncio.run(run())
+
+
+def test_edit_and_write_refuse_operation_time_symlinks(tmp_path: Path) -> None:
+    async def run() -> None:
+        target = tmp_path / "target.txt"
+        target.write_text("safe\n", encoding="utf-8")
+        link = tmp_path / "link.txt"
+        try:
+            link.symlink_to(target)
+        except OSError as exc:
+            pytest.skip(f"symlinks are not available: {exc}")
+        tools = _tool_map(create_coding_tools(tmp_path))
+
+        write = await tools["write"].execute("write-link", {"path": "link.txt", "content": "changed"}, None, None)
+        edit = await tools["edit"].execute(
+            "edit-link",
+            {"path": "link.txt", "edits": [{"oldText": "safe", "newText": "changed"}]},
+            None,
+            None,
+        )
+
+        assert write.is_error is True
+        assert edit.is_error is True
+        assert "symlink" in write.content[0]["text"]
+        assert "symlink" in edit.content[0]["text"]
+        assert target.read_text(encoding="utf-8") == "safe\n"
+
+    asyncio.run(run())
+
+
+def test_write_refuses_parent_directory_symlink(tmp_path: Path) -> None:
+    async def run() -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        link_dir = tmp_path / "link-dir"
+        try:
+            link_dir.symlink_to(outside, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"symlinks are not available: {exc}")
+        tools = _tool_map(create_coding_tools(tmp_path))
+
+        result = await tools["write"].execute(
+            "write-parent-link",
+            {"path": "link-dir/escape.txt", "content": "changed"},
+            None,
+            None,
+        )
+
+        assert result.is_error is True
+        assert "symlink" in result.content[0]["text"]
+        assert not (outside / "escape.txt").exists()
+
+    asyncio.run(run())
+
+
+def test_safe_write_survives_target_swap_to_symlink_between_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    target = tmp_path / "target.txt"
+    target.write_text("old\n", encoding="utf-8")
+    original_reject = safe_file_ops._reject_symlink_child  # noqa: SLF001
+    calls = {"count": 0}
+
+    def swap_after_first_check(parent_fd: int, name: str) -> None:
+        calls["count"] += 1
+        original_reject(parent_fd, name)
+        if calls["count"] == 1:
+            target.unlink()
+            target.symlink_to(outside)
+
+    try:
+        monkeypatch.setattr(safe_file_ops, "_reject_symlink_child", swap_after_first_check)
+        safe_file_ops.safe_atomic_write_text(tmp_path, "target.txt", "new\n")
+    except OSError as exc:
+        pytest.skip(f"symlink race test is unsupported on this filesystem: {exc}")
+
+    assert outside.read_text(encoding="utf-8") == "outside\n"
+    assert target.read_text(encoding="utf-8") == "new\n"
+    assert not target.is_symlink()
 
 
 def test_bash_success_block_and_audit(tmp_path: Path) -> None:

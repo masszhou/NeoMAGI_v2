@@ -12,10 +12,14 @@ class RuntimeArtifactStore:
     def __init__(self, runtime_session_id: str) -> None:
         self.runtime_session_id = runtime_session_id
         base = Path(tempfile.gettempdir()) / "neomagi-runtime"
+        if base.exists() and base.is_symlink():
+            raise RuntimeError(f"runtime artifact base is a symlink: {base}")
         base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if base.is_symlink():
+            raise RuntimeError(f"runtime artifact base is a symlink: {base}")
         base.chmod(0o700)
-        self.root = base / runtime_session_id
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        safe_runtime_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in runtime_session_id)
+        self.root = Path(tempfile.mkdtemp(prefix=f"{safe_runtime_id}-", dir=base))
         self.root.chmod(0o700)
 
     def output_path(self, tool_call_id: str) -> Path:

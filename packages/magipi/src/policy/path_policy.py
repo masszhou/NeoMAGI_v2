@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from .sensitive_paths import sensitive_path_reason
 from .types import PolicyDecision, PolicyRequest
 
 PathMode = Literal["read", "write"]
@@ -39,6 +40,9 @@ def decide_path_access(
         resolved = resolve_cwd_path(request.cwd, request.args.get(path_arg))
     except Exception as exc:
         return PolicyDecision.block(str(exc), audit_tags=[f"path:{mode}:block"])
+    sensitive_reason = sensitive_path_reason(str(request.args.get(path_arg) or "."), cwd=request.cwd)
+    if sensitive_reason is not None:
+        return PolicyDecision.block(sensitive_reason, audit_tags=[f"path:{mode}:sensitive:block"])
 
     normalized_args = dict(request.args)
     normalized_args[path_arg] = str(request.args.get(path_arg) or ".")

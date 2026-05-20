@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from .sensitive_paths import sensitive_path_reason
 from .shell_policy import DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
 from .types import PolicyDecision, PolicyRequest
 
@@ -800,6 +801,9 @@ def _check_shell_segment(
     check = _check_network_scope(executable, tokens, scope)
     if not check.allowed:
         return check
+    check = _check_network_upload_paths(tokens, cwd, profile_name, scope, explicit_keys)
+    if not check.allowed:
+        return check
     return _check_output_paths(tokens, cwd, profile_name, scope, explicit_keys)
 
 
@@ -908,6 +912,37 @@ def _check_network_scope(
         host = (urlparse(url).hostname or "").lower()
         if not host or host not in allowed_hosts:
             return _ScopeCheck(False, f"network host outside permission profile scope: {host or url}", ["permission:network:block"])
+    return _ScopeCheck(True)
+
+
+def _check_network_upload_paths(
+    tokens: list[str],
+    cwd: str,
+    profile_name: str,
+    scope: PermissionProfileScope,
+    explicit_keys: set[str],
+) -> _ScopeCheck:
+    for index, _token in enumerate(tokens):
+        target = _network_upload_target(tokens, index)
+        if target is None:
+            continue
+        sensitive_reason = sensitive_path_reason(target, cwd=cwd)
+        if sensitive_reason is not None:
+            return _ScopeCheck(False, sensitive_reason, ["permission:path:sensitive:block"])
+        fake_request = PolicyRequest(
+            toolName="read",
+            args={"path": target},
+            cwd=cwd,
+        )
+        check = _check_path_tool(
+            fake_request,
+            profile_name,
+            scope,
+            mode="read",
+            explicit_paths="paths" in explicit_keys,
+        )
+        if not check.allowed:
+            return check
     return _ScopeCheck(True)
 
 
@@ -1040,6 +1075,33 @@ def _output_target(tokens: list[str], index: int) -> str | None:
         return compact.group(1)
     if token.startswith("-o") and len(token) > 2:
         return token[2:]
+    return None
+
+
+def _network_upload_target(tokens: list[str], index: int) -> str | None:
+    token = tokens[index]
+    if token in {"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form"}:
+        if index + 1 >= len(tokens):
+            return None
+        return _upload_file_argument(tokens[index + 1])
+    for prefix in ("--data=", "--data-raw=", "--data-binary=", "--data-urlencode=", "--form="):
+        if token.startswith(prefix):
+            return _upload_file_argument(token.split("=", 1)[1])
+    if token.startswith("-F") and len(token) > 2:
+        return _upload_file_argument(token[2:])
+    if token in {"-T", "--upload-file", "--post-file"} and index + 1 < len(tokens):
+        return tokens[index + 1]
+    for prefix in ("--upload-file=", "--post-file=", "--post-data="):
+        if token.startswith(prefix):
+            return token.split("=", 1)[1]
+    return None
+
+
+def _upload_file_argument(value: str) -> str | None:
+    if value.startswith("@"):
+        return value[1:]
+    if "=@" in value:
+        return value.split("=@", 1)[1]
     return None
 
 

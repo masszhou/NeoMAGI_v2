@@ -12,6 +12,7 @@ from agent_core.types import AgentToolResult
 from ._result import resolved_path_details, text_result
 from .definitions import ToolDefinition, ToolExecutionContext, object_schema
 from .mutation_queue import with_file_mutation_queue
+from .safe_file_ops import logical_mutation_key, safe_atomic_write_text, safe_read_text
 
 
 def create_edit_tool_definition() -> ToolDefinition:
@@ -74,13 +75,14 @@ async def execute_edit(
     resolved = Path(context.policy_decision.resolved_paths.get("path", ""))
     logical_path = str(args.get("path") or ".")
     return await with_file_mutation_queue(
-        resolved,
-        lambda: _apply_edit(args, resolved, logical_path, signal),
+        logical_mutation_key(context.cwd, logical_path),
+        lambda: _apply_edit(args, context.cwd, resolved, logical_path, signal),
     )
 
 
 async def _apply_edit(
     args: dict[str, Any],
+    cwd: str,
     resolved: Path,
     logical_path: str,
     signal: AbortSignal | None,
@@ -88,7 +90,7 @@ async def _apply_edit(
     if signal is not None and signal.is_set():
         return text_result("Operation aborted", details=resolved_path_details(logical_path, resolved), is_error=True)
     try:
-        original = resolved.read_text(encoding="utf-8")
+        resolved, original = safe_read_text(cwd, logical_path)
     except OSError as exc:
         return text_result(str(exc), details=resolved_path_details(logical_path, resolved), is_error=True)
     except UnicodeDecodeError:
@@ -104,7 +106,10 @@ async def _apply_edit(
         updated = updated.replace(edit["oldText"], edit["newText"], 1)
     if signal is not None and signal.is_set():
         return text_result("Operation aborted", details=resolved_path_details(logical_path, resolved), is_error=True)
-    resolved.write_text(updated, encoding="utf-8")
+    try:
+        resolved = safe_atomic_write_text(cwd, logical_path, updated)
+    except Exception as exc:
+        return text_result(str(exc), details=resolved_path_details(logical_path, resolved), is_error=True)
     diff = _unified_diff(logical_path, original, updated)
     first_changed = _first_changed_line(original, updated)
     details = {

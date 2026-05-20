@@ -7,7 +7,8 @@ from typing import Any
 
 from agent_core.runtime_types import AbortSignal, ToolUpdateCallback
 from agent_core.types import AgentToolResult
-from policy.redaction import redact_literal_values
+from policy.redaction import REDACTED_VALUE, redact_for_export, redact_literal_values
+from policy.sensitive_paths import is_sensitive_path
 from policy.sandbox import SandboxResult, run_shell_command
 from policy.shell_policy import DEFAULT_TIMEOUT_SECONDS
 
@@ -102,6 +103,9 @@ def _bash_result(
     secret_values: tuple[str, ...] = (),
 ) -> AgentToolResult:
     output_text, redacted = redact_literal_values(sandbox_result.output, secret_values)
+    if _command_references_sensitive_path(command, context.cwd):
+        output_text = REDACTED_VALUE
+        redacted = True
     truncation = truncate_tail(output_text)
     full_output_path = _retain_full_output(context, artifact_store, output_text, truncation.truncated)
     output = truncation.content or "(no output)"
@@ -134,7 +138,8 @@ def _retain_full_output(
 ) -> str | None:
     if not truncated or artifact_store is None:
         return None
-    path = artifact_store.write_output(context.tool_call_id, output)
+    redacted_output, _report = redact_for_export(output, cwd=context.cwd)
+    path = artifact_store.write_output(context.tool_call_id, str(redacted_output))
     return str(path)
 
 
@@ -153,6 +158,16 @@ def _status_notes(
     if truncation.truncated:
         notes.append(f"Output truncated. Full output: {full_output_path or '(not retained)'}")
     return "\n".join(notes)
+
+
+def _command_references_sensitive_path(command: str, cwd: str) -> bool:
+    import shlex
+
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    return any(is_sensitive_path(token, cwd=cwd) for token in tokens)
 
 
 __all__ = ["create_bash_tool_definition", "execute_bash"]

@@ -10,6 +10,7 @@ from agent_core.types import AgentToolResult
 
 from ._result import resolved_path_details, text_result
 from .definitions import ToolDefinition, ToolExecutionContext, object_schema
+from .safe_file_ops import safe_read_bytes
 from .truncate import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, format_size, truncate_head
 
 
@@ -42,7 +43,7 @@ async def execute_read(
     resolved = Path(context.policy_decision.resolved_paths.get("path", ""))
     logical_path = str(args.get("path") or ".")
     try:
-        data = resolved.read_bytes()
+        resolved, data = safe_read_bytes(context.cwd, logical_path)
     except OSError as exc:
         return text_result(str(exc), details=resolved_path_details(logical_path, resolved), is_error=True)
     try:
