@@ -320,6 +320,11 @@ def test_oauth_callback_thread_reports_auth_save_path(monkeypatch, tmp_path: Pat
         lambda provider, credentials: saved.append((provider, credentials)),
     )
     monkeypatch.setattr(auth_commands, "resolve_auth_path", lambda: auth_path)
+    monkeypatch.setattr(
+        auth_commands,
+        "auth_storage_status",
+        lambda: {"backend": "file", "path": str(auth_path)},
+    )
     auth_commands._PENDING_OPENAI_CODEX = pending  # noqa: SLF001
 
     auth_commands._wait_for_callback(  # noqa: SLF001
@@ -331,6 +336,6 @@ def test_oauth_callback_thread_reports_auth_save_path(monkeypatch, tmp_path: Pat
         ("openai-codex", OAuthCredentials(access="access", refresh="refresh", expires=123))
     ]
     assert notifications == [
-        ("info", f"OpenAI Codex OAuth credential saved: {auth_path}")
+        ("info", f"OpenAI Codex OAuth credential saved: file:{auth_path}")
     ]
     assert auth_commands._LAST_OPENAI_CODEX_CALLBACK_ERROR is None  # noqa: SLF001
