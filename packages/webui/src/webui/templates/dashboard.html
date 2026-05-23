@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=1200" />
+  <title>NeoMAGI WebUI — Database Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app" data-schema="{{ database_schema }}" data-source="{{ database_source }}">
+    <nav class="rail" aria-label="Primary">
+      <div class="rail__mono">N</div>
+      <button class="rail__icon is-active" title="Dashboard" aria-label="Dashboard">▣</button>
+      <button class="rail__icon" title="Tasks" aria-label="Tasks" data-placeholder="Tasks">✓</button>
+      <button class="rail__icon" title="People" aria-label="People" data-placeholder="People">人</button>
+      <button class="rail__icon" title="System" aria-label="System" data-placeholder="System">⌘</button>
+      <form method="post" action="/logout" class="rail__bottom">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="rail__icon" title="Logout" aria-label="Logout">⇥</button>
+      </form>
+    </nav>
+
+    <aside class="middle">
+      <div class="middle__head">
+        <div class="middle__title">Dashboard <small>operator</small></div>
+        <div class="middle__sub">schema {{ database_schema }}</div>
+      </div>
+      <div class="middle__body">
+        <button class="mlist__item" data-placeholder="Search"><span>⌕</span><span>Search</span><span class="kbd">⌘K</span></button>
+        <button class="mlist__item" data-placeholder="Activity"><span>↟</span><span>Activity</span></button>
+        <button class="mlist__item" data-placeholder="Saved views"><span>◆</span><span>Saved views</span></button>
+        <div class="mlist__group">CHANNELS</div>
+        <button class="mlist__channel is-active" data-channel="database"><span class="hash">#</span>database</button>
+        <button class="mlist__channel" data-placeholder="# sessions"><span class="hash">#</span>sessions</button>
+        <button class="mlist__channel" data-placeholder="# taskruns"><span class="hash">#</span>taskruns</button>
+        <button class="mlist__channel" data-placeholder="# tools"><span class="hash">#</span>tools</button>
+        <div class="mlist__group">DIRECT MESSAGES</div>
+        <div class="mlist__empty">empty</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="channel-head">
+        <div>
+          <h1># database</h1>
+          <p>Postgres truth for the {{ database_schema }} business schema.</p>
+        </div>
+        <div class="channel-actions">
+          <label class="select-label" for="range-select">Range</label>
+          <select id="range-select">
+            <option value="24h">24h</option>
+            <option value="7d">7d</option>
+            <option value="30d">30d</option>
+            <option value="all">All</option>
+          </select>
+          <button id="refresh-button" class="icon-button" title="Refresh" aria-label="Refresh">⟳</button>
+          <button class="icon-button" title="Settings" aria-label="Settings" data-placeholder="Settings">⚙</button>
+          <span id="updated-label" class="updated-label">loading</span>
+        </div>
+      </header>
+
+      <div class="tabs" role="tablist">
+        <button class="tab is-active">Overview</button>
+        <button class="tab" data-placeholder="Stream">Stream</button>
+        <button class="tab" data-placeholder="Settings">Settings</button>
+      </div>
+
+      <section id="placeholder-pane" class="placeholder-pane" hidden>
+        <div class="placeholder-glyph">◇</div>
+        <h2 id="placeholder-title">Reserved</h2>
+        <p>Reserved surface.</p>
+      </section>
+
+      <section id="dashboard-pane" class="dashboard-pane">
+        <div id="health-strip" class="health-strip skeleton"></div>
+        <div id="panel-grid" class="grid"></div>
+      </section>
+    </main>
+
+    <footer class="status-rail">
+      <span>NeoMAGI WebUI</span>
+      <span id="status-source">source {{ database_source }}</span>
+      <span id="status-range">range 7d</span>
+    </footer>
+  </div>
+  <div class="paper-grain" aria-hidden="true"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

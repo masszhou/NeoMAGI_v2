@@ -9,6 +9,7 @@ Pi-mono source map (commit 97a38bf6, see ADR-0011):
 """
 
 from .audit_repository import InMemoryAuditRepository, PostgresAuditRepository
+from .audit_read_models import AuditDashboardRow, shape_audit_dashboard_row
 from .audit_sink import PostgresAuditSink
 from .config import (
     ConfigSource,
@@ -29,6 +30,7 @@ from .taskrun_repository import PostgresTaskRunRepository
 
 __all__ = [
     "ConfigSource",
+    "AuditDashboardRow",
     "DatabaseConfig",
     "DatabaseConfigError",
     "DatabaseConnectionError",
@@ -48,5 +50,6 @@ __all__ = [
     "load_database_config",
     "read_env_template",
     "resolve_database_config",
+    "shape_audit_dashboard_row",
     "would_fall_back_to",
 ]

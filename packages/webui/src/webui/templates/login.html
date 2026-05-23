@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NeoMAGI WebUI Login</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-panel" aria-labelledby="login-title">
+      <div class="login-mark">N</div>
+      <h1 id="login-title">NeoMAGI</h1>
+      <p>Operator dashboard</p>
+      {% if error %}
+      <div class="login-error" role="alert">{{ error }}</div>
+      {% endif %}
+      <form method="post" action="/login" class="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <input class="sr-only" type="text" name="username" value="operator" autocomplete="username" tabindex="-1" aria-hidden="true" />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required />
+        <button type="submit">Log in</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

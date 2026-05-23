@@ -1,7 +1,15 @@
 # Run linter checks 做门禁检查，只拦“新增或恶化”的 block 问题
 lint:
-    uv run ruff check packages/magipi/src tests scripts
+    uv run ruff check packages/magipi/src packages/webui/src tests packages/webui/tests scripts
     uv run python -m infra.complexity_guard check
+
+# Run WebUI package tests 运行 WebUI 包测试
+webui-test:
+    uv run --package neomagi-webui pytest packages/webui/tests tests/storage/test_audit_read_models.py
+
+# Start the local WebUI dashboard 启动本地 WebUI dashboard
+webui-dev:
+    uv run --package neomagi-webui magipi-webui serve
 
 # Show current complexity snapshot 看当前全仓快照
 complexity-report:

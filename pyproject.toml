@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "neomagi-pi",
+    "neomagi-webui",
 ]
 
 [dependency-groups]
@@ -20,8 +21,10 @@ package = false
 
 [tool.uv.sources]
 neomagi-pi = { workspace = true }
+neomagi-webui = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "packages/magipi",
+    "packages/webui",
 ]
