@@ -32,6 +32,7 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0021 | Workspace materialized skills and env grants | accepted | 2026-05-10 | `design_docs/decisions/0021-workspace-materialized-skills-and-env-grants.md` |
 | 0022 | Align magipi package directory name | accepted | 2026-05-12 | `design_docs/decisions/0022-align-magipi-package-directory-name.md` |
 | 0023 | Agent core pi-mono protocol parity | accepted | 2026-05-17 | `design_docs/decisions/0023-agent-core-pi-mono-protocol-parity.md` |
+| 0024 | Introduce WebUI operator surface | accepted | 2026-05-23 | `design_docs/decisions/0024-introduce-webui-operator-surface.md` |
 
 ## Amendments
 
