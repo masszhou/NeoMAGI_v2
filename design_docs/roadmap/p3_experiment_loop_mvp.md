@@ -22,6 +22,7 @@ doc_id_assigned_at: 2026-05-28T21:16:23+02:00
   - `design_docs/decisions/0023-agent-core-pi-mono-protocol-parity.md`
   - `design_docs/decisions/0024-introduce-webui-operator-surface.md`
   - `design_docs/decisions/0025-use-git-as-p3-attempt-workspace-lineage.md`
+  - `design_docs/decisions/0026-keep-p3-attempts-inside-one-taskrun-session.md`
 - Related reference:
   - [openai/parameter-golf](https://github.com/openai/parameter-golf)（anchor source, observed 2026-05-28）
   - [What Parameter Golf taught us](https://openai.com/index/what-parameter-golf-taught-us/)（背景解读, observed 2026-05-28）

@@ -34,6 +34,7 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0023 | Agent core pi-mono protocol parity | accepted | 2026-05-17 | `design_docs/decisions/0023-agent-core-pi-mono-protocol-parity.md` |
 | 0024 | Introduce WebUI operator surface | accepted | 2026-05-23 | `design_docs/decisions/0024-introduce-webui-operator-surface.md` |
 | 0025 | Use Git as P3 attempt workspace lineage | accepted | 2026-05-29 | `design_docs/decisions/0025-use-git-as-p3-attempt-workspace-lineage.md` |
+| 0026 | Keep P3 attempts inside one TaskRun session | accepted | 2026-05-29 | `design_docs/decisions/0026-keep-p3-attempts-inside-one-taskrun-session.md` |
 
 ## Amendments
 
