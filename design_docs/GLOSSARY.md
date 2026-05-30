@@ -5,79 +5,105 @@ doc_id_assigned_at: 2026-04-06T21:49:14+02:00
 ---
 # Glossary
 
-> 目的：为 NeoMAGI 提供轻量级、可持续维护的 Domain Ontology。  
-> 口径优先级：`design_docs/decisions/` > `design_docs/`。开发过程文档不入库，不作为长期口径。
-> 范围：只收录跨文档反复出现、且容易混淆的核心术语；不追求枚举所有代码符号。
+This glossary is the lightweight cross-language ontology for NeoMAGI design
+docs. Canonical terms stay in English and should match code, database fields,
+or accepted design vocabulary. The Chinese gloss is a translation aid, not a
+second canonical name.
 
-## 使用原则
+Authority order: accepted ADRs in `design_docs/decisions/` first, then
+architecture/data-model/reference docs. Development-only local notes are not
+long-term sources.
 
-- 术语冲突时，先以已接受 ADR 为准。
-- 同一概念尽量只保留一个主词；历史别名只作为 `Aliases` 保留。
-- 本文件解释“概念是什么”，不替代具体实现文档、计划或测试用例。
+## TOC
 
-## 阅读导航
+- [Agent](#agent)
+- [Session](#session)
+- [TaskRun / Experiment Loop](#taskrun--experiment-loop)
+- [Provider](#provider)
+- [Gateway](#gateway)
+- [Memory](#memory)
 
-- `Identity & Prompt Context`：`SOUL`、`SOUL.md`、`USER.md`、`IDENTITY.md`、`Principal`
+## Agent
 
-## Identity & Prompt Context
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `Agent` | 智能体 | A magipi runtime actor that receives context, calls tools/providers, and produces work under NeoMAGI governance. | ADR-0009, ADR-0023 |
+| `Actor` | 实验执行智能体 | In P3, the main magipi agent that owns the experiment TaskRun, workspace write lock, attempt loop, and Metric Harness invocation. | ADR-0026; `design_docs/architecture/p3_experiment_loop_architecture.md` |
+| `Critic` | 独立评审智能体 | An optional independent magipi agent with its own TaskRun and clean context used to challenge or confirm high-value P3 attempts. | ADR-0026; `design_docs/architecture/p3_experiment_loop_architecture.md` |
+| `Principal` | 用户利益身份轴 | The runtime identity axis for the user interest NeoMAGI represents; it is not a workspace preference file or display name. | ADR-0008; P2 identity/binding design |
+| `SOUL` | 受治理自我对象 | The governed identity/principle object describing who the agent is and what values it follows for the principal. | ADR-0008; growth governance docs |
+| `SOUL.md` | SOUL 工作区投影 | A workspace-visible projection of the active `SOUL`; it is prompt context, not the final truth source. | ADR-0008 |
+| `USER.md` | 用户偏好上下文 | Workspace context describing who the agent serves and how to adapt to that user, such as language, timezone, and communication preferences. | ADR-0008; workspace context design |
+| `IDENTITY.md` | 展示身份名片 | Workspace context for presentation metadata such as name, role, and voice; it is not runtime identity or authorization truth. | ADR-0008; workspace context design |
 
-### SOUL
-- **Category**：Identity / Governance Object
-- **Aliases**：`soul`
-- **Definition**：NeoMAGI 的受治理“自我/原则/价值观”对象。它回答“agent 是谁、按什么原则代表用户”，而不是“具体任务怎么做”。
-- **Relations**：
-  - `projected-as` → [SOUL.md](#soulmd)
-  - `aligned-with` → [Principal](#principal)
-  - `is-a` → [Growth Object](#growth-object)
-  - `evaluated-by` → [GrowthEvalContract](#growthevalcontract)
+## Session
 
-### SOUL.md
-- **Category**：Workspace Projection
-- **Aliases**：`workspace/SOUL.md`
-- **Definition**：当前 active `SOUL` 的运行时投影文件，不是最终真源。项目语义上以 DB 中 active soul version 为准，`SOUL.md` 负责工作区可见性和 prompt 注入。它回答“agent 是谁、按什么原则代表用户、采用什么内在人格/语气”，而不是“用户偏好是什么”或“外部展示名片是什么”。
-- **Notes**：
-  - post-bootstrap 常态下，`SOUL.md` 的变更必须走 `propose -> evaluate -> apply -> rollback` 治理路径；人类保留 veto/rollback 权限，但不直接改常态文本。
-  - 在 workspace context 语义上，`SOUL.md` 的约束优先级低于 [USER.md](#usermd)，高于 [IDENTITY.md](#identitymd)。
-- **Relations**：
-  - `projection-of` → [SOUL](#soul)
-  - `lower-priority-than` → [USER.md](#usermd)
-  - `higher-priority-than` → [IDENTITY.md](#identitymd)
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `AgentSession` | 智能体会话 | The long-lived P1 session runtime that coordinates provider calls, tools, resources, compaction, and durable session state. | ADR-0009, ADR-0016 |
+| `long-lived AgentSession` | 长生命周期会话 | A session intentionally reused across a TaskRun or P3 Experiment Session so context, provider cache affinity, and compaction behavior remain continuous. | ADR-0026 |
+| `compaction` | 上下文压缩 | Session-level context compression that preserves visibility of deterministic summaries but never becomes TaskRun, metric, memory, or trajectory truth. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` |
+| `provider-visible context` | provider 可见上下文 | Structured context injected into the next provider call, including deterministic TaskRun summaries and session context projections. | ADR-0016, ADR-0026 |
+| `cache_affinity_id` | provider 缓存亲和 ID | A stable provider request affinity identifier derived from session semantics when needed for provider-side prompt cache behavior. | ADR-0016 |
 
-### USER.md
-- **Category**：Workspace Context / User Preference
-- **Aliases**：`workspace/USER.md`
-- **Definition**：当前 workspace 中描述“这个 agent 正在为谁服务，以及应该如何个性化适配”的文件。它承载用户侧信息，如语言、时区、沟通风格、技术栈、长期偏好和不希望被违背的回答习惯，回答“服务对象是谁、应该怎样配合这个用户”，而不是“agent 自己是谁”或“agent 对外叫什么名字”。
-- **Notes**：
-  - 当前设计中，`USER.md` 是每 turn 直接注入的 workspace context 文件，不是 DB-backed projection，也不是当前 growth governance 的对象。
-  - 语义上它属于“用户侧约束 / 个性化层”，冲突时优先级高于 [SOUL.md](#soulmd) 和 [IDENTITY.md](#identitymd)。
-  - `USER.md` 不等同于 `principal`、认证后的 canonical user identity、`account_id` 或 `peer_id`；这些身份绑定语义属于 `P2-M3` 的 principal / binding 模型，而不是当前的偏好文件。
-- **Relations**：
-  - `customizes` → [Principal](#principal)
-  - `higher-priority-than` → [SOUL.md](#soulmd)
-  - `higher-priority-than` → [IDENTITY.md](#identitymd)
+## TaskRun / Experiment Loop
 
-### IDENTITY.md
-- **Category**：Workspace Context / Presentation
-- **Aliases**：`workspace/IDENTITY.md`
-- **Definition**：当前 workspace 中描述 agent 外在身份名片的结构化文件，用于展示层和表面呈现，例如 name、role、voice 或类似 metadata。它回答“外界看到你叫什么、你以什么角色出现”，而不是“你的内在原则是什么”或“当前服务的用户偏好是什么”。
-- **Notes**：
-  - `IDENTITY.md` 是展示层语义，不是 `SOUL` 的治理对象，不承载 `propose/evaluate/apply/rollback` 生命周期。
-  - 它也不等同于 `principal`、认证身份、`account_id`、`peer_id` 或渠道绑定证据；那些是运行时 identity / binding 语义，不是展示名片。
-  - 在 workspace context 语义上，`IDENTITY.md` 优先级低于 [USER.md](#usermd) 和 [SOUL.md](#soulmd)。
-- **Relations**：
-  - `presentation-layer-for` → [SOUL](#soul)
-  - `lower-priority-than` → [USER.md](#usermd)
-  - `lower-priority-than` → [SOUL.md](#soulmd)
-  - `not-the-same-as` → [Principal](#principal)
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `TaskRun` | 任务运行实体 | A workspace-scoped, durable, auditable task runtime backed by Postgres and executed through one long-lived `AgentSession`. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` |
+| `TaskRun step` | TaskRun 步骤切片 | A bounded semantic slice inside a TaskRun that records one prompt/continuation, events, tool use, audit evidence, and output. | `design_docs/architecture/p2_taskrun_architecture.md` |
+| `task_events` | TaskRun 事件账本 | Append-only Postgres event ledger for TaskRun lifecycle, audit, white-box runtime observations, and P3 attempt lifecycle events. | ADR-0023; `design_docs/architecture/p2_taskrun_architecture.md` |
+| `task_experiments` | 实验记录表 | Durable child records attached to TaskRun steps for hypotheses, changes, commands, metrics, results, decisions, and diff references. | ADR-0025, ADR-0026; `design_docs/data_models/task_experiments.md` |
+| `Experiment Session` | 实验会话 | One Mini Parameter Golf objective run in P3; by design it maps to exactly one TaskRun and one long-lived AgentSession. | ADR-0026 |
+| `Attempt` | 单次实验尝试 | One P3 change/run/evaluation unit represented by one `task_experiments` record, one `records/<attempt_id>/` bundle, and optionally one scoped Git commit. | ADR-0025, ADR-0026 |
+| `Hypothesis` | 实验假设 | The reason an Attempt is expected to improve `val_bpb` or improve evidence quality. | ADR-0026; P3 architecture |
+| `Config` | 配置/代码变更摘要 | The code/config diff summary and changed knobs for an Attempt, stored in `task_experiments.change` and mirrored in records metadata. | ADR-0025; P3 architecture |
+| `Run` | 训练/评估运行 | The command, seed, timeout, environment, and data references used to execute an Attempt. | ADR-0025; P3 architecture |
+| `Metric` | 指标 | Machine-readable measurements such as `val_bpb`, artifact bytes, train/eval seconds, and stop step. | ADR-0025; P3 architecture |
+| `Artifact` | 实验产物 | The local records bundle and compressed model/code size evidence for an Attempt, referenced by manifest and Postgres metadata. | ADR-0025 |
+| `records/<attempt_id>/` | attempt 产物目录 | A local self-contained P3 artifact bundle containing manifest, README, logs, submission metadata, and code/dependency references. | ADR-0025; P3 architecture |
+| `manifest.json` | 结构化产物清单 | A Metric Harness generated manifest that records attempt identity, lineage, run metadata, metrics, artifact metadata, and verdict. | ADR-0025; P3 architecture |
+| `Verdict` | 机器可检验结论 | The structured Attempt outcome, canonically `accepted`, `rejected`, or `error`, with reasons and optional significance evidence. | ADR-0026; P3 architecture |
+| `Trajectory` | 跨 attempt 轨迹 | The current best, last attempt, and next action state rebuilt from Postgres truth and injected as deterministic TaskRun summary. | ADR-0026 |
+| `current_best` | 当前最佳 attempt | P3 deterministic summary field for the best valid Attempt under metric direction, verdict/significance, and artifact validity rules. | ADR-0026 |
+| `last_attempt` | 最近一次 attempt | P3 deterministic summary field exposing the most recent Attempt identity, hypothesis, and structured verdict status. | ADR-0026 |
+| `next_action` | 下一步动作建议 | P3 deterministic summary field for host-validated next exploration guidance such as `hypothesis_seed`, `branch_to_explore`, and `rationale`. | ADR-0026 |
+| `Metric Harness` | 确定性指标验收器 | A deterministic Python verifier that parses logs/artifacts, checks gates, computes metrics/significance, generates manifest, and writes structured verdict payloads without calling an LLM. | P3 architecture |
+| `Git workspace lineage` | Git 工作区谱系证据 | Git commits and branches used to show workspace diff provenance for P3 attempts, while Postgres remains metric/verdict/trajectory truth. | ADR-0025 |
+| `Branch` | 探索分支 | In P3, a Git workspace lineage branch, not a live magipi session fork and not the semantic parent truth. | ADR-0025, ADR-0026 |
+| `baseline` | 基线 | A reference attempt or metric distribution used for comparison; for P3-M0 the A6000 naive baseline is the fixed Mini Parameter Golf anchor. | ADR-0025; `design_docs/references/reference_mini_parameter_golf_budget.md` |
+| `candidate` | 候选结果 | A single-run or multi-run Attempt result being compared against the baseline under the same budget and artifact gates. | `design_docs/references/reference_mini_parameter_golf_budget.md` |
+| `significance` | 统计显著性 | The structured evidence, such as run count, mean, standard deviation, and p-value, used for final P3 success verdicts when enough runs exist. | ADR-0025; P3 architecture |
 
-### Principal
-- **Category**：Identity / Runtime
-- **Aliases**：user-interest line
-- **Definition**：NeoMAGI 在运行时所代表的“同一个用户利益”身份轴。多 agent 默认共享同一个 `SOUL / principal`，而不是各自拥有独立长期人格。
-- **Notes**：
-  - `principal` 是运行时概念，不是 workspace 文件；它承载“为谁服务、代表什么利益”的运行时语义，不负责展示名片或工作区个性化。
-  - NeoMAGI agent 有能力和主用户之外的其他人进行交互
-  - 如果只有 SOUL，系统仍然回答不了“WebChat 的这个登录用户”和“Telegram 的那个 peer”是不是同一个人。
-  - 记忆检索和写入要先按 principal_id 和 visibility 过滤，否则会把“agent 的人格”误当成“用户身份边界”，这在 shared-space / cross-principal 场景下不安全。
-- **Relations**：
-  - `co-defined-by` → [SOUL](#soul)
+## Provider
+
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `Provider` | 模型服务提供方 | A model backend integration such as OpenAI or Anthropic, accessed through provider adapters rather than leaking provider-specific details into higher layers. | ADR-0017 |
+| `Provider adapter` | provider 适配器 | The boundary that translates NeoMAGI requests, streaming events, usage, and provider-specific cache fields to/from a concrete SDK or API. | ADR-0017 |
+| `Usage` | 用量统计 | NeoMAGI's normalized token/cost contract with `input`, `output`, `cacheRead`, `cacheWrite`, and `totalTokens`. | ADR-0016 |
+| `cacheRead` | 缓存命中输入 token | Normalized count of provider-side prompt cache tokens read from cache rather than newly processed as input. | ADR-0016 |
+| `cacheWrite` | 缓存写入 token | Normalized count of provider-side prompt cache tokens newly written into provider cache. | ADR-0016 |
+| `prompt cache` | provider 侧 prompt 缓存 | A provider-side latency/cost optimization; NeoMAGI does not store prompt cache content as local product truth. | ADR-0016 |
+| `cacheRetention` | 缓存保留策略 | The normalized option `none`, `short`, or `long` controlling whether and how provider-side prompt cache affinity is requested. | ADR-0016 |
+
+## Gateway
+
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `Gateway` | host-facing 运行边界 | The future host-facing interaction/runtime boundary; P2/P3 documents avoid freezing a public Gateway API before real usage proves it. | ADR-0018, ADR-0024 |
+| `WebUI` | 浏览器操作界面 | The operator-facing browser surface in `packages/webui`, initially read-only over existing Postgres runtime state and not a new truth source. | ADR-0024 |
+| `Renderer` | 执行叙事只读渲染器 | In P3, a read-only WebUI view that renders attempt tree, metrics, verdicts, records, and Git diff links from existing truth sources. | ADR-0024; P3 architecture |
+| `Channel` | 外部交互通道 | A future Gateway communication surface such as chat or web transport; P3 anchor explicitly does not use channel, room, or message as experiment narrative units. | ADR-0018, ADR-0024; P3 architecture |
+| `Host-facing API` | host 面 API | A future public API boundary extracted from proven TaskRun behavior, not a second orchestrator or replacement for TaskRun truth. | ADR-0018; `design_docs/architecture/p2_taskrun_architecture.md` |
+
+## Memory
+
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `Postgres truth` | Postgres 真源 | The rule that durable business state such as memory, TaskRun, experiments, metrics, verdicts, and audit evidence lives in Postgres, not in prompt text or workspace files. | ADR-0007, ADR-0008, ADR-0025 |
+| `memory ledger` | 记忆账本 | The Postgres-backed write ledger that is the production truth for machine-written memory. | ADR-0008 |
+| `workspace projection` | 工作区投影 | A human-readable file export or projection that can be rebuilt from truth and must not become a competing write source. | ADR-0008 |
+| `retrieval projection` | 检索投影 | An indexed representation derived from memory ledger writes for search/retrieval, not an independent memory truth. | ADR-0008 |
+| `projection rebuild` | 投影重建 | The process of regenerating workspace or retrieval projections from Postgres truth after drift, failure, or migration. | ADR-0008 |
+| `prompt memory drift` | prompt 记忆漂移 | A failure mode where model narration or compaction text is mistaken for durable truth instead of being validated against structured records. | ADR-0008, ADR-0026 |
