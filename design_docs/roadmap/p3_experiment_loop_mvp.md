@@ -489,3 +489,71 @@ Metric Harness 做确定性验证；按需 spawn read-only critic。
 本文件固定 P3 用户需求口径与 MVP 边界。experiment schema 差量、
 artifact metadata truth、WebUI read model、Metric Harness、critic 调用机制，
 进入第二层 architecture 与第三层 implementation。
+
+---
+
+## Opening Section: P3-M2 Artifact Read Model 泛化边界
+
+P3-M2 当前实现的是 **Mini Parameter Golf 专用 artifact read model**，
+不是通用 artifact registry，也不是任意可量化任务的通用 best reducer。
+
+这一点是有意收窄，不是遗漏。M2 的目标是把 M1 已经产出的 Parameter Golf
+attempt metadata 收口成稳定、可查、可解释的 read model，先跑通 artifact
+一等对象的最小闭环。
+
+当前 P3-M2 read model 明确绑定 Parameter Golf contract：
+
+```text
+metric_name: val_bpb
+metric_direction: minimize
+artifact_cap_bytes: 16,000,000
+baseline_context: M0 A6000 naive baseline mean / sample std / n
+records_ref: records/<attempt_id>
+required_files: README.md, submission.json, manifest.json, train_log.txt, eval_result.json
+required_dirs: submission
+verdict_status: accepted | rejected | error
+harness_fields: status, budget_comparable, required_files_ok
+```
+
+因此，如果未来换成另一个可量化任务，例如：
+
+```text
+metric_name: accuracy
+metric_direction: maximize
+artifact_cap_bytes: 50MB
+records_ref: outputs/<run_id>
+verdict_status: pass | fail
+```
+
+当前 P3-M2 projection 不会自动正确处理。它会显式读取
+`metrics["val_bpb"]`，并按 Parameter Golf 的 minimize / 16MB / required files
+/ harness contract 判定 eligibility 与 current best。
+
+后续如果需要支持多个 anchor 或多个可量化任务，不应继续在 P3-M2 helper 里追加
+ad hoc if/else，也不应优先设计 Python 抽象类层级。P3 的扩展点应优先是可审计、
+可版本化、可由 TaskRun 调用的 skill / anchor contract，例如：
+
+```text
+Artifact Skill / Anchor Contract:
+  anchor_name
+  metric_name
+  metric_direction
+  artifact_cap_bytes
+  baseline_context
+  eligibility_rules
+  records_manifest_checks
+  renderer_projection_shape
+```
+
+Parameter Golf 应只是其中一个 concrete skill / anchor contract：
+
+```text
+parameter-golf-mini:
+  metric_name = val_bpb
+  metric_direction = minimize
+  artifact_cap_bytes = 16,000,000
+```
+
+这个泛化点应在 M3/M4/M5 之后、或引入第二个真实 anchor 时再决策。不要在没有第二个
+真实任务压力前提前抽象，尤其不要先做脱离 runtime / skill 调用语义的通用类框架，
+避免把 M2 的清晰 Parameter Golf truth split 防线稀释成未验证的通用框架。
