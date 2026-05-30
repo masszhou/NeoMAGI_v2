@@ -7,8 +7,8 @@ doc_id_assigned_at: 2026-05-29T09:58:53+02:00
 
 ## 状态
 
-- Status: draft reference（第二层 architecture 之前的配置参考，第一层 roadmap 的补充）
-- Date: 2026-05-28
+- Status: accepted reference（P3-M0 A6000 baseline recorded）
+- Date: 2026-05-30
 - Document: `design_docs/references/reference_mini_parameter_golf_budget.md`
 - Related roadmap: `design_docs/roadmap/p3_experiment_loop_mvp.md`
 - Upstream: [openai/parameter-golf](https://github.com/openai/parameter-golf)
@@ -154,7 +154,7 @@ A6000 = NVIDIA Ampere（同 A100 一代）。
   VAL_LOSS_EVERY=200          # 中途 val 取点画曲线
 单次 attempt：8min 训练 + 1-2min eval ≈ 10min wall-clock
 成本：本机 €0；云 ~€0.08/attempt
-预期 val_bpb：naive baseline 在此预算下约 1.7-2.2（待实测）
+实测 val_bpb：P3-M0 naive baseline mean `1.5997882960`，sample std `0.0023292502`
 关键点：所有真正的 metric 比较只在这一档进行。
 ```
 
@@ -199,7 +199,7 @@ artifact 约束：
 
 种子：
   固定随机种子，每个 attempt 必须可复现
-  统计显著性测试时同种子至少跑 3 次（README 要求 p < 0.01，0.005 nat 改进阈值）
+  统计显著性测试时 candidate 至少跑 3 次（README 要求 p < 0.01，0.005 nat 改进阈值）
 
 记录到 records/<attempt_id>/：
   train_gpt.py             # 实际跑的脚本（含本次 attempt 的 diff）
@@ -249,24 +249,92 @@ Significance session（验证结果显著性）：
 
 ---
 
-## 5. 重建 A6000 naive baseline（必须）
+## 5. A6000 naive baseline（P3-M0 实测）
 
 官方 naive baseline 的 1.2244 是 8xH100 10min 的数。**A6000 上必须重新建立 baseline**，
 否则跨 tier 的 metric 不可比，agent 也没有合理的比较参照。
 
-步骤：
+P3-M0 已在本机 A6000 上完成实测。正式 P3 anchor baseline 为：
 
 ```text
-1. Tier 2 环境准备好（本机 A6000 或 Runpod A6000 pod）
-2. 用 repo 自带 naive baseline 配置（9L 512d sp1024 TiedEmb 4KV）
-3. MAX_WALLCLOCK_SECONDS=480 跑 5 次，每次不同种子
-4. 记录 5 次 val_bpb 的均值与方差
-5. 这个均值就是 P3 anchor 的 "A6000 naive baseline"
-6. 显著性阈值：std × t-statistic（同 README 的 p<0.01 口径）
+baseline id: p3_m0_a6000_naive_sp1024_train1_wall480
+upstream commit: f5c079314c4877fbb0af378c0abade5a8ca33d3a
+hardware: local NVIDIA RTX A6000 48GB
+Python: uv standalone CPython 3.12.13
+PyTorch: 2.7.1+cu126
+CUDA runtime in torch: 12.6
+nvidia-smi: 610.43.02, CUDA UMD 13.3
+
+budget:
+  MAX_WALLCLOCK_SECONDS=480
+  train-shards=1
+  VOCAB_SIZE=1024
+  DATA_PATH=./data/datasets/fineweb10B_sp1024/
+  TOKENIZER_PATH=./data/tokenizers/fineweb_1024_bpe.model
+  validation=full cached FineWeb first-50k-doc validation shard
+  artifact cap=16,000,000 decimal bytes
+
+seed set: 42, 43, 44, 45, 46
+n: 5
+metric source: final_int8_zlib_roundtrip_exact val_bpb
+mean final val_bpb: 1.5997882960
+sample std: 0.0023292502
+population std: 0.0020833447
 ```
 
-**这一步是 M0 的 hard prerequisite**。在 baseline 数字没拿到之前，
-不能开始 M1。因为没有 baseline 就没有验收标准。
+Per-seed results:
+
+| Seed | stop step | train ms | final val_loss | final val_bpb | int8+zlib artifact bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 42 | 367 | 480405 | 2.69479085 | 1.59600693 | 9143754 |
+| 43 | 366 | 480083 | 2.70187337 | 1.60020160 | 9132803 |
+| 44 | 366 | 480242 | 2.70165257 | 1.60007083 | 9126358 |
+| 45 | 366 | 480542 | 2.70562694 | 1.60242468 | 9129351 |
+| 46 | 366 | 480686 | 2.70193388 | 1.60023744 | 9134443 |
+
+Raw logs are mirrored in this repo under `design_docs/artifacts/p3/`:
+
+```text
+design_docs/artifacts/p3/a6000_naive_seed42_torch27.log
+design_docs/artifacts/p3/a6000_naive_seed43_torch27.log
+design_docs/artifacts/p3/a6000_naive_seed44_torch27.log
+design_docs/artifacts/p3/a6000_naive_seed45_torch27.log
+design_docs/artifacts/p3/a6000_naive_seed46_torch27.log
+```
+
+Detailed commands, log hashes, failed environment attempts, and data checks are recorded in
+[`p3_m0_anchor_baseline_findings.md`](../artifacts/p3/p3_m0_anchor_baseline_findings.md).
+The seed42 environment recovery note is
+[`p3_m0_seed42_environment_recovery.md`](../artifacts/p3/p3_m0_seed42_environment_recovery.md).
+
+### 5.1 Success gate frozen for P3
+
+Single-run candidate evidence:
+
+```text
+candidate.val_bpb is recorded from final_int8_zlib_roundtrip_exact under the same budget
+candidate.artifact_size_bytes <= 16,000,000
+records/<attempt_id>/ contains manifest, submission metadata, README, train log, and runnable code/dependency refs
+candidate records seed, command, train/eval seconds, commit, parent attempt, and data refs
+single run cannot produce final p<0.01 success verdict
+```
+
+Final success verdict:
+
+```text
+candidate significance session n >= 3 under the same budget
+baseline side uses n=5, mean=1.5997882960, sample_std=0.0023292502
+candidate side records n, mean, sample_std, seed set, log refs, and artifact refs
+candidate must improve by at least 0.005 score units versus baseline mean
+Welch two-sample t-test p < 0.01 is the default formula for M5 final evaluation
+all candidate artifacts satisfy the 16,000,000-byte cap and reproducibility gate
+```
+
+M1 single-attempt loop only validates the closed-loop evidence path. It does not need to beat the
+baseline. Any tier, wallclock, train shard count, validation path, tokenizer, metric-source, or eval
+sampling change invalidates comparability and requires rebuilding the baseline.
+
+MLX smoke remains plumbing-only and must never be mixed into accept/reject decisions.
 
 ---
 
@@ -298,8 +366,9 @@ done
 grep "val_bpb" log_*.txt
 ```
 
-**预期产出**：5 个 val_bpb 数字 + 1 个均值 + 1 个 std。
-这一步完成之后才能进 M0 验收。
+P3-M0 实测时 `torch==2.12.0` 在本机因 `torch.compile` backward shape 问题失败；
+可复现 baseline 环境固定为 `torch==2.7.1`。如果未来更换 PyTorch/CUDA 版本，应先跑
+5-seed baseline replay，再把新数字作为新的 baseline ref。
 
 Mac Mini M4 Pro 的 smoke 等价命令：
 
@@ -340,10 +409,10 @@ python3 train_gpt_mlx.py
 ## 8. 开放问题
 
 ```text
-1. A6000 上 naive baseline 实测 val_bpb 究竟落在哪？目前估算 1.7-2.2，
-   实测可能偏离这个区间。
-2. eval 用全 50k docs 还是 sliding window 子采样？前者更标准，后者更快。
-   M0 决策。
+1. A6000 上 naive baseline 实测 val_bpb 究竟落在哪？
+   已由 P3-M0 固定为 mean `1.5997882960`，sample std `0.0023292502`。
+2. eval 用全 50k docs 还是 sliding window 子采样？
+   P3-M0 baseline 使用完整 cached FineWeb first-50k-doc validation shard；不使用 sliding window 子采样。
 3. Runpod pod 的持久化存储成本（数据 + 8B token 全量缓存约 30GB）
    是否值得，还是每次 pod 重启重下？
 4. agent 在 attempt 之间是否需要本地保留 records/？还是只把 manifest +

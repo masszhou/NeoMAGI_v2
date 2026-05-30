@@ -1,0 +1,54 @@
+logs/a6000_naive_seed44_torch27.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:1
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:17059912
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.05 head_lr:0.0 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:20000 warmup_steps:20 max_wallclock_seconds:480.000
+seed:44
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/20000 val_loss:6.9375 val_bpb:4.1088 train_time:0ms step_avg:0.02ms
+step:1/20000 train_loss:6.9375 train_time:1268ms step_avg:1268.48ms
+step:2/20000 train_loss:16.7980 train_time:2574ms step_avg:1286.78ms
+step:3/20000 train_loss:13.2472 train_time:3879ms step_avg:1293.09ms
+step:4/20000 train_loss:9.8104 train_time:5185ms step_avg:1296.37ms
+step:5/20000 train_loss:7.4684 train_time:6493ms step_avg:1298.65ms
+step:6/20000 train_loss:6.4151 train_time:7801ms step_avg:1300.21ms
+step:7/20000 train_loss:5.9287 train_time:9109ms step_avg:1301.35ms
+step:8/20000 train_loss:5.8660 train_time:10418ms step_avg:1302.22ms
+step:9/20000 train_loss:5.8286 train_time:11725ms step_avg:1302.79ms
+step:10/20000 train_loss:5.8107 train_time:13032ms step_avg:1303.18ms
+step:200/20000 train_loss:2.8803 train_time:262622ms step_avg:1313.11ms
+step:200/20000 val_loss:2.8979 val_bpb:1.7163 train_time:262622ms step_avg:1313.11ms
+step:366/20000 val_loss:2.6606 val_bpb:1.5757 train_time:480242ms step_avg:1312.14ms
+stopping_early: wallclock_cap train_time:480242ms step:366/20000
+peak memory allocated: 10317 MiB reserved: 10382 MiB
+Serialized model: 67224983 bytes
+Code size: 47686 bytes
+Total submission size: 67272669 bytes
+Serialized model int8+zlib: 9078672 bytes (payload:17178912 raw_torch:17224025 payload_ratio:3.91x)
+Total submission size int8+zlib: 9126358 bytes
+final_int8_zlib_roundtrip val_loss:2.7017 val_bpb:1.6001 eval_time:47503ms
+final_int8_zlib_roundtrip_exact val_loss:2.70165257 val_bpb:1.60007083

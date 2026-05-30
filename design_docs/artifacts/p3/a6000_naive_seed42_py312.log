@@ -1,0 +1,159 @@
+logs/a6000_naive_seed42_py312.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:1
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:17059912
+world_size:1 grad_accum_steps:8
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.05 head_lr:0.0 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:20000 warmup_steps:20 max_wallclock_seconds:480.000
+seed:42
+/tmp/tmp9esoh3kr/cuda_utils.c:9:10: fatal error: Python.h: No such file or directory
+    9 | #include <Python.h>
+      |          ^~~~~~~~~~
+compilation terminated.
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/train_gpt.py", line 1126, in <module>
+[rank0]:     main()
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/train_gpt.py", line 948, in main
+[rank0]:     warmup_loss = model(x, y)
+[rank0]:                   ^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/nn/parallel/distributed.py", line 1832, in forward
+[rank0]:     else self._run_ddp_forward(*inputs, **kwargs)
+[rank0]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/nn/parallel/distributed.py", line 1657, in _run_ddp_forward
+[rank0]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 473, in __call__
+[rank0]:     return super().__call__(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1062, in compile_wrapper
+[rank0]:     raise e.remove_dynamo_frames() from None  # see TORCHDYNAMO_VERBOSE=1
+[rank0]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1069, in _compile_fx_inner
+[rank0]:     raise InductorError(e, currentframe()).with_traceback(
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1049, in _compile_fx_inner
+[rank0]:     mb_compiled_graph = fx_codegen_and_compile(
+[rank0]:                         ^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1836, in fx_codegen_and_compile
+[rank0]:     return scheme.codegen_and_compile(gm, example_inputs, inputs_to_check, graph_kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/compile_fx.py", line 1597, in codegen_and_compile
+[rank0]:     compiled_module = graph.compile_to_module()
+[rank0]:                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/graph.py", line 2613, in compile_to_module
+[rank0]:     return self._compile_to_module()
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/graph.py", line 2619, in _compile_to_module
+[rank0]:     self.codegen_with_cpp_wrapper() if self.cpp_wrapper else self.codegen()
+[rank0]:                                                              ^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/graph.py", line 2555, in codegen
+[rank0]:     self.scheduler.codegen()
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/scheduler.py", line 7350, in codegen
+[rank0]:     self._codegen_partitions()
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/scheduler.py", line 7490, in _codegen_partitions
+[rank0]:     self._codegen(partition)
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/scheduler.py", line 7641, in _codegen
+[rank0]:     self.get_backend(device).codegen_node(node)
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/codegen/cuda_combined_scheduling.py", line 152, in codegen_node
+[rank0]:     return self._triton_scheduling.codegen_node(node)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/codegen/simd.py", line 1864, in codegen_node
+[rank0]:     return self._codegen_nodes(nodes, coalesce_analysis)  # type: ignore[arg-type]
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/codegen/simd.py", line 1837, in _codegen_nodes
+[rank0]:     return self.codegen_node_schedule(
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/codegen/simd.py", line 1961, in codegen_node_schedule
+[rank0]:     src_code = kernel.codegen_kernel()
+[rank0]:                ^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/codegen/triton.py", line 5760, in codegen_kernel
+[rank0]:     **self.inductor_meta_common(),
+[rank0]:       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/_inductor/codegen/triton.py", line 5568, in inductor_meta_common
+[rank0]:     "backend_hash": torch.utils._triton.triton_hash_with_backend(),
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/utils/_triton.py", line 219, in triton_hash_with_backend
+[rank0]:     backend = triton_backend()
+[rank0]:               ^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/utils/_triton.py", line 193, in triton_backend
+[rank0]:     target = driver.active.get_current_target()
+[rank0]:              ^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/runtime/driver.py", line 39, in active
+[rank0]:     self._active = self.default
+[rank0]:                    ^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/runtime/driver.py", line 33, in default
+[rank0]:     self._default = _create_driver()
+[rank0]:                     ^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/runtime/driver.py", line 21, in _create_driver
+[rank0]:     return active_drivers[0]()
+[rank0]:            ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/backends/nvidia/driver.py", line 336, in __init__
+[rank0]:     self.utils = CudaUtils()  # TODO: make static
+[rank0]:                  ^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/backends/nvidia/driver.py", line 66, in __init__
+[rank0]:     mod = compile_module_from_src(
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/runtime/build.py", line 93, in compile_module_from_src
+[rank0]:     so = _build(name, src_path, tmpdir, library_dirs or [], include_dirs or [], libraries or [], ccflags or [])
+[rank0]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/runtime/build.py", line 48, in _build
+[rank0]:     subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+[rank0]:   File "/usr/lib/python3.12/subprocess.py", line 413, in check_call
+[rank0]:     raise CalledProcessError(retcode, cmd)
+[rank0]: torch._inductor.exc.InductorError: CalledProcessError: Command '['/usr/bin/gcc', '/tmp/tmp9esoh3kr/cuda_utils.c', '-O3', '-shared', '-fPIC', '-Wno-psabi', '-o', '/tmp/tmp9esoh3kr/cuda_utils.cpython-312-x86_64-linux-gnu.so', '-l:libcuda.so.1', '-L/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/backends/nvidia/lib', '-L/lib/x86_64-linux-gnu', '-I/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/triton/backends/nvidia/include', '-I/tmp/tmp9esoh3kr', '-I/usr/include/python3.12']' returned non-zero exit status 1.
+
+[rank0]: While executing %submod_0 : [num_users=9] = call_module[target=submod_0](args = (%l_input_ids_, %l_self_modules_tok_emb_parameters_weight_, %l_self_modules_blocks_modules_0_parameters_resid_mix_, %l_self_modules_blocks_modules_0_modules_attn_modules_c_q_parameters_weight_, %l_self_modules_blocks_modules_0_modules_attn_modules_c_k_parameters_weight_, %l_self_modules_blocks_modules_0_modules_attn_modules_c_v_parameters_weight_, %l_self_modules_blocks_modules_0_modules_attn_modules_rotary_buffers_inv_freq_, %l_self_modules_blocks_modules_0_modules_attn_parameters_q_gain_, %l_self_modules_blocks_modules_0_modules_attn_modules_proj_parameters_weight_, %l_self_modules_blocks_modules_0_parameters_attn_scale_, %l_self_modules_blocks_modules_0_parameters_mlp_scale_, %l_self_modules_blocks_modules_0_modules_mlp_modules_fc_parameters_weight_, %l_self_modules_blocks_modules_0_modules_mlp_modules_proj_parameters_weight_, %l_self_modules_blocks_modules_1_parameters_resid_mix_, %l_self_modules_blocks_modules_1_modules_attn_modules_c_q_parameters_weight_, %l_self_modules_blocks_modules_1_modules_attn_modules_c_k_parameters_weight_, %l_self_modules_blocks_modules_1_modules_attn_modules_c_v_parameters_weight_, %l_self_modules_blocks_modules_1_modules_attn_modules_rotary_buffers_inv_freq_, %l_self_modules_blocks_modules_1_modules_attn_parameters_q_gain_, %l_self_modules_blocks_modules_1_modules_attn_modules_proj_parameters_weight_, %l_self_modules_blocks_modules_1_parameters_attn_scale_, %l_self_modules_blocks_modules_1_parameters_mlp_scale_, %l_self_modules_blocks_modules_1_modules_mlp_modules_fc_parameters_weight_), kwargs = {})
+[rank0]: Original traceback:
+[rank0]: None
+[rank0]: Use tlparse to see full graph. (https://github.com/pytorch/tlparse?tab=readme-ov-file#tlparse-parse-structured-pt2-logs)
+
+[rank0]: Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
+
+[rank0]:[W530 15:04:19.249561017 ProcessGroupNCCL.cpp:1647] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E0530 15:04:20.866000 95749 torch/distributed/elastic/multiprocessing/api.py:988] failed (exitcode: 1) local_rank: 0 (pid: 95848) of binary: /tmp/neomagi_p3_m0/parameter-golf/.venv312/bin/python
+Traceback (most recent call last):
+  File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 367, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/distributed/run.py", line 1016, in main
+    run(args)
+  File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/distributed/run.py", line 1007, in run
+    elastic_launch(
+  File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 191, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/neomagi_p3_m0/parameter-golf/.venv312/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 371, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError:
+============================================================
+train_gpt.py FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-05-30_15:04:20
+  host      : deva6000
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 95848)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
