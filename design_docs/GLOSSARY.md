@@ -17,6 +17,7 @@ long-term sources.
 ## TOC
 
 - [Agent](#agent)
+- [Workspace](#workspace)
 - [Session](#session)
 - [TaskRun / Experiment Loop](#taskrun--experiment-loop)
 - [Provider](#provider)
@@ -35,6 +36,55 @@ long-term sources.
 | `SOUL.md` | SOUL 工作区投影 | A workspace-visible projection of the active `SOUL`; it is prompt context, not the final truth source. | ADR-0008 |
 | `USER.md` | 用户偏好上下文 | Workspace context describing who the agent serves and how to adapt to that user, such as language, timezone, and communication preferences. | ADR-0008; workspace context design |
 | `IDENTITY.md` | 展示身份名片 | Workspace context for presentation metadata such as name, role, and voice; it is not runtime identity or authorization truth. | ADR-0008; workspace context design |
+
+## Workspace
+
+| Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
+| --- | --- | --- | --- |
+| `workspace` | 工作区 | The durable on-disk working-tree directory a magipi run operates in — git-tracked as a whole, holding project code plus the `.magipi/` control dir, `records/<attempt_id>/` bundles, and human-readable projections; it is the working surface, not a truth source. | ADR-0020, ADR-0022; `design_docs/architecture/p2_taskrun_architecture.md` |
+| `workspace root` (`workspace_root`) | 工作区根路径 | The creation-time workspace path bound to a TaskRun in `task_runs.workspace_root`; relative resource paths resolve against it, and P2 does not auto-infer relocation if the workspace moves. | ADR-0020, ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` |
+| `.magipi/` | workspace 控制目录 | The fixed project-level magipi control directory *inside* a workspace, holding `settings.json`, `skills/`, `extensions/`, `prompts/`, `themes/`, `secrets/`, plus projection exports under `taskruns/` and `session/`; it is a subdirectory of the workspace, not the workspace itself. | ADR-0020, ADR-0022 |
+| `workspace write lock` | 工作区写锁 | The single-writer rule that at most one TaskRun may be `running` per workspace; in P3 the Actor holds it, and a Critic must read an independent workspace snapshot / material bundle instead of writing concurrently. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md`, `design_docs/architecture/p3_experiment_loop_architecture.md` |
+| `workspace-materialized skill` | 工作区物化 skill | A skill copied into the current workspace's `.magipi/skills/<skill-name>/`; only such skills are runtime/provider-visible, while `neomagi/skill_pool/` candidates and out-of-workspace skill sources are not active resources until materialized. | ADR-0020, ADR-0021 |
+| `workspace projection` | 工作区投影 | A human-readable workspace file rebuildable from Postgres truth that must not become a competing write source; see the same term under [Memory](#memory) for the memory-specific rule. | ADR-0008; `design_docs/architecture/p2_taskrun_architecture.md` |
+
+> Workspace is the head term for several compounds defined in other sections: `SOUL.md`/`USER.md`/`IDENTITY.md` (workspace context/projection files under [Agent](#agent)), `workspace projection` / `projection rebuild` (under [Memory](#memory)), and `Git workspace lineage` / `Branch` (under [TaskRun / Experiment Loop](#taskrun--experiment-loop)). All share one invariant: **workspace files are projection / context input, never durable truth** — truth lives in Postgres (see `Postgres truth`).
+
+### Workspace × Agent × Session
+
+`workspace`, `Agent`, and `AgentSession` are three orthogonal axes tied together by one `TaskRun`. Each axis answers a different question:
+
+| Axis | Term | Question | Nature |
+| --- | --- | --- | --- |
+| WHERE | `workspace` | On which on-disk working tree are reads/writes done? | Spatial / storage surface |
+| WHO | `Agent` | Who reads context, calls tools/providers, and produces work? | Actor (Actor / Critic) |
+| HOW (continuity) | `AgentSession` | How is context, cache affinity, and compaction kept continuous across provider calls? | Conversational runtime |
+
+Binding in one sentence: **an `Agent` (the P3 Actor) runs through one long-lived `AgentSession`, and both are bound by one `TaskRun` to one `workspace`.**
+
+```mermaid
+graph LR
+  Agent["Agent (Actor)"]
+  TaskRun["TaskRun"]
+  Session["AgentSession"]
+  Workspace["workspace (working tree)"]
+
+  Agent -->|owns 拥有 + write lock 写锁| TaskRun
+  Agent -->|drives 驱动| Session
+  TaskRun -->|"bound via workspace_root 绑定"| Workspace
+  TaskRun -.->|"1 TaskRun = 1 long-lived"| Session
+  Workspace -.->|"hosts N TaskRuns, only 1 running"| TaskRun
+```
+
+Cardinality (the part most easily confused):
+
+- **1 TaskRun = 1 long-lived AgentSession** (`p2_taskrun_architecture.md` D2). While the TaskRun is active its session is *task-owned*; `/new`, `/fork`, `/clone` open normal user sessions and do **not** rebind the TaskRun's session.
+- **1 TaskRun ↔ 1 `workspace_root`** (bound at creation; not auto-followed on move).
+- **1 workspace hosts N TaskRuns over time, but only one may be `running`** — this is the `workspace write lock` (`p2_taskrun_architecture.md` D7).
+- **The Agent (Actor) owns the TaskRun + the workspace write lock** (`p3_experiment_loop_architecture.md` §5.1).
+- **P3 `Critic` replicates all three axes independently**: a separate `Agent`, a separate `AgentSession`, a separate `TaskRun`, reading an independent workspace snapshot / material bundle — sharing neither session nor workspace write lock (`p3_experiment_loop_architecture.md` §5.3).
+
+Shared invariant across the three axes: workspace files, session compaction/narration, and agent narration are all `provider-visible context`, **never durable truth** — truth lives in Postgres (see `Postgres truth`). This is why workspace, session, and agent state can be discarded and rebuilt, while TaskRun / metric / verdict cannot.
 
 ## Session
 
