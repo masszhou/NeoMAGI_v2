@@ -29,7 +29,7 @@ def _stub_database(monkeypatch) -> dict[str, object]:
     monkeypatch.setattr(session_db, "load_database_config", fake_load_database_config)
     monkeypatch.setattr(session_db, "connect_database", lambda config: _FakeConnection())
     monkeypatch.setattr(session_db, "ensure_schema", lambda conn, config: None)
-    monkeypatch.setattr(session_db, "_print_status", lambda conn, schema: None)
+    monkeypatch.setattr(session_db, "_print_status", lambda conn, schema, schema_name: None)
     return seen
 
 

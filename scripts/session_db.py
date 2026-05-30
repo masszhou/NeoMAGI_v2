@@ -19,7 +19,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from storage import connect_database, ensure_schema, load_database_config  # noqa: E402
-from storage.schema import _quote_identifier  # noqa: E402
+from storage.schema import _quote_identifier, schema_sql  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -32,10 +32,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     with connect_database(config) as conn:
         if args.command == "ensure":
             ensure_schema(conn, config)
-            _print_status(conn, schema)
+            _print_status(conn, schema, config.schema)
             return 0
         if args.command == "status":
-            _print_status(conn, schema)
+            _print_status(conn, schema, config.schema)
             return 0
         if args.command == "reset":
             if not args.yes:
@@ -44,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
             conn.commit()
             ensure_schema(conn, config)
-            _print_status(conn, schema)
+            _print_status(conn, schema, config.schema)
             return 0
 
     raise AssertionError(f"unhandled command: {args.command}")
@@ -71,7 +71,8 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_status(conn: Any, schema: str) -> None:
+def _print_status(conn: Any, schema: Any, schema_name: str) -> None:
+    schema_identifier = schema_sql(schema)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -82,23 +83,23 @@ def _print_status(conn: Any, schema: str) -> None:
                   AND table_name = 'agent_schema_meta'
             )
             """,
-            (schema.strip('"'),),
+            (schema_name,),
         )
         exists = bool(cur.fetchone()[0])
         if not exists:
-            print(f"{schema}.agent_schema_meta: missing")
+            print(f"{schema_identifier}.agent_schema_meta: missing")
             return
 
         cur.execute(
             f"""
             SELECT key, value, updated_at
-            FROM {schema}.agent_schema_meta
+            FROM {schema_identifier}.agent_schema_meta
             ORDER BY key
             """
         )
         rows = cur.fetchall()
 
-    print(f"{schema}.agent_schema_meta:")
+    print(f"{schema_identifier}.agent_schema_meta:")
     for key, value, updated_at in rows:
         print(f"  {key}={value} updated_at={updated_at}")
 
