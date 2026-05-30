@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,37 +118,76 @@ def _metric(
     duration_ms: int | None,
     is_error: bool,
 ) -> str:
-    parts: list[str] = []
-    if tool == "bash":
-        if duration_ms is not None:
-            parts.append(f"{duration_ms}ms")
-        output_lines = _output_lines(metadata)
-        if output_lines is not None:
-            parts.append(f"{output_lines} lines")
-    elif tool == "read":
-        parts.extend(_limit_offset(args))
-    elif tool == "write":
-        bytes_value = _int(args.get("contentBytes"))
-        if bytes_value is not None:
-            parts.append(f"{bytes_value} bytes")
-    elif tool == "edit":
-        edits = args.get("edits")
-        edits_count = len(edits) if isinstance(edits, list) else _int(args.get("editsCount"))
-        if edits_count is not None:
-            parts.append(f"{edits_count} edit(s)")
-        new_bytes = _int(args.get("newTextBytes"))
-        old_bytes = _int(args.get("oldTextBytes"))
-        if new_bytes is not None or old_bytes is not None:
-            parts.append(f"+{new_bytes or 0}/-{old_bytes or 0} bytes")
-    elif tool == "log_experiment":
-        decision = _string(args.get("decision")) or _string(args.get("status"))
-        if decision:
-            parts.append(f"decision={decision}")
-    elif tool == "run_experiment" and duration_ms is not None:
-        parts.append(f"{duration_ms}ms")
+    builder = _METRIC_BUILDERS.get(tool)
+    parts = builder(args, metadata, duration_ms) if builder else []
     if is_error:
         parts.append("ERR")
     return " · ".join(parts) if parts else "-"
+
+
+def _metric_bash(
+    args: Mapping[str, Any], metadata: Mapping[str, Any], duration_ms: int | None
+) -> list[str]:
+    parts: list[str] = []
+    if duration_ms is not None:
+        parts.append(f"{duration_ms}ms")
+    output_lines = _output_lines(metadata)
+    if output_lines is not None:
+        parts.append(f"{output_lines} lines")
+    return parts
+
+
+def _metric_read(
+    args: Mapping[str, Any], metadata: Mapping[str, Any], duration_ms: int | None
+) -> list[str]:
+    return _limit_offset(args)
+
+
+def _metric_write(
+    args: Mapping[str, Any], metadata: Mapping[str, Any], duration_ms: int | None
+) -> list[str]:
+    bytes_value = _int(args.get("contentBytes"))
+    return [f"{bytes_value} bytes"] if bytes_value is not None else []
+
+
+def _metric_edit(
+    args: Mapping[str, Any], metadata: Mapping[str, Any], duration_ms: int | None
+) -> list[str]:
+    parts: list[str] = []
+    edits = args.get("edits")
+    edits_count = len(edits) if isinstance(edits, list) else _int(args.get("editsCount"))
+    if edits_count is not None:
+        parts.append(f"{edits_count} edit(s)")
+    new_bytes = _int(args.get("newTextBytes"))
+    old_bytes = _int(args.get("oldTextBytes"))
+    if new_bytes is not None or old_bytes is not None:
+        parts.append(f"+{new_bytes or 0}/-{old_bytes or 0} bytes")
+    return parts
+
+
+def _metric_log_experiment(
+    args: Mapping[str, Any], metadata: Mapping[str, Any], duration_ms: int | None
+) -> list[str]:
+    decision = _string(args.get("decision")) or _string(args.get("status"))
+    return [f"decision={decision}"] if decision else []
+
+
+def _metric_run_experiment(
+    args: Mapping[str, Any], metadata: Mapping[str, Any], duration_ms: int | None
+) -> list[str]:
+    return [f"{duration_ms}ms"] if duration_ms is not None else []
+
+
+_METRIC_BUILDERS: Mapping[
+    str, Callable[[Mapping[str, Any], Mapping[str, Any], int | None], list[str]]
+] = {
+    "bash": _metric_bash,
+    "read": _metric_read,
+    "write": _metric_write,
+    "edit": _metric_edit,
+    "log_experiment": _metric_log_experiment,
+    "run_experiment": _metric_run_experiment,
+}
 
 
 def _effect(decision: Mapping[str, Any] | None) -> str:
