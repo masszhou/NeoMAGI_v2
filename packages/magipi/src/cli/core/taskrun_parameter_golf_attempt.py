@@ -18,39 +18,28 @@ from cli.core.taskrun_experiments import (
     command_record,
     run_host_command,
 )
+from cli.core.parameter_golf_contract import (
+    ANCHOR_NAME,
+    BASELINE_MEAN_VAL_BPB,
+    BASELINE_N,
+    BASELINE_SAMPLE_STD_VAL_BPB,
+    DEFAULT_REFERENCE_BUDGET,
+    DEFAULT_TIMEOUT_SECONDS,
+    METRIC_SOURCE,
+    REQUIRED_BUNDLE_DIRS,
+    REQUIRED_BUNDLE_FILES,
+    SUBMISSION_ARTIFACT_CAP_BYTES,
+)
 from cli.core.taskrun_service import TaskRunResult, TaskRunService
 from cli.core.taskrun_step import TaskRunRuntimeOptions, TaskRunStepOutcome
 from policy.redaction import redacted_command_preview
 from policy.shell_policy import MAX_TIMEOUT_SECONDS
 from storage.ids import new_db_uuid
-from storage.taskrun_repository import TaskExperimentRecord, TaskRunRecord, TaskStepRecord
-
-ANCHOR_NAME = "parameter-golf-mini"
-METRIC_SOURCE = "final_int8_zlib_roundtrip_exact"
-SUBMISSION_ARTIFACT_CAP_BYTES = 16_000_000
-BASELINE_MEAN_VAL_BPB = 1.5997882960
-BASELINE_SAMPLE_STD_VAL_BPB = 0.0023292502
-BASELINE_N = 5
-DEFAULT_TIMEOUT_SECONDS = 600
-
-DEFAULT_REFERENCE_BUDGET: dict[str, object] = {
-    "tier": "tier2_a6000",
-    "max_wallclock_seconds": 480,
-    "train_shards": 1,
-    "vocab_size": 1024,
-    "tokenizer_path": "./data/tokenizers/fineweb_1024_bpe.model",
-    "data_path": "./data/datasets/fineweb10B_sp1024/",
-    "metric_source": METRIC_SOURCE,
-}
-
-REQUIRED_BUNDLE_FILES = [
-    "README.md",
-    "submission.json",
-    "manifest.json",
-    "train_log.txt",
-    "eval_result.json",
-]
-REQUIRED_BUNDLE_DIRS = ["submission"]
+from storage.taskrun_repository import (
+    TaskExperimentRecord,
+    TaskRunRecord,
+    TaskStepRecord,
+)
 
 _FINAL_EXACT_RE = re.compile(
     r"\bfinal_int8_zlib_roundtrip_exact\b.*?\bval_bpb:(?P<value>\S+)"
@@ -124,7 +113,9 @@ def validate_attempt_options(options: ParameterGolfAttemptOptions) -> None:
     if options.anchor != ANCHOR_NAME:
         raise ValueError(f"--anchor must be {ANCHOR_NAME}")
     if not options.workspace.exists() or not options.workspace.is_dir():
-        raise ValueError(f"--workspace must be an existing directory: {options.workspace}")
+        raise ValueError(
+            f"--workspace must be an existing directory: {options.workspace}"
+        )
     if not options.hypothesis_file.exists() or not options.hypothesis_file.is_file():
         raise ValueError(
             f"--hypothesis-file must be an existing file: {options.hypothesis_file}"
@@ -137,7 +128,9 @@ def validate_attempt_options(options: ParameterGolfAttemptOptions) -> None:
         raise ValueError(f"--timeout-seconds must be <= {MAX_TIMEOUT_SECONDS}")
     if not options.submission_files:
         raise ValueError("--submission-file is required at least once")
-    source_paths = _resolve_submission_files(options.workspace, options.submission_files)
+    source_paths = _resolve_submission_files(
+        options.workspace, options.submission_files
+    )
     names = {path.name for path in source_paths}
     if "train_gpt.py" not in names:
         raise ValueError("--submission-file must include train_gpt.py")
@@ -145,16 +138,23 @@ def validate_attempt_options(options: ParameterGolfAttemptOptions) -> None:
         raise ValueError("--submission-file basenames must be unique")
     train_gpt = next(path for path in source_paths if path.name == "train_gpt.py")
     if not train_gpt.exists() or not train_gpt.is_file():
-        raise ValueError(f"--submission-file train_gpt.py must exist before run: {train_gpt}")
+        raise ValueError(
+            f"--submission-file train_gpt.py must exist before run: {train_gpt}"
+        )
 
 
-def _resolve_submission_files(workspace: Path, paths: Sequence[Path]) -> tuple[Path, ...]:
+def _resolve_submission_files(
+    workspace: Path, paths: Sequence[Path]
+) -> tuple[Path, ...]:
     workspace = workspace.resolve()
     return tuple(path if path.is_absolute() else workspace / path for path in paths)
 
 
 def parse_final_exact_val_bpb(log_text: str) -> tuple[float, str]:
-    matches = [(match.group("value"), match.group(0)) for match in _FINAL_EXACT_RE.finditer(log_text)]
+    matches = [
+        (match.group("value"), match.group(0))
+        for match in _FINAL_EXACT_RE.finditer(log_text)
+    ]
     if not matches:
         raise ParameterGolfHarnessError(
             "missing final exact val_bpb line",
@@ -189,7 +189,9 @@ def submission_artifact_size(submission_dir: Path) -> tuple[int, list[dict[str, 
             continue
         size = path.stat().st_size
         total += size
-        files.append({"path": path.relative_to(submission_dir.parent).as_posix(), "bytes": size})
+        files.append(
+            {"path": path.relative_to(submission_dir.parent).as_posix(), "bytes": size}
+        )
     return total, files
 
 
@@ -396,14 +398,18 @@ def write_attempt_bundle(
     return records_dir
 
 
-def finalize_attempt_bundle(records_dir: Path, harness: ParameterGolfHarnessResult) -> None:
+def finalize_attempt_bundle(
+    records_dir: Path, harness: ParameterGolfHarnessResult
+) -> None:
     manifest_path = records_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["metrics"].update(harness.metrics)
     manifest["verdict"] = harness.verdict
     if "artifact_files" in harness.details:
         manifest["artifact"]["files"] = harness.details["artifact_files"]
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     (records_dir / "eval_result.json").write_text(
         json.dumps(harness.to_dict(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -419,7 +425,9 @@ def run_single_parameter_golf_attempt(
     permission_profile: Mapping[str, Any] | None = None,
 ) -> ParameterGolfAttemptResult:
     validate_attempt_options(options)
-    submission_files = _resolve_submission_files(options.workspace, options.submission_files)
+    submission_files = _resolve_submission_files(
+        options.workspace, options.submission_files
+    )
     workspace_root = str(Path(cwd).resolve())
     service.recover_stale_running(workspace_root)
     record = service._select_task_run_for_step(workspace_root, id_or_prefix)
@@ -525,7 +533,9 @@ def run_single_parameter_golf_attempt(
         diff_ref=diff_ref,
         created_at=service._now_iso(),
     )
-    _append_attempt_events(service, running_run, step, experiment, harness, command_result)
+    _append_attempt_events(
+        service, running_run, step, experiment, harness, command_result
+    )
     outcome_status = _step_status_for_verdict(harness.verdict["status"])
     task_result = service._finalize_step(
         task_run=running_run,
@@ -534,7 +544,9 @@ def run_single_parameter_golf_attempt(
         outcome=TaskRunStepOutcome(
             status=outcome_status,
             assistant_text=f"P3 single attempt {attempt_id}: {harness.verdict['status']}",
-            error_message=None if outcome_status != "failed" else harness.verdict["status"],
+            error_message=None
+            if outcome_status != "failed"
+            else harness.verdict["status"],
             block_reason=None if outcome_status != "blocked" else "experiment_blocked",
             next_action="Review the attempt bundle and decide the next candidate.",
         ),
@@ -548,10 +560,16 @@ def run_single_parameter_golf_attempt(
     )
 
 
-def _required_bundle_paths_ok(records_dir: Path, manifest: Mapping[str, Any], reasons: list[str]) -> bool:
+def _required_bundle_paths_ok(
+    records_dir: Path, manifest: Mapping[str, Any], reasons: list[str]
+) -> bool:
     ok = True
-    required_files = manifest.get("artifact", {}).get("required_files", REQUIRED_BUNDLE_FILES)
-    required_dirs = manifest.get("artifact", {}).get("required_dirs", REQUIRED_BUNDLE_DIRS)
+    required_files = manifest.get("artifact", {}).get(
+        "required_files", REQUIRED_BUNDLE_FILES
+    )
+    required_dirs = manifest.get("artifact", {}).get(
+        "required_dirs", REQUIRED_BUNDLE_DIRS
+    )
     for name in required_files:
         if not (records_dir / str(name)).is_file():
             ok = False
@@ -712,7 +730,9 @@ def _error_harness_result(
     )
 
 
-def _command_failure_harness(command_result: HostCommandResult) -> ParameterGolfHarnessResult:
+def _command_failure_harness(
+    command_result: HostCommandResult,
+) -> ParameterGolfHarnessResult:
     if command_result.timed_out:
         code = "run_timed_out"
     elif command_result.policy_effect != "allow":

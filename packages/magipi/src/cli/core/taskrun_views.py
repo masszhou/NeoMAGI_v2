@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cli.core.taskrun_event_payloads import DERIVED_STEP_SUMMARY_EVENT_TYPES
+from cli.core.taskrun_parameter_golf_artifacts import (
+    ParameterGolfArtifact,
+    RecordsConsistencyCheck,
+)
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
@@ -110,6 +114,15 @@ class TaskRunEventsResult:
     exit_code: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class TaskRunArtifactsResult:
+    task_run: TaskRunRecord
+    artifacts: list[ParameterGolfArtifact]
+    current_best_attempt_id: str | None = None
+    checks: list[RecordsConsistencyCheck] = field(default_factory=list)
+    exit_code: int = 0
+
+
 def build_taskrun_list(records: list[TaskRunRecord]) -> TaskRunListResult:
     return TaskRunListResult(
         items=[
@@ -148,7 +161,9 @@ def build_taskrun_history(
             )
             for step in steps
         ],
-        key_events=[event for event in events if event.event_type in KEY_HISTORY_EVENT_TYPES],
+        key_events=[
+            event for event in events if event.event_type in KEY_HISTORY_EVENT_TYPES
+        ],
         next_action=str(summary.get("next_action") or ""),
     )
 
@@ -161,7 +176,9 @@ def build_taskrun_next(
     default_permission_profile: Mapping[str, Any],
 ) -> TaskRunNextResult:
     pending_step = next((step for step in steps if step.status == "pending"), None)
-    current_step = next((step for step in steps if step.id == record.current_step_id), None)
+    current_step = next(
+        (step for step in steps if step.id == record.current_step_id), None
+    )
     attempted = [
         step
         for step in steps
@@ -180,7 +197,9 @@ def build_taskrun_next(
             if reason_step is not None
             else None
         ),
-        permission_profile=dict(record.permission_profile or default_permission_profile),
+        permission_profile=dict(
+            record.permission_profile or default_permission_profile
+        ),
         summary_snapshot=summary,
     )
 
@@ -219,7 +238,9 @@ def step_reason(
     return preview_text(step.conclusion) or None
 
 
-def taskrun_next_action(record: TaskRunRecord, last_attempt: TaskStepRecord | None) -> str:
+def taskrun_next_action(
+    record: TaskRunRecord, last_attempt: TaskStepRecord | None
+) -> str:
     if record.status == "running" and record.current_step_id:
         return "Wait for the current manual step to finish."
     if record.status in TERMINAL_TASKRUN_STATUSES:
@@ -304,7 +325,11 @@ def _reason_source_step(
     current_step: TaskStepRecord | None,
     last_attempt: TaskStepRecord | None,
 ) -> TaskStepRecord | None:
-    if current_step is not None and current_step.status in {"failed", "blocked", "cancelled"}:
+    if current_step is not None and current_step.status in {
+        "failed",
+        "blocked",
+        "cancelled",
+    }:
         return current_step
     if (
         last_attempt is not None

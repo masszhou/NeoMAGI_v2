@@ -15,7 +15,12 @@ from cli.core.taskrun_event_payloads import (
 )
 from cli.core.taskrun_projection import TaskRunProjectionResult
 from cli.core.taskrun_service import TaskRunResult
+from cli.core.taskrun_parameter_golf_artifacts import (
+    RecordsConsistencyCheck,
+    project_parameter_golf_artifact,
+)
 from cli.core.taskrun_views import (
+    TaskRunArtifactsResult,
     TaskRunEventsResult,
     TaskRunHistoryResult,
     TaskRunHistoryStep,
@@ -131,6 +136,20 @@ class _FakeService:
                     occurred_at="2026-05-13T00:00:00+00:00",
                 )
             ],
+        )
+
+    def artifacts(
+        self,
+        task_id: str | None,
+        cwd: Path,
+        *,
+        verify_records: bool = False,
+    ) -> TaskRunArtifactsResult:
+        self.calls.append(("artifacts", task_id, cwd, verify_records))
+        return TaskRunArtifactsResult(
+            task_run=self.result.task_run,
+            artifacts=[],
+            current_best_attempt_id=None,
         )
 
     def close(self, task_id: str | None, cwd: Path) -> TaskRunResult:
@@ -258,9 +277,52 @@ def _history_experiment(
     )
 
 
+def _artifact_experiment(
+    suffix: str,
+    *,
+    val_bpb: float = 1.55,
+    artifact_size_bytes: int = 1234,
+    metrics: dict[str, object] | None = None,
+    verdict_status: str = "accepted",
+    decision: str = "keep",
+    harness_status: str = "valid",
+) -> TaskExperimentRecord:
+    experiment_id = f"019e2200-0000-7000-8000-000000{suffix}"
+    if metrics is None:
+        metrics = {"val_bpb": val_bpb, "artifact_size_bytes": artifact_size_bytes}
+    return TaskExperimentRecord(
+        id=experiment_id,
+        task_run_id="019e2200-0000-7000-8000-000000000001",
+        step_id="019e2200-0000-7000-8000-000000000003",
+        hypothesis="try lower bpb",
+        change={"anchor": "parameter-golf-mini"},
+        command={"commandPreview": "python train_gpt.py"},
+        metrics=metrics,
+        result={
+            "verdict": {"status": verdict_status, "reasons": ["reason"]},
+            "harness": {
+                "status": harness_status,
+                "budget_comparable": True,
+                "required_files_ok": True,
+            },
+            "artifact": {
+                "content_ref": f"records/{experiment_id}",
+                "required_files": ["README.md", "manifest.json"],
+                "required_dirs": ["submission"],
+            },
+            "significance": {"final": False, "reason": "single_run_only"},
+        },
+        decision=decision,
+        diff_ref={"records_ref": f"records/{experiment_id}"},
+        created_at="2026-05-30T00:00:00+00:00",
+    )
+
+
 def _stub_runtime(monkeypatch, service: _FakeService) -> _Conn:
     conn = _Conn()
-    monkeypatch.setattr(taskrun_commands, "load_database_config", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        taskrun_commands, "load_database_config", lambda **_kwargs: object()
+    )
     monkeypatch.setattr(taskrun_commands, "connect_database", lambda _config: conn)
     monkeypatch.setattr(taskrun_commands, "ensure_schema", lambda _conn, _config: None)
     monkeypatch.setattr(
@@ -285,7 +347,9 @@ def _stub_runtime(monkeypatch, service: _FakeService) -> _Conn:
         "PostgresSessionRepository",
         lambda _conn, _config: object(),
     )
-    monkeypatch.setattr(taskrun_commands, "TaskRunHeadlessRunner", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        taskrun_commands, "TaskRunHeadlessRunner", lambda **_kwargs: object()
+    )
     monkeypatch.setattr(taskrun_commands, "TaskRunService", lambda _repo: service)
     return conn
 
@@ -450,8 +514,14 @@ def test_taskrun_history_prints_experiment_attempts(
     captured = capsys.readouterr()
     assert rc == 0
     assert "experiments:" in captured.out
-    assert "- baseline metric=latency_ms value=120.0 reason=baseline recorded" in captured.out
-    assert "- keep metric=latency_ms value=110.0 reason=primary metric improved" in captured.out
+    assert (
+        "- baseline metric=latency_ms value=120.0 reason=baseline recorded"
+        in captured.out
+    )
+    assert (
+        "- keep metric=latency_ms value=110.0 reason=primary metric improved"
+        in captured.out
+    )
 
 
 def test_taskrun_next_routes_and_prints_deterministic_view(
@@ -531,6 +601,134 @@ def test_taskrun_events_jsonl_preserves_derived_payload_version(
     assert service.calls[0][0] == "events"
     assert event["event_type"] == TASK_TOOL_OBSERVED
     assert event["payload"]["payload_version"] == PAYLOAD_VERSIONS[TASK_TOOL_OBSERVED]
+
+
+def test_taskrun_artifacts_routes_and_prints_empty_state(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["artifacts", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "artifacts"
+    assert service.calls[0][1] == "019e2200"
+    assert service.calls[0][3] is False
+    assert "artifacts:\n- none\n" in captured.out
+
+
+def test_taskrun_artifacts_prints_rows_and_best_marker_from_result(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    accepted_best = project_parameter_golf_artifact(
+        _artifact_experiment("000010", val_bpb=1.54)
+    )
+    accepted_worse = project_parameter_golf_artifact(
+        _artifact_experiment("000011", val_bpb=1.56)
+    )
+    rejected = project_parameter_golf_artifact(
+        _artifact_experiment(
+            "000012",
+            val_bpb=1.7,
+            verdict_status="rejected",
+            decision="blocked",
+        )
+    )
+    error = project_parameter_golf_artifact(
+        _artifact_experiment(
+            "000013",
+            metrics={},
+            verdict_status="error",
+            decision="blocked",
+            harness_status="error",
+        )
+    )
+
+    def fake_artifacts(
+        task_id: str | None,
+        cwd: Path,
+        *,
+        verify_records: bool = False,
+    ) -> TaskRunArtifactsResult:
+        service.calls.append(("artifacts", task_id, cwd, verify_records))
+        return TaskRunArtifactsResult(
+            task_run=service.result.task_run,
+            artifacts=[accepted_worse, rejected, error, accepted_best],
+            current_best_attempt_id=accepted_best.attempt_id,
+        )
+
+    service.artifacts = fake_artifacts
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["artifacts", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    artifact_lines = [
+        line
+        for line in captured.out.splitlines()
+        if line.startswith(("* attempt_id=", "- attempt_id="))
+    ]
+    assert len(artifact_lines) == 4
+    assert sum(1 for line in artifact_lines if line.startswith("* ")) == 1
+    assert artifact_lines[-1].startswith("* ")
+    assert "val_bpb=1.54" in artifact_lines[-1]
+    assert "verdict=accepted" in captured.out
+    assert "verdict=rejected" in captured.out
+    assert "verdict=error" in captured.out
+    assert "reason=verdict_not_accepted" in captured.out
+
+
+def test_taskrun_artifacts_verify_records_prints_check_result(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    artifact = project_parameter_golf_artifact(_artifact_experiment("000010"))
+
+    def fake_artifacts(
+        task_id: str | None,
+        cwd: Path,
+        *,
+        verify_records: bool = False,
+    ) -> TaskRunArtifactsResult:
+        service.calls.append(("artifacts", task_id, cwd, verify_records))
+        return TaskRunArtifactsResult(
+            task_run=service.result.task_run,
+            artifacts=[artifact],
+            current_best_attempt_id=artifact.attempt_id,
+            checks=[
+                RecordsConsistencyCheck(
+                    attempt_id=artifact.attempt_id,
+                    ok=False,
+                    reasons=["records_metric_mismatch"],
+                )
+            ]
+            if verify_records
+            else [],
+        )
+
+    service.artifacts = fake_artifacts
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(
+        ["artifacts", "019e2200", "--verify-records"],
+        prog="magipi",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "artifacts"
+    assert service.calls[0][3] is True
+    assert "records_check=records_metric_mismatch" in captured.out
 
 
 def test_taskrun_step_passes_runtime_options_and_prints_step(

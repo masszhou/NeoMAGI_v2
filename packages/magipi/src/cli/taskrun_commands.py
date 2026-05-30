@@ -10,7 +10,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ai_provider.model_registry import canonical_model_ref, resolve_model, validate_thinking_level_for_model
+from ai_provider.model_registry import (
+    canonical_model_ref,
+    resolve_model,
+    validate_thinking_level_for_model,
+)
 from cli.cli_args import CACHE_RETENTIONS, DEFAULT_MODEL_REF, THINKING_LEVELS
 from cli.core.model_settings import apply_settings_models
 from cli.core.settings import LoadedSettings, SettingsManager
@@ -36,6 +40,7 @@ from cli.core.taskrun_service import (
     TaskRunServiceError,
 )
 from cli.core.taskrun_views import (
+    TaskRunArtifactsResult,
     TaskRunEventsResult,
     TaskRunHistoryResult,
     TaskRunListResult,
@@ -62,6 +67,7 @@ TaskRunCommandResult = (
     TaskRunResult
     | TaskRunAutoRunResult
     | ParameterGolfAttemptResult
+    | TaskRunArtifactsResult
     | TaskRunListResult
     | TaskRunHistoryResult
     | TaskRunNextResult
@@ -170,7 +176,9 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     return parser
 
 
-def _add_start_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_start_command(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     start = sub.add_parser("start", help="Create a pending TaskRun.")
     start.add_argument(
         "--permission",
@@ -181,28 +189,54 @@ def _add_start_command(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     start.add_argument("goal", nargs="+", help="Task goal.")
 
 
-def _add_read_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_read_commands(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     status = sub.add_parser("status", help="Show TaskRun status.")
-    status.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    status.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
 
     summary = sub.add_parser("summary", help="Regenerate and print TaskRun summary.")
-    summary.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    summary.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
 
     sub.add_parser("list", help="List workspace TaskRuns.")
 
-    history = sub.add_parser("history", help="Show TaskRun step timeline and key events.")
-    history.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    history = sub.add_parser(
+        "history", help="Show TaskRun step timeline and key events."
+    )
+    history.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
+
+    artifacts = sub.add_parser("artifacts", help="Show P3 Parameter Golf artifacts.")
+    artifacts.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
+    artifacts.add_argument(
+        "--verify-records",
+        action="store_true",
+        help="Audit records/<attempt_id> manifest and eval JSON against DB metadata.",
+    )
 
     next_cmd = sub.add_parser("next", help="Show deterministic TaskRun next-step view.")
-    next_cmd.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    next_cmd.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
 
     events = sub.add_parser("events", help="Print TaskRun task_events as JSONL.")
-    events.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    events.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
 
 
 def _add_step_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     step = sub.add_parser("step", help="Execute exactly one manual TaskRun step.")
-    step.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    step.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
     step.add_argument(
         "--model",
         default=DEFAULT_MODEL_REF,
@@ -243,12 +277,16 @@ def _add_run_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     _add_experiment_flags(run)
 
 
-def _add_attempt_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_attempt_command(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     attempt = sub.add_parser(
         "attempt",
         help="Run one P3 Mini Parameter Golf single-attempt closed loop.",
     )
-    attempt.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    attempt.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
     attempt.add_argument(
         "--anchor",
         required=True,
@@ -354,14 +392,22 @@ def _add_experiment_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_close_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_close_command(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     close = sub.add_parser("close", help="Close an unexecuted TaskRun as cancelled.")
-    close.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    close.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
 
 
-def _add_cancel_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_cancel_command(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     cancel = sub.add_parser("cancel", help="Cancel a pending or running TaskRun.")
-    cancel.add_argument("id", nargs="?", default=None, help="TaskRun id or unique prefix.")
+    cancel.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
 
 
 def _parse_auto_run_max_steps(value: str) -> int:
@@ -372,9 +418,7 @@ def _parse_auto_run_max_steps(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("--max-steps must be >= 1")
     if parsed > MAX_AUTO_RUN_STEPS:
-        raise argparse.ArgumentTypeError(
-            f"--max-steps must be <= {MAX_AUTO_RUN_STEPS}"
-        )
+        raise argparse.ArgumentTypeError(f"--max-steps must be <= {MAX_AUTO_RUN_STEPS}")
     return parsed
 
 
@@ -384,7 +428,9 @@ def _parse_min_delta(value: str) -> float:
     except ValueError as exc:
         raise argparse.ArgumentTypeError("--min-delta must be a number") from exc
     if not math.isfinite(parsed) or parsed < 0:
-        raise argparse.ArgumentTypeError("--min-delta must be a finite non-negative number")
+        raise argparse.ArgumentTypeError(
+            "--min-delta must be a finite non-negative number"
+        )
     return parsed
 
 
@@ -410,6 +456,8 @@ def _dispatch(
             return service.list(cwd)
         case "history":
             return service.history(args.id, cwd)
+        case "artifacts":
+            return service.artifacts(args.id, cwd, verify_records=args.verify_records)
         case "next":
             return service.next(args.id, cwd)
         case "events":
@@ -495,7 +543,9 @@ def _load_runtime_options(args: argparse.Namespace, cwd: Path) -> TaskRunRuntime
     )
 
 
-def _load_experiment_options(args: argparse.Namespace) -> TaskRunExperimentOptions | None:
+def _load_experiment_options(
+    args: argparse.Namespace,
+) -> TaskRunExperimentOptions | None:
     benchmark_command = args.benchmark_command
     has_experiment_flag = any(
         [
@@ -508,9 +558,7 @@ def _load_experiment_options(args: argparse.Namespace) -> TaskRunExperimentOptio
     )
     if benchmark_command is None:
         if has_experiment_flag:
-            raise TaskRunServiceError(
-                "experiment flags require --benchmark-command"
-            )
+            raise TaskRunServiceError("experiment flags require --benchmark-command")
         return None
     if not str(benchmark_command).strip():
         raise TaskRunServiceError("--benchmark-command must not be empty")
@@ -587,6 +635,9 @@ def _print_result(
     if isinstance(result, TaskRunHistoryResult):
         _print_history_result(result)
         return
+    if isinstance(result, TaskRunArtifactsResult):
+        _print_artifacts_result(result)
+        return
     if isinstance(result, TaskRunNextResult):
         _print_next_result(result)
         return
@@ -613,7 +664,9 @@ def _print_result(
     sys.stdout.write(f"next_action: {summary.get('next_action', '')}\n")
     if include_summary:
         sys.stdout.write("summary:\n")
-        sys.stdout.write(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        sys.stdout.write(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
+        )
         sys.stdout.write("\n")
 
 
@@ -633,8 +686,7 @@ def _print_attempt_result(result: ParameterGolfAttemptResult) -> None:
         f"artifact_size_bytes: {result.harness.metrics.get('artifact_size_bytes', '')}\n"
     )
     sys.stdout.write(
-        "reasons: "
-        f"{', '.join(str(item) for item in verdict.get('reasons', []))}\n"
+        f"reasons: {', '.join(str(item) for item in verdict.get('reasons', []))}\n"
     )
     sys.stdout.write(f"projection_path: {result.task_result.projection.path}\n")
 
@@ -655,7 +707,9 @@ def _print_auto_run_result(result: TaskRunAutoRunResult) -> None:
         sys.stdout.write(f"  step_status: {step.status}\n")
         sys.stdout.write(f"  task_status: {iteration.task_run_status}\n")
         sys.stdout.write(f"  conclusion: {_goal_preview(step.conclusion or '')}\n")
-        sys.stdout.write(f"  next_action: {_goal_preview(str(step.output.get('next_action') or ''))}\n")
+        sys.stdout.write(
+            f"  next_action: {_goal_preview(str(step.output.get('next_action') or ''))}\n"
+        )
         sys.stdout.write(f"  stop_candidate: {iteration.stop_candidate or ''}\n")
     sys.stdout.write(f"stop_reason: {result.stop_reason}\n")
     sys.stdout.write(f"steps_run: {len(result.iterations)}\n")
@@ -706,7 +760,9 @@ def _print_history_result(result: TaskRunHistoryResult) -> None:
             sys.stdout.write("  experiments:\n")
             for experiment in item.experiments:
                 metric = experiment.result.get("primaryMetric")
-                value = experiment.metrics.get(metric) if isinstance(metric, str) else None
+                value = (
+                    experiment.metrics.get(metric) if isinstance(metric, str) else None
+                )
                 reason = experiment.result.get("reason") or ""
                 sys.stdout.write(
                     f"  - {experiment.decision} metric={metric or ''} "
@@ -718,9 +774,39 @@ def _print_history_result(result: TaskRunHistoryResult) -> None:
         sys.stdout.write("- none\n")
     for event in result.key_events:
         step = event.step_id or ""
-        sys.stdout.write(
-            f"- {event.occurred_at} {event.event_type} step_id={step}\n"
+        sys.stdout.write(f"- {event.occurred_at} {event.event_type} step_id={step}\n")
+
+
+def _print_artifacts_result(result: TaskRunArtifactsResult) -> None:
+    sys.stdout.write(f"id: {result.task_run.id}\n")
+    sys.stdout.write(f"status: {result.task_run.status}\n")
+    sys.stdout.write("artifacts:\n")
+    if not result.artifacts:
+        sys.stdout.write("- none\n")
+        return
+    best_id = result.current_best_attempt_id
+    checks = {check.attempt_id: check for check in result.checks}
+    for artifact in result.artifacts:
+        marker = "*" if artifact.attempt_id == best_id else "-"
+        records_ref = (
+            artifact.artifact.get("records_ref")
+            or artifact.artifact.get("content_ref")
+            or ""
         )
+        sys.stdout.write(
+            f"{marker} attempt_id={artifact.attempt_id[:8]} "
+            f"created_at={artifact.created_at} "
+            f"val_bpb={_blank_none(artifact.metric.get('value'))} "
+            f"artifact_size_bytes={_blank_none(artifact.artifact.get('size_bytes'))} "
+            f"verdict={artifact.verdict.get('status') or ''} "
+            f"decision={artifact.compat_decision} "
+            f"records_ref={records_ref} "
+            f"reason={_artifact_primary_reason(artifact)}\n"
+        )
+        check = checks.get(artifact.attempt_id)
+        if check is not None:
+            reason_text = ",".join(check.reasons) if check.reasons else "ok"
+            sys.stdout.write(f"  records_check={reason_text}\n")
 
 
 def _print_next_result(result: TaskRunNextResult) -> None:
@@ -782,6 +868,20 @@ def _step_record_label(step: TaskStepRecord | None) -> str:
     if step is None:
         return "none"
     return f"#{step.step_index} {step.status} {step.id} {step.title}"
+
+
+def _blank_none(value: object) -> object:
+    return "" if value is None else value
+
+
+def _artifact_primary_reason(artifact: Any) -> str:
+    reasons = artifact.eligibility.get("reasons")
+    if isinstance(reasons, list) and reasons:
+        return str(reasons[0])
+    verdict_reasons = artifact.verdict.get("reasons")
+    if isinstance(verdict_reasons, list) and verdict_reasons:
+        return str(verdict_reasons[0])
+    return ""
 
 
 def _goal_preview(goal: str, limit: int = 96) -> str:

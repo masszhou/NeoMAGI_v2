@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+from cli.core.taskrun_parameter_golf_artifacts import (
+    current_best_parameter_golf_artifact,
+    parameter_golf_artifact_summary,
+    parameter_golf_artifacts,
+)
 from storage.taskrun_repository import TaskExperimentRecord, TaskRunRecord
 
 
 def current_best_experiment(
     experiments: list[TaskExperimentRecord],
 ) -> dict[str, object] | None:
+    p3_best = current_best_parameter_golf_artifact(experiments)
+    if p3_best is not None:
+        return {
+            "experiment_id": p3_best.attempt_id,
+            "step_id": p3_best.step_id,
+            "metric": "val_bpb",
+            "value": p3_best.metric.get("value"),
+            "direction": "minimize",
+            "decision": p3_best.compat_decision,
+            "diff_ref": dict(p3_best.diff_ref),
+            "artifact": p3_best.to_dict(),
+        }
     latest_baseline: TaskExperimentRecord | None = None
     latest_keep: TaskExperimentRecord | None = None
     for experiment in experiments:
@@ -39,6 +56,12 @@ def experiment_preview(experiment: TaskExperimentRecord) -> dict[str, object]:
         "value": experiment.metrics.get(metric) if metric else None,
         "reason": experiment.result.get("reason"),
     }
+
+
+def p3_artifact_summary(
+    experiments: list[TaskExperimentRecord],
+) -> dict[str, object] | None:
+    return parameter_golf_artifact_summary(experiments)
 
 
 def experiment_next_action(
@@ -73,4 +96,6 @@ __all__ = [
     "experiment_next_action",
     "experiment_preview",
     "experiment_primary_metric",
+    "p3_artifact_summary",
+    "parameter_golf_artifacts",
 ]

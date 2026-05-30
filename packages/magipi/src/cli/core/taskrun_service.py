@@ -21,6 +21,12 @@ from cli.core.taskrun_experiment_summary import (
     current_best_experiment,
     experiment_next_action,
     experiment_preview,
+    p3_artifact_summary,
+)
+from cli.core.taskrun_parameter_golf_artifacts import (
+    current_best_parameter_golf_artifact,
+    parameter_golf_artifacts,
+    verify_parameter_golf_records,
 )
 from cli.core.taskrun_host_contract import (
     TaskRunHostContext,
@@ -57,6 +63,7 @@ from cli.core.taskrun_step import (
     TaskRunStepRunner,
 )
 from cli.core.taskrun_views import (
+    TaskRunArtifactsResult,
     TaskRunEventsResult,
     TaskRunHistoryResult,
     TaskRunListResult,
@@ -188,7 +195,9 @@ class TaskRunService:
         )
         return build_taskrun_list(records)
 
-    def history(self, id_or_prefix: str | None, cwd: str | Path) -> TaskRunHistoryResult:
+    def history(
+        self, id_or_prefix: str | None, cwd: str | Path
+    ) -> TaskRunHistoryResult:
         workspace_root = _workspace_root(cwd)
         self.recover_stale_running(workspace_root)
         record = self._select_task_run(workspace_root, id_or_prefix)
@@ -237,6 +246,31 @@ class TaskRunService:
                 after_event_id=after_event_id,
                 limit=limit,
             ),
+        )
+
+    def artifacts(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+        *,
+        verify_records: bool = False,
+    ) -> TaskRunArtifactsResult:
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run(workspace_root, id_or_prefix)
+        experiments = self.repository.list_experiments(record.id)
+        artifacts = parameter_golf_artifacts(experiments)
+        best = current_best_parameter_golf_artifact(experiments)
+        checks = (
+            [verify_parameter_golf_records(record, artifact) for artifact in artifacts]
+            if verify_records
+            else []
+        )
+        return TaskRunArtifactsResult(
+            task_run=record,
+            artifacts=artifacts,
+            current_best_attempt_id=best.attempt_id if best is not None else None,
+            checks=checks,
         )
 
     def step(
@@ -314,7 +348,9 @@ class TaskRunService:
                     "wait for stale recovery or cancel the running step first"
                 )
             running_steps = [
-                step for step in self.repository.list_steps(record.id) if step.status == "running"
+                step
+                for step in self.repository.list_steps(record.id)
+                if step.status == "running"
             ]
             if running_steps:
                 raise TaskRunServiceError(
@@ -441,7 +477,9 @@ class TaskRunService:
                 },
                 occurred_at=recovered_at,
             )
-            summary = self._build_summary(blocked, self.repository.list_steps(blocked.id))
+            summary = self._build_summary(
+                blocked, self.repository.list_steps(blocked.id)
+            )
             blocked = self.repository.update_task_run_summary(
                 blocked.id,
                 summary,
@@ -478,7 +516,9 @@ class TaskRunService:
             raise TaskRunServiceError("no non-terminal TaskRun in this workspace")
         if len(candidates) > 1:
             raise TaskRunServiceError(
-                _ambiguous_message("multiple non-terminal TaskRuns in this workspace", candidates)
+                _ambiguous_message(
+                    "multiple non-terminal TaskRuns in this workspace", candidates
+                )
             )
         return candidates[0]
 
@@ -503,7 +543,9 @@ class TaskRunService:
             )
         if len(candidates) > 1:
             raise TaskRunServiceError(
-                _ambiguous_message("multiple pending TaskRuns in this workspace", candidates)
+                _ambiguous_message(
+                    "multiple pending TaskRuns in this workspace", candidates
+                )
             )
         return candidates[0]
 
@@ -515,7 +557,9 @@ class TaskRunService:
         explicit: bool,
     ) -> None:
         if record.status in TERMINAL_TASKRUN_STATUSES:
-            raise TaskRunServiceError(f"cannot step terminal TaskRun {record.id}: {record.status}")
+            raise TaskRunServiceError(
+                f"cannot step terminal TaskRun {record.id}: {record.status}"
+            )
         if record.status == "running":
             raise TaskRunServiceError(f"cannot step active running TaskRun {record.id}")
         if record.status == "blocked" and not explicit:
@@ -537,7 +581,9 @@ class TaskRunService:
         ]
         if running:
             raise TaskRunServiceError(
-                _ambiguous_message("another TaskRun is already running in this workspace", running)
+                _ambiguous_message(
+                    "another TaskRun is already running in this workspace", running
+                )
             )
 
     def _start_step(
@@ -655,9 +701,15 @@ class TaskRunService:
                 updated_step,
                 ended_at,
             )
-        result = self._summarize_and_project(updated_run, rebuild_projection=rebuild_projection)
+        result = self._summarize_and_project(
+            updated_run, rebuild_projection=rebuild_projection
+        )
         matching_step = next(
-            (candidate for candidate in result.steps if candidate.id == updated_step.id),
+            (
+                candidate
+                for candidate in result.steps
+                if candidate.id == updated_step.id
+            ),
             updated_step,
         )
         exit_code = 130 if status == "cancelled" else 1 if status == "failed" else 0
@@ -731,7 +783,7 @@ class TaskRunService:
         last_attempt_summary = step_summary(last_attempt)
         if last_attempt_summary is not None and latest_experiment is not None:
             last_attempt_summary["experiment"] = experiment_preview(latest_experiment)
-        return {
+        summary = {
             "goal": record.goal,
             "status": record.status,
             "current_step": step_summary(current_step),
@@ -740,10 +792,16 @@ class TaskRunService:
             "last_attempt": last_attempt_summary,
             "current_best": current_best_experiment(experiments),
             "workspace_state": workspace_state(record.workspace_root, projection_path),
-            "permission_profile": dict(record.permission_profile or DEFAULT_PERMISSION_PROFILE),
+            "permission_profile": dict(
+                record.permission_profile or DEFAULT_PERMISSION_PROFILE
+            ),
             "next_action": experiment_next_action(record, latest_experiment)
             or taskrun_next_action(record, last_attempt),
         }
+        p3_summary = p3_artifact_summary(experiments)
+        if p3_summary is not None:
+            summary["p3_artifacts"] = p3_summary
+        return summary
 
     def _is_stale(self, record: TaskRunRecord, now_dt: datetime) -> bool:
         if record.status != "running":
