@@ -29,6 +29,24 @@ doc_id_assigned_at: 2026-05-28T21:16:23+02:00
   - [reference_mini_parameter_golf_budget](design_docs/references/reference_mini_parameter_golf_budget.md)
 - Discussion stage: accepted，第一层（用户需求口径），不含 architecture / implementation。
 
+### 2026-05-31 执行顺序修订
+
+P3-M3 已补齐 attempt tree / artifact / trajectory 的底层语义后，后续执行顺序调整为：
+
+```text
+P3-M5 Autonomous Multi-Attempt Loop 先行
+P3-M4 Execution Narrative Renderer 延后到 UI 设计稳定后实现
+P3-M6 Hardening & Scope Review 最后收口
+```
+
+原因：
+
+- M4 是只读展示层，依赖 UI 设计；过早实现容易把未稳定的界面假设固化成代码债。
+- M5 是 P3 的核心能力验证：agent 是否能自主 propose → run → judge → next。
+- M3 已提供 M5 所需的机器可读观测面：`p3_trajectory.tree`、`current_best`、`last_attempt`、`next_action`、parent attempt tree 和 artifact refs。
+- 推迟 M4 不等于推迟可观测性；M5 必须继续通过 CLI、Postgres truth、`task_runs.summary.p3_trajectory` 和 records bundle 保持可审计。
+- M4 之后应消费真实 autonomous traces，而不是基于假想 UI shape 设计 Renderer。
+
 ---
 
 ## 0. P3 目标
@@ -339,7 +357,7 @@ artifact 有 val_bpb / size / verdict / content_ref。
 artifact content 不在界面层。
 ```
 
-### Path 3: 读懂实验叙事
+### Path 3: 读懂实验叙事（UI 延后）
 
 ```text
 Renderer 按 attempt 树 + hypothesis / metric / verdict 组织展示。
@@ -348,7 +366,9 @@ raw train log 默认折叠、可 drill down。
 Renderer 只读，无写入口。
 ```
 
-说明：P3-M3 是支撑 Path 3 的底层语义补齐，没有独立 user path。
+说明：P3-M3 是支撑 Path 3 的底层语义补齐，没有独立 user path。P3-M4 Renderer
+推迟到 UI 设计稳定后实现；在此之前，M5 的可读性必须由 CLI / summary read model /
+records evidence 保持，不允许为了跳过 Renderer 而降低审计性。
 
 ### Path 4: 自主多 attempt 循环
 
@@ -361,6 +381,15 @@ Metric Harness 做确定性验证；按需 spawn read-only critic。
 ---
 
 ## 5. P3 交付里程碑草案
+
+编号代表原始语义边界，不代表当前执行顺序。P3-M3 之后的执行顺序为：
+
+```text
+M5 → M4 → M6
+```
+
+M4 延后期间，所有 M5 产出的 truth 仍必须写入 TaskRun / `task_experiments` /
+`p3_trajectory` / records bundle；不得引入临时 UI truth 或第二套 experiment ledger。
 
 ### P3-M0: Anchor Setup & Narrative Vocabulary
 
@@ -410,6 +439,9 @@ Metric Harness 做确定性验证；按需 spawn read-only critic。
 ### P3-M4: Execution Narrative Renderer (read-only)
 
 ```text
+执行顺序：
+  延后到 P3-M5 之后，等 UI 设计稳定并有真实 autonomous traces 可供展示。
+
 验收：
   Renderer 是 packages/webui 的 read-only 增量视图，继承 ADR-0024。
   按 attempt 树 + hypothesis / metric / verdict 组织展示。
@@ -421,17 +453,28 @@ Metric Harness 做确定性验证；按需 spawn read-only critic。
 ### P3-M5: Autonomous Multi-Attempt Loop
 
 ```text
+执行顺序：
+  P3-M3 之后优先实现；不等待 P3-M4 Renderer。
+
 验收：
   agent 自主迭代 propose → run → judge → next，构成 attempt 树。
+  Loop 消费 M3 的 `p3_trajectory.next_action` 作为默认 base candidate，
+    但真实 hypothesis / strategy 必须由 actor 生成并写入 attempt evidence。
   Metric Harness 确定性验证（size / 显著性 / 机械越界）全部走脚本。
+  final significance session / repeated runs / Welch test 属于 M5。
   read-only critic 仅在 "自觉胜利" checkpoint 被调用，且用干净 context。
   成功：agent 在 mini budget 下自主超过 naive baseline 并产出可复现 artifact。
   停止条件触发即停；无法机械判定的 scope drift 走 human scope review 并记录 verdict。
+  不新增 WebUI、浏览器写入口、第二套 runtime 或第二套 experiment ledger。
+  可观测性通过 CLI、Postgres truth、`summary.p3_trajectory` 和 records bundle 保持。
 ```
 
 ### P3-M6: Hardening & Scope Review
 
 ```text
+执行顺序：
+  在 M5 能力闭合、M4 Renderer 设计/实现收口后执行。
+
 验收：
   anchor 能被判定 "agent 自主闭合了实验循环且结果客观可复现"。
   确认没有偷渡控制面 / 写操作 UI / 知识记忆子系统 / 协同进化 / 第二套 runtime。
