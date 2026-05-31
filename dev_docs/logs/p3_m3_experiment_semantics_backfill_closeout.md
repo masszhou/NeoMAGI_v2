@@ -96,10 +96,24 @@ Results:
 
 ## Smoke
 
-No new live A6000 Parameter Golf training run was started for M3. Coverage is
-from M1/M2-compatible structured payloads and synthetic multi-attempt records.
+After the initial implementation closeout, a live A6000 smoke was run and
+recorded in:
 
-Future live smoke should use the existing workspace hygiene:
+`dev_docs/logs/p3_m3_experiment_semantics_backfill_smoke_findings.md`
+
+It created child attempt `019e7d80-525f-71f1-b2f3-a99f317af894` under reused
+TaskRun `019e7a5c-f877-7684-850e-5a17051c49f5`, with parent attempt
+`019e7a5d-3f1f-7201-ae07-7628bee81657`.
+
+The live smoke verified:
+
+- `--parent-experiment-id` writes DB `diff_ref.parent_experiment_id`;
+- manifest mirror preserves the same parent id;
+- `magipi taskrun trajectory` renders root/child depth and parent;
+- `current_best` remains the lower older attempt;
+- `last_attempt` is the new child attempt.
+
+Future live smoke should use the same workspace hygiene:
 
 ```bash
 cd /tmp/neomagi_p3_m0/parameter-golf
