@@ -41,14 +41,15 @@ long-term sources.
 
 | Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
 | --- | --- | --- | --- |
-| `workspace` | 工作区 | The durable on-disk working-tree directory a magipi run operates in — git-tracked as a whole, holding project code plus the `.magipi/` control dir, `records/<attempt_id>/` bundles, and human-readable projections; it is the working surface, not a truth source. | ADR-0020, ADR-0022; `design_docs/architecture/p2_taskrun_architecture.md` |
-| `workspace root` (`workspace_root`) | 工作区根路径 | The creation-time workspace path bound to a TaskRun in `task_runs.workspace_root`; relative resource paths resolve against it, and P2 does not auto-infer relocation if the workspace moves. | ADR-0020, ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` |
-| `.magipi/` | workspace 控制目录 | The fixed project-level magipi control directory *inside* a workspace, holding `settings.json`, `skills/`, `extensions/`, `prompts/`, `themes/`, `secrets/`, plus projection exports under `taskruns/` and `session/`; it is a subdirectory of the workspace, not the workspace itself. | ADR-0020, ADR-0022 |
-| `workspace write lock` | 工作区写锁 | The single-writer rule that at most one TaskRun may be `running` per workspace; in P3 the Actor holds it, and a Critic must read an independent workspace snapshot / material bundle instead of writing concurrently. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md`, `design_docs/architecture/p3_experiment_loop_architecture.md` |
+| `workspace` | 工作区 | An on-disk working tree used by magipi for reads/writes; it is a working surface, not durable truth, and a TaskRun may also invoke explicit host-command workspaces such as P3 `taskrun attempt --workspace`. | ADR-0020, ADR-0022; `design_docs/architecture/p2_taskrun_architecture.md`; `design_docs/data_models/task_runs.md` |
+| `workspace root` (`workspace_root`) | TaskRun 工作区根路径 | The creation-time cwd bound to a TaskRun in `task_runs.workspace_root`; it scopes TaskRun lookup, the one-running-per-workspace rule, and `.magipi/taskruns/<id>/` projection paths, but it is not automatically every host command cwd or every P3 artifact records root. | ADR-0020, ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md`; `design_docs/data_models/task_runs.md` |
+| `attempt workspace` (`--workspace`) | attempt 执行工作区 | For P3 `taskrun attempt`, the explicit Parameter Golf working tree where the training command runs and where `records/<attempt_id>/` is written; it is stored in `task_experiments.change.workspace` and may differ from `task_runs.workspace_root` in current CLI usage. | ADR-0025; `design_docs/data_models/task_experiments.md`; P3-M3 live smoke |
+| `.magipi/` | workspace 控制目录 | The fixed project-level magipi control directory under the TaskRun `workspace_root`, holding settings/resources and projection exports such as `.magipi/taskruns/<id>/`; it is projection/control state, not Postgres truth and not necessarily the P3 attempt artifact workspace. | ADR-0020, ADR-0022 |
+| `workspace write lock` | 工作区写锁 | The single-writer rule that at most one TaskRun may be `running` per workspace. It is **not** a static grant tied to agent ownership or to the TaskRun↔workspace binding: it is enforced at the TaskRun `→ running` transition (`taskrun start` / auto-run / `resume`), scoped by `workspace_root`, and only after stale-running detection (via `heartbeat_at`) so a crashed process never locks a workspace permanently. The owning Agent (P3 Actor) merely *holds* it while running; a Critic must use an independent `workspace_root` / snapshot rather than write concurrently. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` (D7 single-running + heartbeat/stale recovery), `design_docs/architecture/p3_experiment_loop_architecture.md` (§5.1, §5.3) |
 | `workspace-materialized skill` | 工作区物化 skill | A skill copied into the current workspace's `.magipi/skills/<skill-name>/`; only such skills are runtime/provider-visible, while `neomagi/skill_pool/` candidates and out-of-workspace skill sources are not active resources until materialized. | ADR-0020, ADR-0021 |
-| `workspace projection` | 工作区投影 | A human-readable workspace file rebuildable from Postgres truth that must not become a competing write source; see the same term under [Memory](#memory) for the memory-specific rule. | ADR-0008; `design_docs/architecture/p2_taskrun_architecture.md` |
+| `workspace projection` | 工作区投影 | A human-readable file under the TaskRun workspace root, such as `.magipi/taskruns/<id>/summary.md`, rebuildable from Postgres truth and never a competing write source; see the same term under [Memory](#memory). | ADR-0008; `design_docs/architecture/p2_taskrun_architecture.md` |
 
-> Workspace is the head term for several compounds defined in other sections: `SOUL.md`/`USER.md`/`IDENTITY.md` (workspace context/projection files under [Agent](#agent)), `workspace projection` / `projection rebuild` (under [Memory](#memory)), and `Git workspace lineage` / `Branch` (under [TaskRun / Experiment Loop](#taskrun--experiment-loop)). All share one invariant: **workspace files are projection / context input, never durable truth** — truth lives in Postgres (see `Postgres truth`).
+> Workspace is the head term for several compounds defined in other sections: `SOUL.md`/`USER.md`/`IDENTITY.md` (workspace context/projection files under [Agent](#agent)), `workspace projection` / `projection rebuild` (under [Memory](#memory)), and `Git workspace lineage` / `Branch` (under [TaskRun / Experiment Loop](#taskrun--experiment-loop)). The important distinction is that `task_runs.workspace_root` is the TaskRun binding/selection/projection root, while an explicit command workspace, such as P3 `--workspace`, may be where training and records actually happen. In all cases: **workspace files are projection / context input / artifact evidence, never durable truth** — truth lives in Postgres (see `Postgres truth`).
 
 ### Workspace × Agent × Session
 
@@ -57,31 +58,34 @@ long-term sources.
 | Axis | Term | Question | Nature |
 | --- | --- | --- | --- |
 | WHERE | `workspace` | On which on-disk working tree are reads/writes done? | Spatial / storage surface |
-| WHO | `Agent` | Who reads context, calls tools/providers, and produces work? | Actor (Actor / Critic) |
-| HOW (continuity) | `AgentSession` | How is context, cache affinity, and compaction kept continuous across provider calls? | Conversational runtime |
+| WHERE (TaskRun binding) | `workspace_root` | Which cwd scopes this TaskRun's lookup, lock, and projections? | Stored in `task_runs.workspace_root` |
+| WHERE (host command) | `attempt workspace` | Where does this P3 attempt actually run and write records? | Stored in `task_experiments.change.workspace` |
+| WHO | `Agent` | Who runs the provider/tool loop for one step? | Per-step executor (re-created each step) |
+| HOW (continuity) | `AgentSession` | What keeps context, cache affinity, and compaction continuous across steps? | Long-lived session runtime; holds the per-step Agent |
 
-Binding in one sentence: **an `Agent` (the P3 Actor) runs through one long-lived `AgentSession`, and both are bound by one `TaskRun` to one `workspace`.**
+Binding in one sentence: **one `TaskRun` owns one long-lived `AgentSession` (born in the same transaction); that session holds a per-step `Agent` that drives the loop; the TaskRun is bound to one `workspace`.**
 
 ```mermaid
 graph LR
-  Agent["Agent (Actor)"]
-  TaskRun["TaskRun"]
-  Session["AgentSession"]
-  Workspace["workspace (working tree)"]
-
-  Agent -->|owns 拥有 + write lock 写锁| TaskRun
-  Agent -->|drives 驱动| Session
-  TaskRun -->|"bound via workspace_root 绑定"| Workspace
-  TaskRun -.->|"1 TaskRun = 1 long-lived"| Session
-  Workspace -.->|"hosts N TaskRuns, only 1 running"| TaskRun
+  TaskRun["TaskRun"] -->|"owns 1:1, 同事务出生"| Session["AgentSession (long-lived)"]
+  Session -->|"holds, 每步重建"| Agent["Agent (per-step executor)"]
+  Agent -->|"drives 驱动"| Loop["provider / 模型 loop"]
+  TaskRun -->|"workspace_root 绑定"| WorkspaceRoot["TaskRun workspace_root"]
+  TaskRun -->|"has ordered"| Step["task_steps"]
+  Step -->|"may produce"| TaskExperiment["task_experiments"]
+  TaskExperiment -->|"change.workspace / records_ref"| AttemptWorkspace["attempt workspace / records"]
 ```
+
+> A single `workspace` can host **multiple** TaskRuns over time (sequentially), but only one may be `running` at a time. This `workspace write lock` is **not** carried by the `owns` edge above: it is enforced at the TaskRun `→ running` transition and scoped by `workspace_root` — the TaskRun's Actor only *holds* it while its TaskRun is running. See the `workspace write lock` term for the full rule.
 
 Cardinality (the part most easily confused):
 
-- **1 TaskRun = 1 long-lived AgentSession** (`p2_taskrun_architecture.md` D2). While the TaskRun is active its session is *task-owned*; `/new`, `/fork`, `/clone` open normal user sessions and do **not** rebind the TaskRun's session.
-- **1 TaskRun ↔ 1 `workspace_root`** (bound at creation; not auto-followed on move).
+- **1 TaskRun = 1 long-lived AgentSession**, both created in the same transaction; the session is *task-owned*, and `/new`, `/fork`, `/clone` open normal user sessions that do **not** rebind it (`p2_taskrun_architecture.md` D2).
+- **The session is long-lived; the `Agent` is per-step** — a fresh Agent is re-created for each step and re-hydrates context from the durable session (`agent.py`, `taskrun_agent_session.py`).
+- **1 TaskRun ↔ 1 `workspace_root`** (bound at creation; not auto-followed on move). This is the TaskRun selection/lock/projection root.
+- **A P3 Attempt may have a separate explicit `attempt workspace`** via `taskrun attempt --workspace`; in the live smoke, `task_runs.workspace_root` was `/home/devuser/devel/NeoMAGI_v2`, while the Parameter Golf records bundle was written under `/tmp/neomagi_p3_m0/parameter-golf/records/<attempt_id>/`.
 - **1 workspace hosts N TaskRuns over time, but only one may be `running`** — this is the `workspace write lock` (`p2_taskrun_architecture.md` D7).
-- **The Agent (Actor) owns the TaskRun + the workspace write lock** (`p3_experiment_loop_architecture.md` §5.1).
+- **The P3 `Actor` (an agent role) owns the TaskRun + write lock**; at storage level the TaskRun owns the session and spawns the per-step Agent (`p3_experiment_loop_architecture.md` §5.1).
 - **P3 `Critic` replicates all three axes independently**: a separate `Agent`, a separate `AgentSession`, a separate `TaskRun`, reading an independent workspace snapshot / material bundle — sharing neither session nor workspace write lock (`p3_experiment_loop_architecture.md` §5.3).
 
 Shared invariant across the three axes: workspace files, session compaction/narration, and agent narration are all `provider-visible context`, **never durable truth** — truth lives in Postgres (see `Postgres truth`). This is why workspace, session, and agent state can be discarded and rebuilt, while TaskRun / metric / verdict cannot.
@@ -91,6 +95,9 @@ Shared invariant across the three axes: workspace files, session compaction/narr
 | Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
 | --- | --- | --- | --- |
 | `AgentSession` | 智能体会话 | The long-lived P1 session runtime that coordinates provider calls, tools, resources, compaction, and durable session state. | ADR-0009, ADR-0016 |
+| `agent_sessions` | 会话根记录表 | Durable root table for AgentSessions; TaskRun-owned sessions are referenced by `task_runs.agent_session_id` and hidden from ordinary recent-session selection. | `design_docs/data_models/agent_sessions.md`; `design_docs/data_models/task_runs.md` |
+| `agent_session_entries` | 会话条目表 | Canonical persisted entry tree for a session, storing message/label/session-info payloads used to rebuild conversation context and JSONL projections. | `design_docs/data_models/agent_session_entries.md` |
+| `agent_session_labels` | 会话标签投影表 | Mutable latest-label projection for session entries; label history still lives as label entries in `agent_session_entries`. | `design_docs/data_models/agent_session_labels.md` |
 | `long-lived AgentSession` | 长生命周期会话 | A session intentionally reused across a TaskRun or P3 Experiment Session so context, provider cache affinity, and compaction behavior remain continuous. | ADR-0026 |
 | `compaction` | 上下文压缩 | Session-level context compression that preserves visibility of deterministic summaries but never becomes TaskRun, metric, memory, or trajectory truth. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` |
 | `provider-visible context` | provider 可见上下文 | Structured context injected into the next provider call, including deterministic TaskRun summaries and session context projections. | ADR-0016, ADR-0026 |
@@ -101,7 +108,9 @@ Shared invariant across the three axes: workspace files, session compaction/narr
 | Canonical term (English, code-aligned) | 中文 gloss | One-sentence definition | Source ADR |
 | --- | --- | --- | --- |
 | `TaskRun` | 任务运行实体 | A workspace-scoped, durable, auditable task runtime backed by Postgres and executed through one long-lived `AgentSession`. | ADR-0026; `design_docs/architecture/p2_taskrun_architecture.md` |
-| `TaskRun step` | TaskRun 步骤切片 | A bounded semantic slice inside a TaskRun that records one prompt/continuation, events, tool use, audit evidence, and output. | `design_docs/architecture/p2_taskrun_architecture.md` |
+| `task_runs` | TaskRun 根记录表 | Workspace-scoped durable root table for TaskRuns, storing lifecycle status, `agent_session_id`, `workspace_root`, current step, and machine-written summary. | `design_docs/data_models/task_runs.md` |
+| `TaskRun step` | TaskRun 步骤切片 | A bounded semantic slice inside a TaskRun that records one prompt/continuation or host-command execution, events, tool use, audit evidence, and output. | `design_docs/architecture/p2_taskrun_architecture.md`; `design_docs/data_models/task_steps.md` |
+| `task_steps` | TaskRun 步骤表 | Ordered child table under `task_runs`; each row is one execution step and may have events, permission decisions, and experiment records attached by `step_id`. | `design_docs/data_models/task_steps.md` |
 | `task_events` | TaskRun 事件账本 | Append-only Postgres event ledger for TaskRun lifecycle, audit, white-box runtime observations, and P3 attempt lifecycle events. | ADR-0023; `design_docs/architecture/p2_taskrun_architecture.md` |
 | `task_experiments` | 实验记录表 | Durable child records attached to TaskRun steps for hypotheses, changes, commands, metrics, results, decisions, and diff references. | ADR-0025, ADR-0026; `design_docs/data_models/task_experiments.md` |
 | `Experiment Session` | 实验会话 | One Mini Parameter Golf objective run in P3; by design it maps to exactly one TaskRun and one long-lived AgentSession. | ADR-0026 |
