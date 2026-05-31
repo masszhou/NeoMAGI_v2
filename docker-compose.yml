@@ -14,6 +14,12 @@ services:
   # Inspect installed extensions:
   #   podman exec -it neomagi-postgres sh -lc \
   #     'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dx"'
+  #
+  # Security note:
+  #   Port 5432 is intentionally bound on all interfaces so trusted clients
+  #   such as a MacBook over Tailscale can reach the A6000 host database.
+  #   Keep UFW or an equivalent host firewall enabled and allow 5432 only
+  #   from trusted sources; do not rely on Docker port binding alone.
   # ===========================================
   postgres:
     image: docker.io/paradedb/paradedb:0.23.2-pg18
