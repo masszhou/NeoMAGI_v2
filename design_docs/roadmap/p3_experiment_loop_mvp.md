@@ -456,10 +456,18 @@ M4 延后期间，所有 M5 产出的 truth 仍必须写入 TaskRun / `task_expe
 执行顺序：
   P3-M3 之后优先实现；不等待 P3-M4 Renderer。
 
+readiness / plan slice:
+  开始 M5 coding 前先做一个很小的 readiness plan，锁定 autonomous loop 的
+  输入、输出、停止条件、significance、critic checkpoint、anchor contract 和
+  可观测性，不把 UI 设计或通用 skill 框架混入 M5。
+
 验收：
   agent 自主迭代 propose → run → judge → next，构成 attempt 树。
   Loop 消费 M3 的 `p3_trajectory.next_action` 作为默认 base candidate，
     但真实 hypothesis / strategy 必须由 actor 生成并写入 attempt evidence。
+  每次 attempt 的 truth 继续写入 `task_experiments`，进度汇总继续写入
+    `task_runs.summary.p3_trajectory`；这是 M5 调试和后续 Renderer 的
+    最低机器可读 run ledger。
   Metric Harness 确定性验证（size / 显著性 / 机械越界）全部走脚本。
   final significance session / repeated runs / Welch test 属于 M5。
   read-only critic 仅在 "自觉胜利" checkpoint 被调用，且用干净 context。
@@ -467,6 +475,9 @@ M4 延后期间，所有 M5 产出的 truth 仍必须写入 TaskRun / `task_expe
   停止条件触发即停；无法机械判定的 scope drift 走 human scope review 并记录 verdict。
   不新增 WebUI、浏览器写入口、第二套 runtime 或第二套 experiment ledger。
   可观测性通过 CLI、Postgres truth、`summary.p3_trajectory` 和 records bundle 保持。
+  不在 M5 抽象通用 skill / anchor 框架；只允许一个很窄的
+    `parameter-golf-mini` anchor contract，服务 prompt/context/harness/eligibility。
+    等第二个真实 anchor 出现后再泛化。
 ```
 
 ### P3-M6: Hardening & Scope Review
