@@ -49,8 +49,14 @@ def test_parse_final_exact_val_bpb_uses_last_exact_line() -> None:
     ("log", "code"),
     [
         ("final_int8_zlib_roundtrip val_bpb:1.5\n", "missing_final_exact_val_bpb"),
-        ("final_int8_zlib_roundtrip_exact val_bpb:nan\n", "non_finite_final_exact_val_bpb"),
-        ("final_int8_zlib_roundtrip_exact val_bpb:not-a-number\n", "invalid_final_exact_val_bpb"),
+        (
+            "final_int8_zlib_roundtrip_exact val_bpb:nan\n",
+            "non_finite_final_exact_val_bpb",
+        ),
+        (
+            "final_int8_zlib_roundtrip_exact val_bpb:not-a-number\n",
+            "invalid_final_exact_val_bpb",
+        ),
     ],
 )
 def test_parse_final_exact_val_bpb_fails_closed(log: str, code: str) -> None:
@@ -78,7 +84,9 @@ def test_submission_artifact_size_only_counts_submission_dir(tmp_path: Path) -> 
     }
 
 
-def test_bundle_writer_and_harness_accept_valid_improved_attempt(tmp_path: Path) -> None:
+def test_bundle_writer_and_harness_accept_valid_improved_attempt(
+    tmp_path: Path,
+) -> None:
     train_gpt = tmp_path / "train_gpt.py"
     train_gpt.write_text("print('train')\n", encoding="utf-8")
     model = tmp_path / "model.bin.zlib"
@@ -104,7 +112,9 @@ def test_bundle_writer_and_harness_accept_valid_improved_attempt(tmp_path: Path)
     harness = run_parameter_golf_harness(records_dir)
     pga.finalize_attempt_bundle(records_dir, harness)
     manifest = json.loads((records_dir / "manifest.json").read_text(encoding="utf-8"))
-    eval_result = json.loads((records_dir / "eval_result.json").read_text(encoding="utf-8"))
+    eval_result = json.loads(
+        (records_dir / "eval_result.json").read_text(encoding="utf-8")
+    )
 
     assert harness.status == "valid"
     assert harness.verdict["status"] == "accepted"
@@ -234,7 +244,10 @@ def test_single_attempt_executor_writes_ledger_and_records(
     repo = _FakeTaskRunRepository()
     profile = build_permission_profile_snapshot(
         "full",
-        {"paths": {"allow": ["$WORKSPACE/**"]}, "commands": {"allow": ["python", "git"]}},
+        {
+            "paths": {"allow": ["$WORKSPACE/**"]},
+            "commands": {"allow": ["python", "git"]},
+        },
     )
     record = _seed_record(repo, tmp_path, permission_profile=profile)
     service = _service(repo)
@@ -282,7 +295,9 @@ def test_single_attempt_executor_writes_ledger_and_records(
         ),
     )
 
-    assert result.experiment.id == result.experiment.diff_ref["records_ref"].split("/")[-1]
+    assert (
+        result.experiment.id == result.experiment.diff_ref["records_ref"].split("/")[-1]
+    )
     assert result.experiment.step_id == repo.steps[0].id
     assert result.experiment.decision == "keep"
     assert result.experiment.result["verdict"]["status"] == "accepted"
@@ -290,8 +305,137 @@ def test_single_attempt_executor_writes_ledger_and_records(
         "final": False,
         "reason": "single_run_only",
     }
+    assert result.experiment.diff_ref["parent_experiment_id"] is None
+    manifest = json.loads(
+        (tmp_path / result.records_ref / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["parent_experiment_id"] is None
     assert (tmp_path / result.records_ref / "manifest.json").is_file()
     assert repo.steps[0].status == "done"
+
+
+def test_single_attempt_accepts_same_taskrun_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _FakeTaskRunRepository()
+    profile = build_permission_profile_snapshot(
+        "full",
+        {
+            "paths": {"allow": ["$WORKSPACE/**"]},
+            "commands": {"allow": ["python", "git"]},
+        },
+    )
+    record = _seed_record(repo, tmp_path, permission_profile=profile)
+    parent = repo.append_experiment(
+        task_run_id=record.id,
+        step_id="019e2200-0000-7000-8000-000000000111",
+        experiment_id="019e2200-0000-7000-8000-000000000112",
+        hypothesis="parent",
+        change={"anchor": ANCHOR_NAME},
+        command={},
+        metrics={"val_bpb": 1.56, "artifact_size_bytes": 10},
+        result={
+            "verdict": {"status": "accepted", "reasons": []},
+            "harness": {
+                "status": "valid",
+                "budget_comparable": True,
+                "required_files_ok": True,
+            },
+            "artifact": {"content_ref": "records/parent"},
+            "significance": {"final": False, "reason": "single_run_only"},
+        },
+        decision="keep",
+        diff_ref={"records_ref": "records/parent"},
+    )
+    service = _service(repo)
+    hypothesis = _hypothesis(tmp_path)
+    train_gpt = tmp_path / "train_gpt.py"
+    train_gpt.write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setattr(
+        pga,
+        "capture_workspace_snapshot",
+        lambda *args, **kwargs: {"git_head": "abc", "status": []},
+    )
+    monkeypatch.setattr(
+        pga,
+        "capture_diff_ref",
+        lambda *args, **kwargs: {"git_head": "abc", "status_after": []},
+    )
+    monkeypatch.setattr(
+        pga,
+        "run_host_command",
+        lambda *args, **kwargs: _host_result(
+            "final_int8_zlib_roundtrip_exact val_loss:2.6 val_bpb:1.55\n"
+        ),
+    )
+
+    result = run_single_parameter_golf_attempt(
+        service,
+        record.id,
+        tmp_path,
+        ParameterGolfAttemptOptions(
+            anchor=ANCHOR_NAME,
+            workspace=tmp_path,
+            hypothesis_file=hypothesis,
+            command=BUDGET_COMMAND,
+            seed=43,
+            timeout_seconds=600,
+            submission_files=(train_gpt,),
+            parent_experiment_id=parent.id,
+        ),
+    )
+
+    manifest = json.loads(
+        (tmp_path / result.records_ref / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert result.experiment.diff_ref["parent_experiment_id"] == parent.id
+    assert manifest["parent_experiment_id"] == parent.id
+
+
+def test_single_attempt_rejects_missing_parent_before_host_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _FakeTaskRunRepository()
+    profile = build_permission_profile_snapshot(
+        "full",
+        {
+            "paths": {"allow": ["$WORKSPACE/**"]},
+            "commands": {"allow": ["python", "git"]},
+        },
+    )
+    record = _seed_record(repo, tmp_path, permission_profile=profile)
+    service = _service(repo)
+    train_gpt = tmp_path / "train_gpt.py"
+    train_gpt.write_text("print('ok')\n", encoding="utf-8")
+    called = False
+
+    def fake_run_host_command(*args, **kwargs):
+        nonlocal called
+        called = True
+        return _host_result("")
+
+    monkeypatch.setattr(pga, "run_host_command", fake_run_host_command)
+
+    with pytest.raises(ValueError, match="same TaskRun"):
+        run_single_parameter_golf_attempt(
+            service,
+            record.id,
+            tmp_path,
+            ParameterGolfAttemptOptions(
+                anchor=ANCHOR_NAME,
+                workspace=tmp_path,
+                hypothesis_file=_hypothesis(tmp_path),
+                command=BUDGET_COMMAND,
+                seed=42,
+                timeout_seconds=600,
+                submission_files=(train_gpt,),
+                parent_experiment_id="019e2200-0000-7000-8000-000000009999",
+            ),
+        )
+
+    assert called is False
 
 
 def _valid_records_dir(
@@ -328,7 +472,9 @@ def _hypothesis(tmp_path: Path) -> Path:
     return hypothesis
 
 
-def _host_result(output: str, *, log_prefix: str = BUDGET_LOG_PREFIX) -> HostCommandResult:
+def _host_result(
+    output: str, *, log_prefix: str = BUDGET_LOG_PREFIX
+) -> HostCommandResult:
     return HostCommandResult(
         phase="trial",
         command=BUDGET_COMMAND,

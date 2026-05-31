@@ -11,6 +11,7 @@ from cli.core.taskrun_parameter_golf_artifacts import (
     ParameterGolfArtifact,
     RecordsConsistencyCheck,
 )
+from cli.core.taskrun_parameter_golf_trajectory import ParameterGolfAttemptTree
 from storage.taskrun_repository import (
     TERMINAL_TASKRUN_STATUSES,
     TaskEventRecord,
@@ -120,6 +121,14 @@ class TaskRunArtifactsResult:
     artifacts: list[ParameterGolfArtifact]
     current_best_attempt_id: str | None = None
     checks: list[RecordsConsistencyCheck] = field(default_factory=list)
+    exit_code: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRunTrajectoryResult:
+    task_run: TaskRunRecord
+    summary: dict[str, object]
+    tree: ParameterGolfAttemptTree
     exit_code: int = 0
 
 
@@ -373,6 +382,7 @@ __all__ = [
     "TaskRunListItem",
     "TaskRunListResult",
     "TaskRunNextResult",
+    "TaskRunTrajectoryResult",
     "TaskStepCounts",
     "build_taskrun_history",
     "build_taskrun_list",

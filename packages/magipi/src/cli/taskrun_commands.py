@@ -45,6 +45,7 @@ from cli.core.taskrun_views import (
     TaskRunHistoryResult,
     TaskRunListResult,
     TaskRunNextResult,
+    TaskRunTrajectoryResult,
 )
 from policy.permission_profiles import (
     BUILTIN_PERMISSION_PROFILE_NAMES,
@@ -71,6 +72,7 @@ TaskRunCommandResult = (
     | TaskRunListResult
     | TaskRunHistoryResult
     | TaskRunNextResult
+    | TaskRunTrajectoryResult
     | TaskRunEventsResult
 )
 
@@ -221,6 +223,14 @@ def _add_read_commands(
         help="Audit records/<attempt_id> manifest and eval JSON against DB metadata.",
     )
 
+    trajectory = sub.add_parser(
+        "trajectory",
+        help="Show P3 Parameter Golf attempt tree and deterministic trajectory.",
+    )
+    trajectory.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
+
     next_cmd = sub.add_parser("next", help="Show deterministic TaskRun next-step view.")
     next_cmd.add_argument(
         "id", nargs="?", default=None, help="TaskRun id or unique prefix."
@@ -335,6 +345,15 @@ def _add_attempt_command(
         default=[],
         metavar="PATH",
         help="File to copy into records/<attempt_id>/submission/. Repeat as needed.",
+    )
+    attempt.add_argument(
+        "--parent-experiment-id",
+        default=None,
+        metavar="ATTEMPT_ID",
+        help=(
+            "Semantic parent attempt id inside the same TaskRun; "
+            "this is not a git branch or session fork."
+        ),
     )
 
 
@@ -458,6 +477,8 @@ def _dispatch(
             return service.history(args.id, cwd)
         case "artifacts":
             return service.artifacts(args.id, cwd, verify_records=args.verify_records)
+        case "trajectory":
+            return service.trajectory(args.id, cwd)
         case "next":
             return service.next(args.id, cwd)
         case "events":
@@ -498,6 +519,7 @@ def _dispatch(
                     seed=args.seed,
                     timeout_seconds=args.timeout_seconds,
                     submission_files=tuple(args.submission_files),
+                    parent_experiment_id=args.parent_experiment_id,
                 ),
                 permission_profile=permission_profile,
             )
@@ -637,6 +659,9 @@ def _print_result(
         return
     if isinstance(result, TaskRunArtifactsResult):
         _print_artifacts_result(result)
+        return
+    if isinstance(result, TaskRunTrajectoryResult):
+        _print_trajectory_result(result)
         return
     if isinstance(result, TaskRunNextResult):
         _print_next_result(result)
@@ -809,6 +834,61 @@ def _print_artifacts_result(result: TaskRunArtifactsResult) -> None:
             sys.stdout.write(f"  records_check={reason_text}\n")
 
 
+def _print_trajectory_result(result: TaskRunTrajectoryResult) -> None:
+    summary = result.summary
+    current_best = _mapping(summary.get("current_best"))
+    last_attempt = _mapping(summary.get("last_attempt"))
+    next_action = _mapping(summary.get("next_action"))
+    sys.stdout.write(f"id: {result.task_run.id}\n")
+    sys.stdout.write(f"status: {result.task_run.status}\n")
+    sys.stdout.write("current_best:\n")
+    if current_best:
+        artifact = _mapping(current_best.get("artifact"))
+        metric = _mapping(current_best.get("metric"))
+        records_ref = artifact.get("records_ref") or artifact.get("content_ref") or ""
+        sys.stdout.write(
+            f"- attempt_id={str(current_best.get('attempt_id', ''))[:8]} "
+            f"val_bpb={_blank_none(metric.get('value'))} "
+            f"records_ref={records_ref}\n"
+        )
+    else:
+        sys.stdout.write("- none\n")
+    sys.stdout.write("last_attempt:\n")
+    if last_attempt:
+        sys.stdout.write(
+            f"- attempt_id={str(last_attempt.get('attempt_id', ''))[:8]} "
+            f"parent={_blank_none(last_attempt.get('parent_experiment_id'))} "
+            f"verdict={_blank_none(last_attempt.get('verdict_status'))} "
+            f"val_bpb={_blank_none(last_attempt.get('val_bpb'))} "
+            f"records_ref={_blank_none(last_attempt.get('records_ref'))}\n"
+        )
+    else:
+        sys.stdout.write("- none\n")
+    sys.stdout.write(
+        "next_action: "
+        f"kind={_blank_none(next_action.get('kind'))} "
+        f"base_attempt_id={_blank_none(next_action.get('base_attempt_id'))} "
+        f"reason={_blank_none(next_action.get('reason'))}\n"
+    )
+    sys.stdout.write("tree:\n")
+    if not result.tree.nodes:
+        sys.stdout.write("- none\n")
+    for node in result.tree.nodes:
+        indent = "  " * node.depth
+        records_ref = node.lineage.get("records_ref") or ""
+        sys.stdout.write(
+            f"{indent}- depth={node.depth} attempt_id={node.attempt_id[:8]} "
+            f"parent={node.parent_experiment_id or ''} "
+            f"verdict={node.verdict.get('status') or ''} "
+            f"val_bpb={_blank_none(node.metric.get('value'))} "
+            f"records_ref={records_ref}\n"
+        )
+        if node.diagnostics:
+            sys.stdout.write(f"{indent}  diagnostics={','.join(node.diagnostics)}\n")
+    if result.tree.diagnostics:
+        sys.stdout.write(f"diagnostics: {','.join(result.tree.diagnostics)}\n")
+
+
 def _print_next_result(result: TaskRunNextResult) -> None:
     sys.stdout.write(f"task_run_id: {result.task_run.id}\n")
     sys.stdout.write(f"task_status: {result.task_run.status}\n")
@@ -872,6 +952,10 @@ def _step_record_label(step: TaskStepRecord | None) -> str:
 
 def _blank_none(value: object) -> object:
     return "" if value is None else value
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _artifact_primary_reason(artifact: Any) -> str:

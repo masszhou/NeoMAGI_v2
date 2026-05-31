@@ -7,6 +7,7 @@ from cli.core.taskrun_parameter_golf_artifacts import (
     parameter_golf_artifact_summary,
     parameter_golf_artifacts,
 )
+from cli.core.taskrun_parameter_golf_trajectory import p3_trajectory_summary
 from storage.taskrun_repository import TaskExperimentRecord, TaskRunRecord
 
 
@@ -64,6 +65,18 @@ def p3_artifact_summary(
     return parameter_golf_artifact_summary(experiments)
 
 
+def p3_experiment_trajectory_summary(
+    experiments: list[TaskExperimentRecord],
+    *,
+    task_run_id: str | None = None,
+) -> dict[str, object] | None:
+    summary = p3_trajectory_summary(experiments, task_run_id=task_run_id)
+    tree = summary.get("tree")
+    if isinstance(tree, dict) and tree.get("attempt_count"):
+        return summary
+    return None
+
+
 def experiment_next_action(
     record: TaskRunRecord,
     experiment: TaskExperimentRecord | None,
@@ -97,5 +110,6 @@ __all__ = [
     "experiment_preview",
     "experiment_primary_metric",
     "p3_artifact_summary",
+    "p3_experiment_trajectory_summary",
     "parameter_golf_artifacts",
 ]

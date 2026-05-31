@@ -13,9 +13,13 @@ from cli.core.parameter_golf_contract import (
     BASELINE_MEAN_VAL_BPB,
     BASELINE_N,
     BASELINE_SAMPLE_STD_VAL_BPB,
+    ELIGIBILITY_FINAL_SIGNIFICANCE_PAYLOAD_UNEXPECTED,
     REQUIRED_BUNDLE_DIRS,
     REQUIRED_BUNDLE_FILES,
     SUBMISSION_ARTIFACT_CAP_BYTES,
+    VERDICT_ACCEPTED,
+    VERDICT_ERROR,
+    VERDICT_REJECTED,
 )
 from storage.taskrun_repository import TaskExperimentRecord, TaskRunRecord
 
@@ -106,7 +110,7 @@ def project_parameter_golf_artifact(
 
     reasons: list[str] = []
     verdict_status = _string(verdict.get("status"))
-    if verdict_status != "accepted":
+    if verdict_status != VERDICT_ACCEPTED:
         reasons.append("verdict_not_accepted")
     if val_reason:
         reasons.append(val_reason)
@@ -123,7 +127,7 @@ def project_parameter_golf_artifact(
     if not (records_ref or content_ref):
         reasons.append("missing_records_ref")
     if significance.get("final") is True and not _has_statistical_fields(significance):
-        reasons.append("final_significance_payload_unexpected")
+        reasons.append(ELIGIBILITY_FINAL_SIGNIFICANCE_PAYLOAD_UNEXPECTED)
 
     return ParameterGolfArtifact(
         attempt_id=experiment.id,
@@ -202,9 +206,9 @@ def parameter_golf_artifact_summary(
     return {
         "current_best": best.to_dict() if best is not None else None,
         "count": len(artifacts),
-        "accepted_count": _count_status(artifacts, "accepted"),
-        "rejected_count": _count_status(artifacts, "rejected"),
-        "error_count": _count_status(artifacts, "error"),
+        "accepted_count": _count_status(artifacts, VERDICT_ACCEPTED),
+        "rejected_count": _count_status(artifacts, VERDICT_REJECTED),
+        "error_count": _count_status(artifacts, VERDICT_ERROR),
         "baseline": {
             "metric": ARTIFACT_METRIC_NAME,
             "direction": ARTIFACT_METRIC_DIRECTION,

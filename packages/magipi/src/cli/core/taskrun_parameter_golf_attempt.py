@@ -23,13 +23,20 @@ from cli.core.parameter_golf_contract import (
     BASELINE_MEAN_VAL_BPB,
     BASELINE_N,
     BASELINE_SAMPLE_STD_VAL_BPB,
+    DECISION_BLOCKED,
+    DECISION_KEEP,
     DEFAULT_REFERENCE_BUDGET,
     DEFAULT_TIMEOUT_SECONDS,
     METRIC_SOURCE,
     REQUIRED_BUNDLE_DIRS,
     REQUIRED_BUNDLE_FILES,
+    SIGNIFICANCE_REASON_SINGLE_RUN_ONLY,
     SUBMISSION_ARTIFACT_CAP_BYTES,
+    VERDICT_ACCEPTED,
+    VERDICT_ERROR,
+    VERDICT_REJECTED,
 )
+from cli.core.taskrun_parameter_golf_artifacts import is_parameter_golf_artifact_record
 from cli.core.taskrun_service import TaskRunResult, TaskRunService
 from cli.core.taskrun_step import TaskRunRuntimeOptions, TaskRunStepOutcome
 from policy.redaction import redacted_command_preview
@@ -270,7 +277,7 @@ def run_parameter_golf_harness(
         or any(reason.startswith("missing_submission_file:") for reason in reasons)
     )
     if invalid:
-        verdict = {"status": "rejected", "reasons": _dedupe(reasons)}
+        verdict = {"status": VERDICT_REJECTED, "reasons": _dedupe(reasons)}
         return ParameterGolfHarnessResult(
             status="invalid",
             metrics=metrics,
@@ -287,10 +294,10 @@ def run_parameter_golf_harness(
             "improved_over_baseline_mean",
             "not_final_significance_verdict",
         ]
-        verdict_status = "accepted"
+        verdict_status = VERDICT_ACCEPTED
     else:
         verdict_reasons = ["single_run_valid_evidence", "not_better_than_baseline_mean"]
-        verdict_status = "rejected"
+        verdict_status = VERDICT_REJECTED
     return ParameterGolfHarnessResult(
         status="valid",
         metrics=metrics,
@@ -438,6 +445,7 @@ def run_single_parameter_golf_attempt(
             updated_at=service._now_iso(),
         )
     service._validate_step_ready(record, workspace_root, explicit=bool(id_or_prefix))
+    _validate_parent_experiment_id(service, record, options.parent_experiment_id)
     attempt_id = new_db_uuid()
     hypothesis = options.hypothesis_file.read_text(encoding="utf-8").strip()
     runtime_options = TaskRunRuntimeOptions()
@@ -526,7 +534,10 @@ def run_single_parameter_golf_attempt(
                 "required_files": REQUIRED_BUNDLE_FILES,
                 "required_dirs": REQUIRED_BUNDLE_DIRS,
             },
-            "significance": {"final": False, "reason": "single_run_only"},
+            "significance": {
+                "final": False,
+                "reason": SIGNIFICANCE_REASON_SINGLE_RUN_ONLY,
+            },
             "reason": ", ".join(harness.verdict.get("reasons", [])),
         },
         decision=decision,
@@ -720,11 +731,11 @@ def _error_harness_result(
     details: Mapping[str, Any],
 ) -> ParameterGolfHarnessResult:
     return ParameterGolfHarnessResult(
-        status="error",
+        status=VERDICT_ERROR,
         metrics={},
         budget_comparable=False,
         required_files_ok=False,
-        verdict={"status": "error", "reasons": [code]},
+        verdict={"status": VERDICT_ERROR, "reasons": [code]},
         reasons=[reason],
         details=dict(details),
     )
@@ -740,26 +751,52 @@ def _command_failure_harness(
     else:
         code = "run_failed"
     return ParameterGolfHarnessResult(
-        status="error",
+        status=VERDICT_ERROR,
         metrics={},
         budget_comparable=False,
         required_files_ok=False,
-        verdict={"status": "error", "reasons": [code]},
+        verdict={"status": VERDICT_ERROR, "reasons": [code]},
         reasons=[code],
         details={"command": command_record(command_result)},
     )
 
 
 def _compat_decision(verdict_status: str) -> str:
-    return "keep" if verdict_status == "accepted" else "blocked"
+    return DECISION_KEEP if verdict_status == VERDICT_ACCEPTED else DECISION_BLOCKED
 
 
 def _step_status_for_verdict(verdict_status: str) -> str:
-    if verdict_status == "accepted":
+    if verdict_status == VERDICT_ACCEPTED:
         return "done"
-    if verdict_status == "rejected":
+    if verdict_status == VERDICT_REJECTED:
         return "blocked"
     return "failed"
+
+
+def _validate_parent_experiment_id(
+    service: TaskRunService,
+    record: TaskRunRecord,
+    parent_experiment_id: str | None,
+) -> None:
+    if parent_experiment_id is None:
+        return
+    experiments = service.repository.list_experiments(record.id)
+    parent = next(
+        (
+            experiment
+            for experiment in experiments
+            if experiment.id == parent_experiment_id
+        ),
+        None,
+    )
+    if parent is None:
+        raise ValueError(
+            "--parent-experiment-id must reference a Parameter Golf attempt in the same TaskRun"
+        )
+    if not is_parameter_golf_artifact_record(parent):
+        raise ValueError(
+            "--parent-experiment-id must reference a P3 Parameter Golf attempt"
+        )
 
 
 def _append_attempt_events(

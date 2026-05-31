@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,10 @@ from cli.core.taskrun_parameter_golf_artifacts import (
     RecordsConsistencyCheck,
     project_parameter_golf_artifact,
 )
+from cli.core.taskrun_parameter_golf_trajectory import (
+    p3_trajectory_summary,
+    project_parameter_golf_attempt_tree,
+)
 from cli.core.taskrun_views import (
     TaskRunArtifactsResult,
     TaskRunEventsResult,
@@ -27,6 +32,7 @@ from cli.core.taskrun_views import (
     TaskRunListItem,
     TaskRunListResult,
     TaskRunNextResult,
+    TaskRunTrajectoryResult,
     TaskStepCounts,
 )
 from storage.taskrun_repository import (
@@ -150,6 +156,14 @@ class _FakeService:
             task_run=self.result.task_run,
             artifacts=[],
             current_best_attempt_id=None,
+        )
+
+    def trajectory(self, task_id: str | None, cwd: Path) -> TaskRunTrajectoryResult:
+        self.calls.append(("trajectory", task_id, cwd))
+        return TaskRunTrajectoryResult(
+            task_run=self.result.task_run,
+            summary=p3_trajectory_summary([]),
+            tree=project_parameter_golf_attempt_tree([]),
         )
 
     def close(self, task_id: str | None, cwd: Path) -> TaskRunResult:
@@ -729,6 +743,72 @@ def test_taskrun_artifacts_verify_records_prints_check_result(
     assert service.calls[0][0] == "artifacts"
     assert service.calls[0][3] is True
     assert "records_check=records_metric_mismatch" in captured.out
+
+
+def test_taskrun_trajectory_routes_and_prints_tree(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeService(_result(tmp_path))
+    root = _artifact_experiment("000010", val_bpb=1.54)
+    child = _artifact_experiment("000011", val_bpb=1.70, verdict_status="rejected")
+    child = replace(
+        child,
+        diff_ref={**child.diff_ref, "parent_experiment_id": root.id},
+        decision="blocked",
+        created_at="2026-05-30T00:01:00+00:00",
+    )
+
+    def fake_trajectory(task_id: str | None, cwd: Path) -> TaskRunTrajectoryResult:
+        service.calls.append(("trajectory", task_id, cwd))
+        experiments = [root, child]
+        return TaskRunTrajectoryResult(
+            task_run=service.result.task_run,
+            summary=p3_trajectory_summary(experiments),
+            tree=project_parameter_golf_attempt_tree(experiments),
+        )
+
+    service.trajectory = fake_trajectory
+    _stub_runtime(monkeypatch, service)
+
+    rc = taskrun_commands.run_taskrun_command(["trajectory", "019e2200"], prog="magipi")
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert service.calls[0][0] == "trajectory"
+    assert "current_best:" in captured.out
+    assert "last_attempt:" in captured.out
+    assert "next_action: kind=continue_from_best" in captured.out
+    assert "tree:" in captured.out
+    assert "depth=1" in captured.out
+
+
+def test_taskrun_attempt_parser_accepts_parent_experiment_id() -> None:
+    parser = taskrun_commands._build_parser("magipi")
+
+    args = parser.parse_args(
+        [
+            "attempt",
+            "019e2200",
+            "--anchor",
+            "parameter-golf-mini",
+            "--workspace",
+            ".",
+            "--hypothesis-file",
+            "hypothesis.md",
+            "--command",
+            "python train_gpt.py",
+            "--seed",
+            "42",
+            "--submission-file",
+            "train_gpt.py",
+            "--parent-experiment-id",
+            "019e2200-0000-7000-8000-000000000010",
+        ]
+    )
+
+    assert args.parent_experiment_id == "019e2200-0000-7000-8000-000000000010"
 
 
 def test_taskrun_step_passes_runtime_options_and_prints_step(

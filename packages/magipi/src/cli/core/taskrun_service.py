@@ -22,11 +22,16 @@ from cli.core.taskrun_experiment_summary import (
     experiment_next_action,
     experiment_preview,
     p3_artifact_summary,
+    p3_experiment_trajectory_summary,
 )
 from cli.core.taskrun_parameter_golf_artifacts import (
     current_best_parameter_golf_artifact,
     parameter_golf_artifacts,
     verify_parameter_golf_records,
+)
+from cli.core.taskrun_parameter_golf_trajectory import (
+    p3_trajectory_summary,
+    project_parameter_golf_attempt_tree,
 )
 from cli.core.taskrun_host_contract import (
     TaskRunHostContext,
@@ -68,6 +73,7 @@ from cli.core.taskrun_views import (
     TaskRunHistoryResult,
     TaskRunListResult,
     TaskRunNextResult,
+    TaskRunTrajectoryResult,
     build_taskrun_history,
     build_taskrun_list,
     build_taskrun_next,
@@ -271,6 +277,25 @@ class TaskRunService:
             artifacts=artifacts,
             current_best_attempt_id=best.attempt_id if best is not None else None,
             checks=checks,
+        )
+
+    def trajectory(
+        self,
+        id_or_prefix: str | None,
+        cwd: str | Path,
+    ) -> TaskRunTrajectoryResult:
+        workspace_root = _workspace_root(cwd)
+        self.recover_stale_running(workspace_root)
+        record = self._select_task_run(workspace_root, id_or_prefix)
+        experiments = self.repository.list_experiments(record.id)
+        tree = project_parameter_golf_attempt_tree(
+            experiments,
+            task_run_id=record.id,
+        )
+        return TaskRunTrajectoryResult(
+            task_run=record,
+            summary=p3_trajectory_summary(experiments, task_run_id=record.id),
+            tree=tree,
         )
 
     def step(
@@ -801,6 +826,12 @@ class TaskRunService:
         p3_summary = p3_artifact_summary(experiments)
         if p3_summary is not None:
             summary["p3_artifacts"] = p3_summary
+        p3_trajectory = p3_experiment_trajectory_summary(
+            experiments,
+            task_run_id=record.id,
+        )
+        if p3_trajectory is not None:
+            summary["p3_trajectory"] = p3_trajectory
         return summary
 
     def _is_stale(self, record: TaskRunRecord, now_dt: datetime) -> bool:
