@@ -31,6 +31,11 @@ from cli.core.taskrun_parameter_golf_attempt import (
     ParameterGolfAttemptResult,
     run_single_parameter_golf_attempt,
 )
+from cli.core.taskrun_parameter_golf_loop import (
+    ParameterGolfLoopOptions,
+    ParameterGolfLoopResult,
+    run_parameter_golf_attempt_loop,
+)
 from cli.core.taskrun_projection import task_event_to_dict
 from cli.core.taskrun_runner import TaskRunHeadlessRunner
 from cli.core.taskrun_service import (
@@ -68,6 +73,7 @@ TaskRunCommandResult = (
     TaskRunResult
     | TaskRunAutoRunResult
     | ParameterGolfAttemptResult
+    | ParameterGolfLoopResult
     | TaskRunArtifactsResult
     | TaskRunListResult
     | TaskRunHistoryResult
@@ -97,10 +103,14 @@ def run_taskrun_command(argv: list[str], *, prog: str) -> int:
 def _execute_command(args: argparse.Namespace, cwd: Path) -> TaskRunCommandResult:
     permission_profile = (
         _load_permission_profile_snapshot(args.permission, cwd)
-        if args.cmd == "start" or (args.cmd in {"run", "attempt"} and args.permission)
+        if args.cmd == "start"
+        or (args.cmd in {"run", "attempt", "attempt-loop"} and args.permission)
         else None
     )
-    if args.cmd in {"run", "attempt"} and permission_profile is not None:
+    if (
+        args.cmd in {"run", "attempt", "attempt-loop"}
+        and permission_profile is not None
+    ):
         _validate_run_permission_profile(permission_profile)
     runtime_options = (
         _load_runtime_options(args, cwd) if args.cmd in {"step", "run"} else None
@@ -173,6 +183,7 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     _add_step_command(sub)
     _add_run_command(sub)
     _add_attempt_command(sub)
+    _add_attempt_loop_command(sub)
     _add_cancel_command(sub)
     _add_close_command(sub)
     return parser
@@ -357,6 +368,76 @@ def _add_attempt_command(
     )
 
 
+def _add_attempt_loop_command(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    loop = sub.add_parser(
+        "attempt-loop",
+        help="Run a P3 Mini Parameter Golf autonomous multi-attempt loop.",
+    )
+    loop.add_argument(
+        "id", nargs="?", default=None, help="TaskRun id or unique prefix."
+    )
+    loop.add_argument(
+        "--anchor",
+        required=True,
+        choices=(ANCHOR_NAME,),
+        help="Anchor harness to use. M5 supports parameter-golf-mini only.",
+    )
+    loop.add_argument(
+        "--permission",
+        choices=BUILTIN_PERMISSION_PROFILE_NAMES,
+        default=None,
+        help="Persist a host-command permission profile before running the loop.",
+    )
+    loop.add_argument(
+        "--workspace",
+        required=True,
+        type=Path,
+        metavar="PATH",
+        help="Explicit Parameter Golf workspace.",
+    )
+    loop.add_argument("--max-attempts", required=True, type=int, metavar="N")
+    loop.add_argument(
+        "--no-improvement-patience",
+        type=int,
+        default=3,
+        metavar="N",
+    )
+    loop.add_argument(
+        "--invalid-attempt-patience",
+        type=int,
+        default=2,
+        metavar="N",
+    )
+    loop.add_argument(
+        "--final-significance-runs",
+        type=int,
+        default=0,
+        metavar="N",
+    )
+    loop.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=600,
+        metavar="N",
+    )
+    loop.add_argument("--seed-start", type=int, default=42, metavar="N")
+    loop.add_argument(
+        "--proposal-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="JSON array or JSONL actor proposals for deterministic loop execution.",
+    )
+    loop.add_argument(
+        "--actor-command",
+        default=None,
+        metavar="CMD",
+        help="Command run in --workspace that prints one proposal JSON object.",
+    )
+
+
 def _add_run_runtime_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model",
@@ -523,6 +604,25 @@ def _dispatch(
                 ),
                 permission_profile=permission_profile,
             )
+        case "attempt-loop":
+            return run_parameter_golf_attempt_loop(
+                service,
+                args.id,
+                cwd,
+                ParameterGolfLoopOptions(
+                    anchor=args.anchor,
+                    workspace=args.workspace,
+                    max_attempts=args.max_attempts,
+                    no_improvement_patience=args.no_improvement_patience,
+                    invalid_attempt_patience=args.invalid_attempt_patience,
+                    final_significance_runs=args.final_significance_runs,
+                    timeout_seconds=args.timeout_seconds,
+                    seed_start=args.seed_start,
+                    proposal_file=args.proposal_file,
+                    actor_command=args.actor_command,
+                ),
+                permission_profile=permission_profile,
+            )
         case "cancel":
             return service.cancel(args.id, cwd)
         case "close":
@@ -675,6 +775,9 @@ def _print_result(
     if isinstance(result, ParameterGolfAttemptResult):
         _print_attempt_result(result)
         return
+    if isinstance(result, ParameterGolfLoopResult):
+        _print_attempt_loop_result(result)
+        return
     task_run = result.task_run
     summary = result.summary
     sys.stdout.write(f"id: {task_run.id}\n")
@@ -714,6 +817,40 @@ def _print_attempt_result(result: ParameterGolfAttemptResult) -> None:
         f"reasons: {', '.join(str(item) for item in verdict.get('reasons', []))}\n"
     )
     sys.stdout.write(f"projection_path: {result.task_result.projection.path}\n")
+
+
+def _print_attempt_loop_result(result: ParameterGolfLoopResult) -> None:
+    sys.stdout.write(f"id: {result.task_run.id}\n")
+    sys.stdout.write(f"status: {result.task_run.status}\n")
+    sys.stdout.write("iterations:\n")
+    if not result.iterations:
+        sys.stdout.write("- none\n")
+    for iteration in result.iterations:
+        sys.stdout.write(f"- iteration: {iteration.index}\n")
+        sys.stdout.write(f"  attempt_id: {iteration.attempt_id or ''}\n")
+        sys.stdout.write(f"  parent: {iteration.parent_experiment_id or ''}\n")
+        sys.stdout.write(f"  proposal_valid: {str(iteration.proposal_valid).lower()}\n")
+        sys.stdout.write(f"  verdict_status: {iteration.verdict_status or ''}\n")
+        sys.stdout.write(f"  val_bpb: {_blank_none(iteration.val_bpb)}\n")
+        sys.stdout.write(
+            f"  artifact_size_bytes: {_blank_none(iteration.artifact_size_bytes)}\n"
+        )
+        sys.stdout.write(f"  best_delta: {_blank_none(iteration.best_delta)}\n")
+        sys.stdout.write(f"  records_ref: {iteration.records_ref or ''}\n")
+        sys.stdout.write(f"  stop_candidate: {iteration.stop_candidate or ''}\n")
+        if iteration.reason:
+            sys.stdout.write(f"  reason: {_goal_preview(iteration.reason)}\n")
+    current_best = _mapping(result.trajectory.get("current_best"))
+    best_attempt = current_best.get("attempt_id") if current_best else ""
+    sys.stdout.write(f"stop_reason: {result.stop_reason}\n")
+    sys.stdout.write(f"anchor_stop_detail: {result.anchor_stop_detail or ''}\n")
+    sys.stdout.write(f"current_best_attempt_id: {best_attempt or ''}\n")
+    if result.final_significance is not None:
+        sys.stdout.write("final_significance:\n")
+        sys.stdout.write(
+            json.dumps(result.final_significance, indent=2, sort_keys=True)
+        )
+        sys.stdout.write("\n")
 
 
 def _print_auto_run_result(result: TaskRunAutoRunResult) -> None:

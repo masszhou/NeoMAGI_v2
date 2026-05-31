@@ -253,7 +253,9 @@ class PostgresTaskRunRepository:
                     (
                         status,
                         heartbeat_at,
-                        _jsonb(_dump_json(dict(summary))) if summary is not None else None,
+                        _jsonb(_dump_json(dict(summary)))
+                        if summary is not None
+                        else None,
                         closed_at,
                         now,
                         task_run_id,
@@ -469,7 +471,9 @@ class PostgresTaskRunRepository:
         params: list[Any] = [task_run_id]
         where = "task_run_id = %s"
         if after_event_id is not None:
-            cursor_occurred_at, cursor_id = self._event_cursor(task_run_id, after_event_id)
+            cursor_occurred_at, cursor_id = self._event_cursor(
+                task_run_id, after_event_id
+            )
             where += " AND (occurred_at, id) > (%s, %s)"
             params.extend([cursor_occurred_at, cursor_id])
         limit_sql = "LIMIT %s" if limit is not None else ""
@@ -705,6 +709,34 @@ class PostgresTaskRunRepository:
         except Exception:
             self._conn.rollback()
             raise
+        return _task_experiment_from_row(row)
+
+    def update_experiment_result(
+        self,
+        experiment_id: str,
+        result: Mapping[str, Any],
+    ) -> TaskExperimentRecord:
+        _validate_uuid("experiment_id", experiment_id)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {self._schema}.task_experiments
+                    SET result = %s
+                    WHERE id = %s
+                    RETURNING id, task_run_id, step_id, hypothesis, change,
+                              command, metrics, result, decision, diff_ref,
+                              created_at
+                    """,
+                    (_jsonb(_dump_json(dict(result))), experiment_id),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if row is None:
+            raise KeyError(f"task experiment not found: {experiment_id}")
         return _task_experiment_from_row(row)
 
     def list_experiments(self, task_run_id: str) -> list[TaskExperimentRecord]:

@@ -7,6 +7,7 @@ import math
 import re
 import shlex
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -328,10 +329,10 @@ def write_attempt_bundle(
     records_dir.mkdir(parents=True, exist_ok=False)
     submission_dir = records_dir / "submission"
     submission_dir.mkdir()
-    for source in submission_files:
-        target = submission_dir / source.name
-        if source.exists() and source.is_file():
-            shutil.copy2(source, target)
+    for submission_path in submission_files:
+        target = submission_dir / submission_path.name
+        if submission_path.exists() and submission_path.is_file():
+            shutil.copy2(submission_path, target)
     artifact_size, artifact_files = submission_artifact_size(submission_dir)
     manifest = {
         "schema_version": 1,
@@ -366,7 +367,8 @@ def write_attempt_bundle(
             "submission_ref": f"records/{attempt_id}/submission",
             "files": artifact_files,
             "required_submission_files": [
-                f"submission/{source.name}" for source in submission_files
+                f"submission/{submission_path.name}"
+                for submission_path in submission_files
             ],
         },
         "verdict": {"status": "pending", "reasons": []},
@@ -499,11 +501,16 @@ def run_single_parameter_golf_attempt(
         auto_run_id=attempt_id,
         before_snapshot=before_snapshot,
     )
+    git_closeout = closeout_runtime_git_commit(
+        options.workspace,
+        attempt_id=attempt_id,
+    )
     diff_ref.update(
         {
             "records_ref": f"records/{attempt_id}",
             "parent_experiment_id": options.parent_experiment_id,
             "workspace_dirty": bool(diff_ref.get("status_after")),
+            **git_closeout,
         }
     )
     decision = _compat_decision(harness.verdict["status"])
@@ -847,6 +854,133 @@ def _workspace_command(workspace: Path, command: str) -> str:
     return f"cd {shlex.quote(str(workspace.resolve()))} && {command}"
 
 
+def closeout_runtime_git_commit(
+    workspace: Path, *, attempt_id: str
+) -> dict[str, object]:
+    workspace = workspace.resolve()
+    parent_commit = _git_output(workspace, "rev-parse", "HEAD")
+    if parent_commit is None:
+        return {
+            "commit_sha": None,
+            "branch": None,
+            "parent_commit": None,
+            "git_closeout": {
+                "status": "unavailable",
+                "reason": "workspace_is_not_git_repository",
+            },
+        }
+    original_ref = _current_git_ref(workspace, fallback=parent_commit)
+    branch = f"p3/parameter-golf/{attempt_id[:8]}"
+    checkout = _git_run(workspace, "checkout", "-B", branch)
+    if checkout.returncode != 0:
+        return {
+            "commit_sha": None,
+            "branch": branch,
+            "parent_commit": parent_commit,
+            "original_ref": original_ref,
+            "git_closeout": {
+                "status": "error",
+                "reason": "branch_checkout_failed",
+                "stderr": checkout.stderr.strip()[-500:],
+            },
+        }
+    add = _git_run(workspace, "add", "-A")
+    if add.returncode != 0:
+        result = {
+            "commit_sha": None,
+            "branch": branch,
+            "parent_commit": parent_commit,
+            "original_ref": original_ref,
+            "git_closeout": {
+                "status": "error",
+                "reason": "git_add_failed",
+                "stderr": add.stderr.strip()[-500:],
+            },
+        }
+        _restore_git_ref(workspace, result, original_ref)
+        return result
+    status = _git_output(workspace, "status", "--porcelain")
+    if not status:
+        result = {
+            "commit_sha": parent_commit,
+            "branch": branch,
+            "parent_commit": parent_commit,
+            "original_ref": original_ref,
+            "git_closeout": {"status": "clean"},
+        }
+        _restore_git_ref(workspace, result, original_ref)
+        return result
+    commit = _git_run(
+        workspace,
+        "commit",
+        "-m",
+        f"p3 parameter golf attempt {attempt_id}",
+    )
+    if commit.returncode != 0:
+        result = {
+            "commit_sha": None,
+            "branch": branch,
+            "parent_commit": parent_commit,
+            "original_ref": original_ref,
+            "git_closeout": {
+                "status": "error",
+                "reason": "git_commit_failed",
+                "stderr": commit.stderr.strip()[-500:],
+            },
+        }
+        _restore_git_ref(workspace, result, original_ref)
+        return result
+    commit_sha = _git_output(workspace, "rev-parse", "HEAD")
+    result = {
+        "commit_sha": commit_sha,
+        "branch": branch,
+        "parent_commit": parent_commit,
+        "original_ref": original_ref,
+        "git_closeout": {"status": "committed"},
+    }
+    _restore_git_ref(workspace, result, original_ref)
+    return result
+
+
+def _git_run(workspace: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ("git", *args),
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+
+
+def _git_output(workspace: Path, *args: str) -> str | None:
+    result = _git_run(workspace, *args)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _current_git_ref(workspace: Path, *, fallback: str) -> str:
+    branch = _git_output(workspace, "symbolic-ref", "--quiet", "--short", "HEAD")
+    return branch or fallback
+
+
+def _restore_git_ref(
+    workspace: Path,
+    payload: dict[str, object],
+    original_ref: str,
+) -> None:
+    restore = _git_run(workspace, "checkout", original_ref)
+    closeout = payload.get("git_closeout")
+    if not isinstance(closeout, dict):
+        return
+    if restore.returncode == 0:
+        closeout["restored_ref"] = original_ref
+        return
+    closeout["restore_error"] = restore.stderr.strip()[-500:]
+
+
 def _readme_text(
     *,
     attempt_id: str,
@@ -887,6 +1021,7 @@ __all__ = [
     "ParameterGolfHarnessError",
     "ParameterGolfHarnessResult",
     "parse_final_exact_val_bpb",
+    "closeout_runtime_git_commit",
     "run_parameter_golf_harness",
     "run_single_parameter_golf_attempt",
     "submission_artifact_size",

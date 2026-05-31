@@ -296,6 +296,13 @@ class TaskRunRepository(Protocol):
     ) -> TaskExperimentRecord:
         ...
 
+    def update_experiment_result(
+        self,
+        experiment_id: str,
+        result: Mapping[str, Any],
+    ) -> TaskExperimentRecord:
+        ...
+
     def list_experiments(self, task_run_id: str) -> list[TaskExperimentRecord]:
         ...
 

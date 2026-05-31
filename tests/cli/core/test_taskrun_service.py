@@ -449,6 +449,19 @@ class _FakeTaskRunRepository:
         self.experiments.append(experiment)
         return experiment
 
+    def update_experiment_result(
+        self,
+        experiment_id: str,
+        result: Mapping[str, Any],
+    ) -> TaskExperimentRecord:
+        for index, experiment in enumerate(self.experiments):
+            if experiment.id != experiment_id:
+                continue
+            updated = replace(experiment, result=dict(result))
+            self.experiments[index] = updated
+            return updated
+        raise KeyError(f"task experiment not found: {experiment_id}")
+
     def list_experiments(self, task_run_id: str) -> list[TaskExperimentRecord]:
         return sorted(
             [

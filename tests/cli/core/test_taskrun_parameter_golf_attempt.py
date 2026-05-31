@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from cli.core.taskrun_parameter_golf_attempt import (
     parse_final_exact_val_bpb,
     run_parameter_golf_harness,
     run_single_parameter_golf_attempt,
+    closeout_runtime_git_commit,
     submission_artifact_size,
     write_attempt_bundle,
 )
@@ -438,6 +440,58 @@ def test_single_attempt_rejects_missing_parent_before_host_command(
     assert called is False
 
 
+def test_runtime_git_closeout_commits_and_restores_original_branch(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py")
+    _git(tmp_path, "commit", "-m", "base")
+    parent = _git_output(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "train_gpt.py").write_text("print('changed')\n", encoding="utf-8")
+
+    result = closeout_runtime_git_commit(
+        tmp_path,
+        attempt_id="019e2200-0000-7000-8000-000000000999",
+    )
+
+    assert result["git_closeout"]["status"] == "committed"
+    assert result["parent_commit"] == parent
+    assert result["branch"] == "p3/parameter-golf/019e2200"
+    assert result["commit_sha"] != parent
+    assert result["git_closeout"]["restored_ref"] == "main"
+    assert _git_output(tmp_path, "branch", "--show-current") == "main"
+    assert (
+        _git_output(tmp_path, "rev-parse", "p3/parameter-golf/019e2200")
+        == result["commit_sha"]
+    )
+
+
+def test_runtime_git_closeout_restores_original_branch_on_commit_failure(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    _git(tmp_path, "config", "commit.gpgsign", "true")
+    (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py")
+    _git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-m", "base")
+    (tmp_path / "train_gpt.py").write_text("print('changed')\n", encoding="utf-8")
+
+    result = closeout_runtime_git_commit(
+        tmp_path,
+        attempt_id="019e2200-0000-7000-8000-000000000998",
+    )
+
+    assert result["git_closeout"]["status"] == "error"
+    assert result["git_closeout"]["reason"] == "git_commit_failed"
+    assert result["git_closeout"]["restored_ref"] == "main"
+    assert _git_output(tmp_path, "branch", "--show-current") == "main"
+
+
 def _valid_records_dir(
     tmp_path: Path,
     *,
@@ -486,3 +540,18 @@ def _host_result(
         reason=None,
         permission_decision_id=None,
     )
+
+
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(("git", *args), cwd=path, check=True, text=True)
+
+
+def _git_output(path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ("git", *args),
+        cwd=path,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    return result.stdout.strip()

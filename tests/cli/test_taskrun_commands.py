@@ -16,6 +16,10 @@ from cli.core.taskrun_event_payloads import (
 )
 from cli.core.taskrun_projection import TaskRunProjectionResult
 from cli.core.taskrun_service import TaskRunResult
+from cli.core.taskrun_parameter_golf_loop import (
+    ParameterGolfLoopIterationResult,
+    ParameterGolfLoopResult,
+)
 from cli.core.taskrun_parameter_golf_artifacts import (
     RecordsConsistencyCheck,
     project_parameter_golf_artifact,
@@ -809,6 +813,72 @@ def test_taskrun_attempt_parser_accepts_parent_experiment_id() -> None:
     )
 
     assert args.parent_experiment_id == "019e2200-0000-7000-8000-000000000010"
+
+
+def test_taskrun_attempt_loop_parser_accepts_loop_options() -> None:
+    parser = taskrun_commands._build_parser("magipi")
+
+    args = parser.parse_args(
+        [
+            "attempt-loop",
+            "019e2200",
+            "--anchor",
+            "parameter-golf-mini",
+            "--workspace",
+            ".",
+            "--max-attempts",
+            "3",
+            "--proposal-file",
+            "proposals.json",
+            "--final-significance-runs",
+            "3",
+        ]
+    )
+
+    assert args.cmd == "attempt-loop"
+    assert args.max_attempts == 3
+    assert args.proposal_file == Path("proposals.json")
+    assert args.final_significance_runs == 3
+
+
+def test_taskrun_attempt_loop_prints_iteration_stop_and_significance(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    base = _result(tmp_path)
+    result = ParameterGolfLoopResult(
+        task_run=base.task_run,
+        iterations=(
+            ParameterGolfLoopIterationResult(
+                index=1,
+                attempt_id="019e2200-0000-7000-8000-000000000100",
+                parent_experiment_id=None,
+                verdict_status="accepted",
+                val_bpb=1.54,
+                artifact_size_bytes=10,
+                records_ref="records/019e2200-0000-7000-8000-000000000100",
+                best_delta=None,
+                proposal_valid=True,
+            ),
+        ),
+        stop_reason="max_attempts_reached",
+        anchor_stop_detail=None,
+        trajectory={"current_best": {"attempt_id": "019e2200"}},
+        final_significance={
+            "final": False,
+            "reason": "insufficient_candidate_samples",
+            "sample_size": 0,
+        },
+        exit_code=0,
+    )
+
+    taskrun_commands._print_result(result, include_summary=False)
+
+    captured = capsys.readouterr()
+    assert "iterations:" in captured.out
+    assert "attempt_id: 019e2200-0000-7000-8000-000000000100" in captured.out
+    assert "stop_reason: max_attempts_reached" in captured.out
+    assert "final_significance:" in captured.out
 
 
 def test_taskrun_step_passes_runtime_options_and_prints_step(
