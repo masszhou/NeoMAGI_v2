@@ -1,0 +1,182 @@
+/* ─────────────────────────────────────────────────────────────────────
+   NeoMAGI design tokens — colors + type
+   Kanagawa Wave palette · Geist (Sans/Mono) + Shippori Mincho display.
+   Source of truth: dashboard prototype (reference/dashboard/index.html).
+───────────────────────────────────────────────────────────────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Shippori+Mincho:wght@500;700&display=swap");
+
+:root {
+  /* ─── Kanagawa Wave — core palette ─── */
+  --wave-deep:        #1B3A6B;  /* prussian blue — left rail, status rail, primary brand */
+  --wave-deep-2:      #16315a;  /* deeper rail plate (active state) */
+  --wave-mid:         #27568F;  /* mid blue — accents, links, audit chip */
+  --wave-foam:        #A8C5D6;  /* foam — hover wash, completed chip bg */
+
+  --foam-white:       #F5F1E8;  /* off-white — rail text, card inner panels */
+  --washi-cream:      #EFE5D0;  /* primary canvas — paper cream */
+  --washi-sand:       #E2D4B5;  /* card surface — slightly tanner paper */
+  --washi-sand-2:     #d8c8a4;  /* deepest paper — cancelled / muted bg */
+
+  --fuji-coral:       #D88A6C;  /* coral — primary accent stamp, active channel */
+  --fuji-coral-deep:  #B45E3F;  /* deep coral — danger / failure / numbering / error bg */
+  --sunrise-peach:    #E8B79A;  /* peach — warning bg, in-progress wash */
+  --matcha:           #B7DC9E;  /* matcha green — online / improvement / DONE */
+
+  --ink-black:        #1A1A1A;  /* primary text */
+  --ink-mute:         #6B6258;  /* warm mute — labels, metadata, captions */
+
+  /* ─── Chat-product accent extension ─── */
+  /* The chat app uses slightly more saturated chip colors on top of the
+     same paper substrate. These are layered ON the Kanagawa base, not
+     replacing it. */
+  --chip-todo:        #F5B05A;  /* TODO column header */
+  --chip-progress:    #6EC3A8;  /* IN PROGRESS */
+  --chip-review:      #C7B8E8;  /* IN REVIEW (lavender) */
+  --chip-done:        var(--matcha); /* DONE / metric-improved (derives from palette) */
+  --chip-closed:      #C8C2B6;  /* CLOSED / archived */
+  --chip-mention:     #C7B8E8;  /* @mention pill bg */
+  --tab-active:       #F5C84B;  /* yellow tab indicator */
+  --cta-pink:         #F285B5;  /* "+ New Task" call-to-action */
+
+  /* ─── Borders ─── */
+  --border:        1px solid rgba(26, 26, 26, 0.70);   /* hard rule */
+  --border-soft:   1px solid rgba(26, 26, 26, 0.35);   /* secondary rule */
+  --divider:       1px solid rgba(26, 26, 26, 0.18);   /* internal divider */
+  --hairline:      1px solid rgba(26, 26, 26, 0.08);   /* table row */
+
+  /* ─── Elevation — flat, woodblock-print influenced ─── */
+  --ridge:        inset 0 1px 0 0 var(--foam-white);   /* paper ridge on cards */
+  --shadow-pop:   0 1px 0 0 rgba(26, 26, 26, 0.10);    /* the only drop shadow we use */
+
+  /* ─── Spacing scale (4px base) ─── */
+  --s-0: 0;
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 6px;
+  --s-4: 8px;
+  --s-5: 10px;
+  --s-6: 12px;
+  --s-7: 14px;
+  --s-8: 16px;
+  --s-9: 22px;
+  --s-10: 28px;
+  --s-12: 40px;
+
+  /* ─── Radii — almost always zero ─── */
+  --radius-0: 0;        /* default — square corners everywhere */
+  --radius-pill: 999px; /* status dots, avatars, pulse markers ONLY */
+
+  /* ─── Fonts ─── */
+  --font-sans:    "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-display: "Shippori Mincho", "Geist", serif;
+
+  /* tabular numerals are global */
+  font-feature-settings: "tnum" 1, "lnum" 1;
+
+  /* ─── Semantic foregrounds ─── */
+  --fg-1: var(--ink-black);    /* body text */
+  --fg-2: var(--ink-mute);     /* secondary / metadata */
+  --fg-inverse: var(--foam-white);
+
+  /* ─── Semantic backgrounds ─── */
+  --bg-canvas:  var(--washi-cream);
+  --bg-card:    var(--washi-sand);
+  --bg-inset:   var(--foam-white);   /* deeper panel inside a card */
+  --bg-rail:    var(--wave-deep);    /* dark rails (left + footer) */
+
+  /* ─── Semantic tones — status / signals ─── */
+  --tone-ok:      var(--wave-mid);
+  --tone-info:    var(--wave-deep);
+  --tone-warn:    var(--sunrise-peach);
+  --tone-danger:  var(--fuji-coral-deep);
+  --tone-running: var(--wave-mid);
+  --tone-success: var(--wave-foam);
+  --tone-online:  var(--matcha);   /* member/assistant online indicator */
+  --tone-offline: var(--ink-mute);  /* member/assistant offline indicator */
+
+  /* ─── Type scale ─── */
+  /* Display — Shippori Mincho. Brand voice, used SPARINGLY for titles. */
+  --t-display-xl: 700 32px/1.1   var(--font-display);  /* page hero (rare) */
+  --t-display-lg: 700 26px/1.1   var(--font-display);  /* channel header */
+  --t-display-md: 700 22px/1.0   var(--font-display);  /* middle pane title */
+  --t-display-sm: 700 17px/1.25  var(--font-display);  /* live block goal */
+
+  /* Body — Geist */
+  --t-body:    400 13px/1.45  var(--font-sans);
+  --t-body-em: 600 13px/1.45  var(--font-sans);
+  --t-small:   400 12px/1.4   var(--font-sans);
+  --t-tiny:    400 11px/1.3   var(--font-sans);
+
+  /* Mono — Geist Mono. Used for data, IDs, channel names, timestamps,
+     keyboard shortcuts, raw subjects, technical metadata. */
+  --t-mono:        400 11px/1.4 var(--font-mono);
+  --t-mono-em:     600 11px/1.4 var(--font-mono);
+  --t-mono-small:  400 10.5px/1.3 var(--font-mono);
+
+  /* Label — uppercase tracked Sans, used for subheads and chips */
+  --t-label:    600 10px/1   var(--font-sans);
+  --t-label-sm: 600 9.5px/1  var(--font-sans);
+  --label-tracking: 0.10em;
+
+  /* ─── Layout constants from dashboard prototype ─── */
+  --rail-w: 64px;        /* left icon rail */
+  --middle-w: 232px;     /* middle channel pane */
+  --status-h: 22px;      /* footer status rail */
+  --topbar-h: 60px;      /* chat-product top channel header */
+
+  /* paper grain (mix-blend multiply over canvas) */
+  --grain-opacity: 0.10;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Semantic element styles
+   Use these as a baseline rather than re-styling raw tags.
+───────────────────────────────────────────────────────────────────── */
+
+body {
+  font: var(--t-body);
+  color: var(--fg-1);
+  background: var(--bg-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, .h1 { font: var(--t-display-lg); letter-spacing: -0.01em; margin: 0; }
+h2, .h2 { font: var(--t-display-md); letter-spacing: -0.01em; margin: 0; }
+h3, .h3 { font: var(--t-display-sm); letter-spacing: 0;       margin: 0; }
+h4, .h4 { font: var(--t-body-em);    margin: 0; }
+
+p, .body  { font: var(--t-body);  color: var(--fg-1); }
+small, .small { font: var(--t-small); color: var(--fg-2); }
+
+code, kbd, samp, .mono {
+  font: var(--t-mono);
+  color: var(--fg-1);
+}
+
+.label-eyebrow {
+  font: var(--t-label);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+
+a {
+  color: var(--wave-mid);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:hover { color: var(--wave-deep); }
+
+::selection { background: var(--fuji-coral); color: var(--ink-black); }
+
+/* The standard paper-grain overlay. Drop a <div class="paper-grain"></div>
+   as the first child of <body>. */
+.paper-grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.92' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.10  0 0 0 0 0.10  0 0 0 0 0.08  0 0 0 0.55 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
