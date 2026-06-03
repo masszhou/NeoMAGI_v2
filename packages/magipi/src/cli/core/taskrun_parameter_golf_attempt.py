@@ -450,6 +450,7 @@ def run_single_parameter_golf_attempt(
     _validate_parent_experiment_id(service, record, options.parent_experiment_id)
     attempt_id = new_db_uuid()
     hypothesis = options.hypothesis_file.read_text(encoding="utf-8").strip()
+    ensure_runtime_records_gitignore(options.workspace)
     runtime_options = TaskRunRuntimeOptions()
     _summary, running_run, step = service._start_step(
         record,
@@ -854,6 +855,15 @@ def _workspace_command(workspace: Path, command: str) -> str:
     return f"cd {shlex.quote(str(workspace.resolve()))} && {command}"
 
 
+def ensure_runtime_records_gitignore(workspace: Path) -> Path:
+    records_root = workspace.resolve() / "records"
+    records_root.mkdir(parents=True, exist_ok=True)
+    ignore_path = records_root / ".gitignore"
+    if not ignore_path.exists():
+        ignore_path.write_text("*\n", encoding="utf-8")
+    return ignore_path
+
+
 def closeout_runtime_git_commit(
     workspace: Path, *, attempt_id: str
 ) -> dict[str, object]:
@@ -869,6 +879,7 @@ def closeout_runtime_git_commit(
                 "reason": "workspace_is_not_git_repository",
             },
         }
+    ensure_runtime_records_gitignore(workspace)
     original_ref = _current_git_ref(workspace, fallback=parent_commit)
     branch = f"p3/parameter-golf/{attempt_id[:8]}"
     checkout = _git_run(workspace, "checkout", "-B", branch)
@@ -884,7 +895,7 @@ def closeout_runtime_git_commit(
                 "stderr": checkout.stderr.strip()[-500:],
             },
         }
-    add = _git_run(workspace, "add", "-A")
+    add = _git_run(workspace, "add", "-A", "--", ".", ":(exclude)records")
     if add.returncode != 0:
         result = {
             "commit_sha": None,
@@ -899,14 +910,28 @@ def closeout_runtime_git_commit(
         }
         _restore_git_ref(workspace, result, original_ref)
         return result
-    status = _git_output(workspace, "status", "--porcelain")
-    if not status:
+    cached_diff = _git_run(workspace, "diff", "--cached", "--quiet")
+    if cached_diff.returncode == 0:
         result = {
             "commit_sha": parent_commit,
             "branch": branch,
             "parent_commit": parent_commit,
             "original_ref": original_ref,
             "git_closeout": {"status": "clean"},
+        }
+        _restore_git_ref(workspace, result, original_ref)
+        return result
+    if cached_diff.returncode > 1:
+        result = {
+            "commit_sha": None,
+            "branch": branch,
+            "parent_commit": parent_commit,
+            "original_ref": original_ref,
+            "git_closeout": {
+                "status": "error",
+                "reason": "git_diff_cached_failed",
+                "stderr": cached_diff.stderr.strip()[-500:],
+            },
         }
         _restore_git_ref(workspace, result, original_ref)
         return result
@@ -1022,6 +1047,7 @@ __all__ = [
     "ParameterGolfHarnessResult",
     "parse_final_exact_val_bpb",
     "closeout_runtime_git_commit",
+    "ensure_runtime_records_gitignore",
     "run_parameter_golf_harness",
     "run_single_parameter_golf_attempt",
     "submission_artifact_size",

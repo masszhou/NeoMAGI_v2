@@ -184,6 +184,44 @@ def test_loop_runs_root_and_child_attempts_from_db_trajectory(
     ) == 2
 
 
+def test_loop_records_command_seed_for_same_seed_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _FakeTaskRunRepository()
+    record = _seed_record(repo, tmp_path)
+    service = _service(repo)
+    _write_train_file(tmp_path)
+    proposal_file = _proposal_file(
+        tmp_path,
+        [
+            _proposal(run_command="SEED=42 MAX_WALLCLOCK_SECONDS=480 VOCAB_SIZE=1024 python train_gpt.py"),
+            _proposal(run_command="SEED=42 MAX_WALLCLOCK_SECONDS=480 VOCAB_SIZE=1024 python train_gpt.py"),
+        ],
+    )
+    fake = _FakeAttemptProducer(
+        [
+            _AttemptSpec(VERDICT_ACCEPTED, 1.596),
+            _AttemptSpec(VERDICT_ACCEPTED, 1.590),
+        ]
+    )
+    monkeypatch.setattr(loop, "run_single_parameter_golf_attempt", fake)
+
+    loop.run_parameter_golf_attempt_loop(
+        service,
+        record.id,
+        tmp_path,
+        ParameterGolfLoopOptions(
+            anchor=ANCHOR_NAME,
+            workspace=tmp_path,
+            max_attempts=2,
+            proposal_file=proposal_file,
+        ),
+    )
+
+    assert fake.seeds == [42, 42]
+
+
 def test_loop_stops_after_consecutive_invalid_attempts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -463,13 +501,14 @@ def _proposal(
     *,
     base_attempt_id: str | None = None,
     stop_request: str | None = None,
+    run_command: str = "MAX_WALLCLOCK_SECONDS=480 VOCAB_SIZE=1024 python train_gpt.py",
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "hypothesis": "try a smaller cache",
         "base_attempt_id": base_attempt_id,
         "expected_metric_direction": "lower val_bpb",
         "change_summary": "edit train_gpt.py only",
-        "run_command": "MAX_WALLCLOCK_SECONDS=480 VOCAB_SIZE=1024 python train_gpt.py",
+        "run_command": run_command,
         "submission_files": ["train_gpt.py"],
         "risk_flags": [],
     }
@@ -503,6 +542,7 @@ class _FakeAttemptProducer:
     def __init__(self, specs: list[_AttemptSpec]) -> None:
         self.specs = specs
         self.parents: list[str | None] = []
+        self.seeds: list[int] = []
 
     def __call__(
         self,
@@ -517,6 +557,7 @@ class _FakeAttemptProducer:
         index = len(self.parents)
         spec = self.specs[index]
         self.parents.append(options.parent_experiment_id)
+        self.seeds.append(options.seed)
         task_run = service.repository.get_task_run(id_or_prefix or "") or _task_run()
         attempt_id = f"019e2200-0000-7000-8000-0000000001{index:02d}"
         metrics = (

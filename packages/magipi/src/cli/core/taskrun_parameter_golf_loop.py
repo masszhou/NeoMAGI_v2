@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import statistics
 import subprocess
 from dataclasses import dataclass, replace
@@ -37,6 +38,7 @@ from cli.core.parameter_golf_contract import (
 from cli.core.taskrun_parameter_golf_attempt import (
     DEFAULT_TIMEOUT_SECONDS,
     ParameterGolfAttemptOptions,
+    ensure_runtime_records_gitignore,
     run_single_parameter_golf_attempt,
 )
 from cli.core.taskrun_parameter_golf_trajectory import p3_trajectory_summary
@@ -239,6 +241,7 @@ def run_parameter_golf_attempt_loop(
     permission_profile: Mapping[str, Any] | None = None,
 ) -> ParameterGolfLoopResult:
     validate_loop_options(options)
+    ensure_runtime_records_gitignore(options.workspace)
     workspace_root = str(Path(cwd).resolve())
     service.recover_stale_running(workspace_root)
     task_run = service._select_task_run(workspace_root, id_or_prefix)
@@ -319,7 +322,10 @@ def run_parameter_golf_attempt_loop(
                 workspace=options.workspace,
                 hypothesis_file=hypothesis_file,
                 command=proposal.run_command,
-                seed=options.seed_start + index - 1,
+                seed=_proposal_command_seed(
+                    proposal.run_command,
+                    fallback=options.seed_start + index - 1,
+                ),
                 timeout_seconds=options.timeout_seconds,
                 submission_files=proposal.submission_files,
                 parent_experiment_id=proposal.base_attempt_id,
@@ -541,6 +547,19 @@ def _proposal_with_default_base(
     if not isinstance(base_attempt_id, str) or not base_attempt_id:
         return proposal
     return replace(proposal, base_attempt_id=base_attempt_id)
+
+
+def _proposal_command_seed(command: str, *, fallback: int) -> int:
+    for token in shlex.split(command):
+        if not token.startswith("SEED="):
+            continue
+        value = token.removeprefix("SEED=")
+        try:
+            parsed = int(value)
+        except ValueError:
+            return fallback
+        return parsed if parsed >= 0 else fallback
+    return fallback
 
 
 def _attempt_stop_candidate(

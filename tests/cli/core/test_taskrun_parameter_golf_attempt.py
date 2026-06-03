@@ -12,6 +12,7 @@ from cli.core.taskrun_parameter_golf_attempt import (
     ANCHOR_NAME,
     ParameterGolfAttemptOptions,
     ParameterGolfHarnessError,
+    ensure_runtime_records_gitignore,
     parse_final_exact_val_bpb,
     run_parameter_golf_harness,
     run_single_parameter_golf_attempt,
@@ -395,6 +396,75 @@ def test_single_attempt_accepts_same_taskrun_parent(
     assert manifest["parent_experiment_id"] == parent.id
 
 
+def test_single_attempt_diff_ref_omits_runtime_records(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    repo = _FakeTaskRunRepository()
+    profile = build_permission_profile_snapshot(
+        "full",
+        {
+            "paths": {"allow": ["$WORKSPACE/**"]},
+            "commands": {"allow": ["python", "git"]},
+        },
+    )
+    record = _seed_record(repo, tmp_path, permission_profile=profile)
+    service = _service(repo)
+    hypothesis = _hypothesis(tmp_path)
+    train_gpt = tmp_path / "train_gpt.py"
+    train_gpt.write_text("print('ok')\n", encoding="utf-8")
+    _git(tmp_path, "add", "hypothesis.md", "train_gpt.py")
+    _git(tmp_path, "commit", "-m", "base")
+    monkeypatch.setattr(
+        pga,
+        "capture_workspace_snapshot",
+        lambda *args, **kwargs: {"git_head": "abc", "status": []},
+    )
+
+    def fake_capture_diff_ref(*args, **kwargs):
+        status = _git_output(
+            tmp_path, "status", "--porcelain=v1", "--untracked-files=all"
+        )
+        assert "records/" not in status
+        return {
+            "git_head": "abc",
+            "status_before": [],
+            "status_after": status.splitlines(),
+            "changed_paths": [],
+        }
+
+    monkeypatch.setattr(pga, "capture_diff_ref", fake_capture_diff_ref)
+    monkeypatch.setattr(
+        pga,
+        "run_host_command",
+        lambda *args, **kwargs: _host_result(
+            "final_int8_zlib_roundtrip_exact val_loss:2.6 val_bpb:1.55\n"
+        ),
+    )
+
+    result = run_single_parameter_golf_attempt(
+        service,
+        record.id,
+        tmp_path,
+        ParameterGolfAttemptOptions(
+            anchor=ANCHOR_NAME,
+            workspace=tmp_path,
+            hypothesis_file=hypothesis,
+            command=BUDGET_COMMAND,
+            seed=42,
+            timeout_seconds=600,
+            submission_files=(train_gpt,),
+        ),
+    )
+
+    assert result.experiment.diff_ref["status_after"] == []
+    assert result.experiment.diff_ref["changed_paths"] == []
+    assert (tmp_path / result.records_ref / "manifest.json").is_file()
+
+
 def test_single_attempt_rejects_missing_parent_before_host_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -467,6 +537,106 @@ def test_runtime_git_closeout_commits_and_restores_original_branch(
         _git_output(tmp_path, "rev-parse", "p3/parameter-golf/019e2200")
         == result["commit_sha"]
     )
+
+
+def test_runtime_records_gitignore_hides_runtime_records_from_status(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py")
+    _git(tmp_path, "commit", "-m", "base")
+
+    ignore_path = ensure_runtime_records_gitignore(tmp_path)
+    (tmp_path / "records" / "attempt-1").mkdir()
+    (tmp_path / "records" / "attempt-1" / "manifest.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
+    (tmp_path / "records" / "_loop_inputs").mkdir()
+    (tmp_path / "records" / "_loop_inputs" / "attempt_001_hypothesis.md").write_text(
+        "h\n", encoding="utf-8"
+    )
+
+    status = _git_output(tmp_path, "status", "--porcelain=v1", "--untracked-files=all")
+    assert status == ""
+    assert ignore_path.read_text(encoding="utf-8") == "*\n"
+
+
+def test_runtime_git_closeout_preserves_records_across_attempts(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py")
+    _git(tmp_path, "commit", "-m", "base")
+
+    parent = _git_output(tmp_path, "rev-parse", "HEAD")
+    records_1 = tmp_path / "records" / "019e2200-0000-7000-8000-000000000991"
+    records_1.mkdir(parents=True)
+    (records_1 / "manifest.json").write_text("{}\n", encoding="utf-8")
+    (records_1 / "eval_result.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "train_gpt.py").write_text("print('attempt 1')\n", encoding="utf-8")
+    result_1 = closeout_runtime_git_commit(
+        tmp_path,
+        attempt_id="019e2200-0000-7000-8000-000000000991",
+    )
+
+    records_2 = tmp_path / "records" / "019e2200-0000-7000-8000-000000000992"
+    records_2.mkdir(parents=True)
+    (records_2 / "manifest.json").write_text("{}\n", encoding="utf-8")
+    (records_2 / "eval_result.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "train_gpt.py").write_text("print('attempt 2')\n", encoding="utf-8")
+    result_2 = closeout_runtime_git_commit(
+        tmp_path,
+        attempt_id="019e2201-0000-7000-8000-000000000992",
+    )
+
+    assert result_1["git_closeout"]["status"] == "committed"
+    assert result_2["git_closeout"]["status"] == "committed"
+    assert (records_1 / "manifest.json").is_file()
+    assert (records_1 / "eval_result.json").is_file()
+    assert (records_2 / "manifest.json").is_file()
+    assert (records_2 / "eval_result.json").is_file()
+    assert _git_output(tmp_path, "rev-parse", "HEAD") == parent
+    branch_1_files = _git_output(
+        tmp_path, "ls-tree", "-r", "--name-only", "p3/parameter-golf/019e2200"
+    )
+    branch_2_files = _git_output(
+        tmp_path, "ls-tree", "-r", "--name-only", "p3/parameter-golf/019e2201"
+    )
+    assert "train_gpt.py" in branch_1_files
+    assert "train_gpt.py" in branch_2_files
+    assert "records/" not in branch_1_files
+    assert "records/" not in branch_2_files
+
+
+def test_runtime_git_closeout_is_clean_when_only_records_changed(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py")
+    _git(tmp_path, "commit", "-m", "base")
+    parent = _git_output(tmp_path, "rev-parse", "HEAD")
+    records = tmp_path / "records" / "019e2200-0000-7000-8000-000000000997"
+    records.mkdir(parents=True)
+    (records / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+    result = closeout_runtime_git_commit(
+        tmp_path,
+        attempt_id="019e2200-0000-7000-8000-000000000997",
+    )
+
+    assert result["git_closeout"]["status"] == "clean"
+    assert result["commit_sha"] == parent
+    assert result["git_closeout"]["restored_ref"] == "main"
+    assert (records / "manifest.json").is_file()
 
 
 def test_runtime_git_closeout_restores_original_branch_on_commit_failure(
