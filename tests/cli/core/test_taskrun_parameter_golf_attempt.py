@@ -586,7 +586,8 @@ def test_runtime_git_closeout_commits_and_restores_original_branch(
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test User")
     (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
-    _git(tmp_path, "add", "train_gpt.py")
+    (tmp_path / ".gitignore").write_text("*.ptz\nlogs/\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py", ".gitignore")
     _git(tmp_path, "commit", "-m", "base")
     parent = _git_output(tmp_path, "rev-parse", "HEAD")
     (tmp_path / "train_gpt.py").write_text("print('changed')\n", encoding="utf-8")
@@ -615,7 +616,8 @@ def test_runtime_git_closeout_preserves_runtime_only_root_artifacts(
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test User")
     (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
-    _git(tmp_path, "add", "train_gpt.py")
+    (tmp_path / ".gitignore").write_text("*.ptz\nlogs/\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py", ".gitignore")
     _git(tmp_path, "commit", "-m", "base")
 
     venv_source = tmp_path / "venv-source"

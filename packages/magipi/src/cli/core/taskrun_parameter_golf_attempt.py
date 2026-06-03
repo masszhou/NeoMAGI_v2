@@ -65,11 +65,13 @@ _ENV_BUDGET_KEYS = {
 }
 RUNTIME_GIT_EXCLUDE_PATHS = (
     "records",
+)
+RUNTIME_GIT_INFO_EXCLUDE_PATTERNS = (
     ".venvtorch27",
     ".venv",
     "final_model.pt",
     "final_model.int8.ptz",
-    "logs",
+    "logs/",
 )
 
 
@@ -887,6 +889,33 @@ def _records_ref_for_task_workspace(task_workspace_root: Path, records_dir: Path
         return f"records/{target.name}"
 
 
+def ensure_runtime_git_info_exclude(workspace: Path) -> Path | None:
+    exclude_ref = _git_output(workspace, "rev-parse", "--git-path", "info/exclude")
+    if exclude_ref is None:
+        return None
+    exclude_path = Path(exclude_ref)
+    if not exclude_path.is_absolute():
+        exclude_path = workspace.resolve() / exclude_path
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        current = exclude_path.read_text(encoding="utf-8")
+    except OSError:
+        current = ""
+    existing = {line.strip() for line in current.splitlines()}
+    missing = [
+        pattern
+        for pattern in RUNTIME_GIT_INFO_EXCLUDE_PATTERNS
+        if pattern not in existing
+    ]
+    if missing:
+        prefix = "" if not current or current.endswith("\n") else "\n"
+        exclude_path.write_text(
+            current + prefix + "\n".join(missing) + "\n",
+            encoding="utf-8",
+        )
+    return exclude_path
+
+
 def closeout_runtime_git_commit(
     workspace: Path, *, attempt_id: str
 ) -> dict[str, object]:
@@ -903,6 +932,7 @@ def closeout_runtime_git_commit(
             },
         }
     ensure_runtime_records_gitignore(workspace)
+    ensure_runtime_git_info_exclude(workspace)
     original_ref = _current_git_ref(workspace, fallback=parent_commit)
     branch = f"p3/parameter-golf/{attempt_id[:8]}"
     checkout = _git_run(workspace, "checkout", "-B", branch)
