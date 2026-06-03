@@ -63,6 +63,14 @@ _ENV_BUDGET_KEYS = {
     "VOCAB_SIZE": "vocab_size",
     "MAX_WALLCLOCK_SECONDS": "max_wallclock_seconds",
 }
+RUNTIME_GIT_EXCLUDE_PATHS = (
+    "records",
+    ".venvtorch27",
+    ".venv",
+    "final_model.pt",
+    "final_model.int8.ptz",
+    "logs",
+)
 
 
 class ParameterGolfHarnessError(ValueError):
@@ -323,9 +331,11 @@ def write_attempt_bundle(
     train_log: str,
     submission_files: Sequence[Path],
     command_result: HostCommandResult | None,
+    records_ref: str | None = None,
 ) -> Path:
     records_root = records_root.resolve()
     records_dir = _safe_records_dir(records_root, attempt_id)
+    bundle_ref = records_ref or f"records/{attempt_id}"
     records_dir.mkdir(parents=True, exist_ok=False)
     submission_dir = records_dir / "submission"
     submission_dir.mkdir()
@@ -363,8 +373,8 @@ def write_attempt_bundle(
         "artifact": {
             "required_files": REQUIRED_BUNDLE_FILES,
             "required_dirs": REQUIRED_BUNDLE_DIRS,
-            "content_ref": f"records/{attempt_id}",
-            "submission_ref": f"records/{attempt_id}/submission",
+            "content_ref": bundle_ref,
+            "submission_ref": f"{bundle_ref}/submission",
             "files": artifact_files,
             "required_submission_files": [
                 f"submission/{submission_path.name}"
@@ -477,6 +487,9 @@ def run_single_parameter_golf_attempt(
         command=command,
         timeout=options.timeout_seconds,
     )
+    records_ref = _records_ref_for_task_workspace(
+        Path(cwd), options.workspace / "records" / attempt_id
+    )
     records_dir = write_attempt_bundle(
         records_root=options.workspace / "records",
         attempt_id=attempt_id,
@@ -489,6 +502,7 @@ def run_single_parameter_golf_attempt(
         train_log=command_result.output,
         submission_files=submission_files,
         command_result=command_result,
+        records_ref=records_ref,
     )
     if not command_result.succeeded:
         harness = _command_failure_harness(command_result)
@@ -508,7 +522,7 @@ def run_single_parameter_golf_attempt(
     )
     diff_ref.update(
         {
-            "records_ref": f"records/{attempt_id}",
+            "records_ref": records_ref,
             "parent_experiment_id": options.parent_experiment_id,
             "workspace_dirty": bool(diff_ref.get("status_after")),
             **git_closeout,
@@ -538,7 +552,7 @@ def run_single_parameter_golf_attempt(
             "verdict": harness.verdict,
             "harness": harness.to_dict(),
             "artifact": {
-                "content_ref": f"records/{attempt_id}",
+                "content_ref": records_ref,
                 "required_files": REQUIRED_BUNDLE_FILES,
                 "required_dirs": REQUIRED_BUNDLE_DIRS,
             },
@@ -574,7 +588,7 @@ def run_single_parameter_golf_attempt(
     return ParameterGolfAttemptResult(
         task_result=task_result,
         experiment=experiment,
-        records_ref=f"records/{attempt_id}",
+        records_ref=records_ref,
         harness=harness,
     )
 
@@ -864,6 +878,15 @@ def ensure_runtime_records_gitignore(workspace: Path) -> Path:
     return ignore_path
 
 
+def _records_ref_for_task_workspace(task_workspace_root: Path, records_dir: Path) -> str:
+    root = task_workspace_root.resolve()
+    target = records_dir.resolve()
+    try:
+        return target.relative_to(root).as_posix()
+    except ValueError:
+        return f"records/{target.name}"
+
+
 def closeout_runtime_git_commit(
     workspace: Path, *, attempt_id: str
 ) -> dict[str, object]:
@@ -895,7 +918,14 @@ def closeout_runtime_git_commit(
                 "stderr": checkout.stderr.strip()[-500:],
             },
         }
-    add = _git_run(workspace, "add", "-A", "--", ".", ":(exclude)records")
+    add = _git_run(
+        workspace,
+        "add",
+        "-A",
+        "--",
+        ".",
+        *(f":(exclude){path}" for path in RUNTIME_GIT_EXCLUDE_PATHS),
+    )
     if add.returncode != 0:
         result = {
             "commit_sha": None,

@@ -317,6 +317,75 @@ def test_single_attempt_executor_writes_ledger_and_records(
     assert repo.steps[0].status == "done"
 
 
+def test_single_attempt_records_ref_is_relative_to_taskrun_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _FakeTaskRunRepository()
+    profile = build_permission_profile_snapshot(
+        "full",
+        {
+            "paths": {"allow": ["$WORKSPACE/**"]},
+            "commands": {"allow": ["python", "git"]},
+        },
+    )
+    record = _seed_record(repo, tmp_path, permission_profile=profile)
+    pg_workspace = tmp_path / "parameter-golf"
+    pg_workspace.mkdir()
+    hypothesis = tmp_path / "hypothesis.md"
+    hypothesis.write_text("try a smaller model", encoding="utf-8")
+    train_gpt = pg_workspace / "train_gpt.py"
+    train_gpt.write_text("print('ok')\n", encoding="utf-8")
+    model = pg_workspace / "model.bin.zlib"
+    model.write_bytes(b"model")
+    monkeypatch.setattr(
+        pga,
+        "capture_workspace_snapshot",
+        lambda *args, **kwargs: {"git_head": "abc", "status": []},
+    )
+    monkeypatch.setattr(
+        pga,
+        "capture_diff_ref",
+        lambda *args, **kwargs: {
+            "git_head": "abc",
+            "status_before": [],
+            "status_after": [],
+            "changed_paths": [],
+        },
+    )
+    monkeypatch.setattr(
+        pga,
+        "run_host_command",
+        lambda *args, **kwargs: _host_result(
+            "final_int8_zlib_roundtrip_exact val_loss:2.6 val_bpb:1.55\n"
+        ),
+    )
+
+    result = run_single_parameter_golf_attempt(
+        _service(repo),
+        record.id,
+        tmp_path,
+        ParameterGolfAttemptOptions(
+            anchor=ANCHOR_NAME,
+            workspace=pg_workspace,
+            hypothesis_file=hypothesis,
+            command=BUDGET_COMMAND,
+            seed=42,
+            timeout_seconds=600,
+            submission_files=(train_gpt, model),
+        ),
+    )
+
+    assert result.records_ref.startswith("parameter-golf/records/")
+    assert (tmp_path / result.records_ref / "manifest.json").is_file()
+    manifest = json.loads(
+        (tmp_path / result.records_ref / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["artifact"]["content_ref"] == result.records_ref
+    assert result.experiment.diff_ref["records_ref"] == result.records_ref
+    assert result.experiment.result["artifact"]["content_ref"] == result.records_ref
+
+
 def test_single_attempt_accepts_same_taskrun_parent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -537,6 +606,45 @@ def test_runtime_git_closeout_commits_and_restores_original_branch(
         _git_output(tmp_path, "rev-parse", "p3/parameter-golf/019e2200")
         == result["commit_sha"]
     )
+
+
+def test_runtime_git_closeout_preserves_runtime_only_root_artifacts(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init", "-b", "main")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "train_gpt.py").write_text("print('base')\n", encoding="utf-8")
+    _git(tmp_path, "add", "train_gpt.py")
+    _git(tmp_path, "commit", "-m", "base")
+
+    venv_source = tmp_path / "venv-source"
+    venv_source.mkdir()
+    (tmp_path / ".venvtorch27").symlink_to(venv_source, target_is_directory=True)
+    (tmp_path / "final_model.pt").write_bytes(b"fp32")
+    (tmp_path / "final_model.int8.ptz").write_bytes(b"int8")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "run.txt").write_text("log\n", encoding="utf-8")
+    (tmp_path / "train_gpt.py").write_text("print('attempt')\n", encoding="utf-8")
+
+    result = closeout_runtime_git_commit(
+        tmp_path,
+        attempt_id="019e2200-0000-7000-8000-000000000995",
+    )
+
+    assert result["git_closeout"]["status"] == "committed"
+    assert (tmp_path / ".venvtorch27").is_symlink()
+    assert (tmp_path / "final_model.pt").is_file()
+    assert (tmp_path / "final_model.int8.ptz").is_file()
+    assert (tmp_path / "logs" / "run.txt").is_file()
+    branch_files = _git_output(
+        tmp_path, "ls-tree", "-r", "--name-only", "p3/parameter-golf/019e2200"
+    )
+    assert "train_gpt.py" in branch_files
+    assert ".venvtorch27" not in branch_files
+    assert "final_model.pt" not in branch_files
+    assert "final_model.int8.ptz" not in branch_files
+    assert "logs/run.txt" not in branch_files
 
 
 def test_runtime_records_gitignore_hides_runtime_records_from_status(
