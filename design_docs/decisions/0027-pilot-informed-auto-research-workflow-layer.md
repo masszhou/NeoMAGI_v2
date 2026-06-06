@@ -104,6 +104,10 @@ anchor harness:
   that must reference truth; they are not independent truth sources. Neither
   skill text, extension self-report, nor auditor prose is sufficient truth by
   itself.
+- This workflow graph creates procedural drive: ordering, gates, evidence, and
+  non-bypassable review. It is not the optimization drive by itself. Optimization
+  drive must come from proposal generation consuming prior trajectory evidence,
+  strategy analysis, and stop policy.
 
 ## 为什么
 
@@ -127,6 +131,9 @@ anchor harness:
   checklist: audit can force revision and re-audit, infrastructure failure can
   branch to fix-infra then rerun plumbing, and negative evidence can terminate a
   branch without marking the whole workflow as a failure.
+- A graph can make the process continue honestly, but it cannot decide that the
+  next hypothesis is better. P3-M6 therefore needs an additional informed
+  iteration gate outside the graph mechanics.
 - Writing-agent concurrency is a separate hard problem. Without leases and
   workspace/records isolation, concurrent writers would reintroduce plan drift,
   Git lineage conflicts, and ambiguous evidence ownership.
@@ -158,7 +165,7 @@ anchor harness:
   - 放弃原因：read-only parallel work is useful, but concurrent workspace writers
     need leases, write locks, and ownership semantics that are outside M6.
 - 方案 G：adopt Beads/Dolt as the P3-M6 workflow engine.
-  - 放弃原因：Beads is a useful dependency-graph reference, but MagiPI truth is
+  - 放弃原因：Beads is a useful dependency-graph reference, but `magipi` truth is
     already Postgres / TaskRun events / records / Git lineage, and research
     acceptance requires audit and metric semantics beyond issue closure.
 
@@ -185,6 +192,9 @@ anchor harness:
   blocking edges, then persist the accepted graph update as TaskRun truth.
 - Implementation should keep blocking dependency edges minimal at first and keep
   non-blocking evidence/review/supersedes links out of ready-work selection.
+- Implementation must not treat workflow completion as optimization success.
+  M6 acceptance also needs evidence that a later proposal consumed prior metric
+  / verdict evidence and changed strategy or satisfied a stop policy.
 - Audit/adjudication artifacts must be directly referenceable from findings and
   should be durable enough to survive context compaction and restart.
 - Implementation must preserve the auditor P0/P1 override rule: `magipi` may

@@ -34,7 +34,7 @@ Key source files reviewed:
 
 ## 0. What Beads Shows
 
-Beads is a reference, not a dependency adoption. MagiPI should not import Beads
+Beads is a reference, not a dependency adoption. `magipi` should not import Beads
 or Dolt for P3-M6.
 
 Useful implementation facts:
@@ -56,7 +56,7 @@ bd dep add issue-2 issue-1
 - Beads docs/implementation drift around derived blocking is a warning: any
   materialized ready/blocked state needs recompute tests.
 
-## 1. Direct Guidance For MagiPI
+## 1. Direct Guidance For `magipi`
 
 P3-M6 should use a small JSON workflow graph plus TaskRun events/records, not a
 new workflow engine.
