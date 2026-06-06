@@ -11,6 +11,7 @@ doc_id_assigned_at: 2026-04-24T01:57:07+02:00
 | Data models | `design_docs/data_models/index.md` |
 | Decisions | `design_docs/decisions/INDEX.md` |
 | Glossary | `design_docs/GLOSSARY.md` |
+| References | `design_docs/references/` |
 | Roadmap | `design_docs/roadmap/` |
 
 ## 文档引用规则

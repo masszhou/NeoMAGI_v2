@@ -27,6 +27,10 @@ doc_id_assigned_at: 2026-05-28T21:16:23+02:00
   - [openai/parameter-golf](https://github.com/openai/parameter-golf)（anchor source, observed 2026-05-28）
   - [What Parameter Golf taught us](https://openai.com/index/what-parameter-golf-taught-us/)（背景解读, observed 2026-05-28）
   - [reference_mini_parameter_golf_budget](design_docs/references/reference_mini_parameter_golf_budget.md)
+- Related execution notes:
+  - `dev_docs/discussions/p3_m5_parameter_golf_smoke_revision.md`
+  - `dev_docs/discussions/p3_m5_autonomous_research_workflow_retro.md`
+  - `dev_docs/user_tests/p3_m6_magipi_autonomous_research_acceptance_runbook.md`
 - Discussion stage: accepted，第一层（用户需求口径），不含 architecture / implementation。
 
 ### 2026-05-31 执行顺序修订
@@ -46,6 +50,33 @@ P3-M6 Hardening & Scope Review 最后收口
 - M3 已提供 M5 所需的机器可读观测面：`p3_trajectory.tree`、`current_best`、`last_attempt`、`next_action`、parent attempt tree 和 artifact refs。
 - 推迟 M4 不等于推迟可观测性；M5 必须继续通过 CLI、Postgres truth、`task_runs.summary.p3_trajectory` 和 records bundle 保持可审计。
 - M4 之后应消费真实 autonomous traces，而不是基于假想 UI shape 设计 Renderer。
+
+### 2026-06-04 自主研究流程修订
+
+P3-M5 Parameter Golf smoke 验证了底层 loop、DB truth、records、seed truth、
+parentage 和 closeout plumbing，但也暴露了一个产品层缺口：由 Codex 手动执行
+runbook、人工在 Claude Code 与 Codex 之间转述审阅意见，并不能证明 `magipi`
+自身完成了自主科学流程。
+
+后续执行顺序修订为：
+
+```text
+P3-M6 MagIPI Autonomous Research Workflow 先行
+P3-M4 Execution Narrative Renderer 延后到 UI 设计稳定后实现
+P3-M7 Hardening & Scope Review 最后收口
+```
+
+原因：
+
+- P3 的核心用户价值不是让工程代理手动跑实验说明书，而是让 `magipi` 自己读取
+  skill / runbook，提出假设，请求外部审计，独立裁决审计意见，执行实验，并基于
+  DB / records truth 决定继续、停止或先修 infra。
+- Claude Code 可作为 read-only auditor，但不能成为 controller；审计意见必须由
+  `magipi` 独立 adjudicate 后才进入计划或实现。
+- default research skill 是下一步最小产品形态：skill 负责过程契约，TaskRun /
+  extension / harness 负责确定性执行和证据持久化。
+- 候选池 / 遗传式提案仍是未来讨论，不进入 M6 验收；M6 只要求一轮 bounded
+  scientific workflow。
 
 ---
 
@@ -167,6 +198,20 @@ agent 这次实验的假设是什么，改了哪些参数？
 它接下来打算试什么，为什么？
 当前 best 是哪一次 attempt，这棵实验树长什么样？
 ```
+
+2026-06-04 后新增的用户需求口径：
+
+```text
+我不是要让人类在中间主持审阅和实验推进。
+magipi 应该读取默认研究 skill / runbook，自主提出一个 bounded hypothesis，
+调用 Claude Code 做独立审计，自己裁决审计意见，再执行实验。
+实验后 magipi 要基于 DB truth / records / metric evidence 决定：
+  继续跟进、停止该方向、还是先修 infra 偏差。
+负结果也可以是有效结果；关键是科学流程自动完成且证据可审计。
+```
+
+候选池 / 遗传式提案是有价值的未来方向，但仍处于讨论阶段，不进入当前
+M6 实践验收。
 
 ---
 
@@ -378,17 +423,31 @@ Metric Harness 做确定性验证；按需 spawn read-only critic。
 成功：agent 在 mini budget 下自主超过 naive baseline，产出可复现 artifact。
 ```
 
+### Path 5: 自主科学流程（skill + audit + adjudication）
+
+```text
+magipi 读取默认研究 skill / runbook / prior findings。
+magipi 提出 bounded hypothesis 或实验计划。
+magipi 调用 Claude Code 做 read-only audit，并保存 transcript。
+magipi 独立裁决 audit findings，修订到无 P0/P1 blocker。
+magipi 执行实验并基于 DB truth / records / metric evidence 作出
+continue / stop_negative / fix_infra / blocked / success 决策。
+```
+
+说明：Path 5 是 2026-06-04 新增的产品级自主研究路径。它不要求 metric
+一定改善；负结果或先修 infra 也可以是有效科学产出。
+
 ---
 
 ## 5. P3 交付里程碑草案
 
-编号代表原始语义边界，不代表当前执行顺序。P3-M3 之后的执行顺序为：
+编号代表语义边界。2026-06-04 后，P3-M3 之后的执行顺序为：
 
 ```text
-M5 → M4 → M6
+M5 → M6 → M4 → M7
 ```
 
-M4 延后期间，所有 M5 产出的 truth 仍必须写入 TaskRun / `task_experiments` /
+M4 延后期间，所有 M5/M6 产出的 truth 仍必须写入 TaskRun / `task_experiments` /
 `p3_trajectory` / records bundle；不得引入临时 UI truth 或第二套 experiment ledger。
 
 ### P3-M0: Anchor Setup & Narrative Vocabulary
@@ -440,7 +499,7 @@ M4 延后期间，所有 M5 产出的 truth 仍必须写入 TaskRun / `task_expe
 
 ```text
 执行顺序：
-  延后到 P3-M5 之后，等 UI 设计稳定并有真实 autonomous traces 可供展示。
+  延后到 P3-M6 之后，等 UI 设计稳定并有真实 autonomous research traces 可供展示。
 
 验收：
   Renderer 是 packages/webui 的 read-only 增量视图，继承 ADR-0024。
@@ -478,16 +537,81 @@ readiness / plan slice:
   不在 M5 抽象通用 skill / anchor 框架；只允许一个很窄的
     `parameter-golf-mini` anchor contract，服务 prompt/context/harness/eligibility。
     等第二个真实 anchor 出现后再泛化。
+
+2026-06-04 补充：
+  M5 验收的是底层 multi-attempt loop substrate：attempt parentage、DB truth、
+  records materialization、seed truth、current_best、closeout 和 loop stop policy。
+  Codex 手动执行 runbook 或 proposal-file smoke 可以作为 engineering evidence，
+  但不能单独证明产品级 "magipi 自主研究流程"。该产品级验收转入 P3-M6。
 ```
 
-### P3-M6: Hardening & Scope Review
+### P3-M6: MagIPI Autonomous Research Workflow
 
 ```text
 执行顺序：
-  在 M5 能力闭合、M4 Renderer 设计/实现收口后执行。
+  在 P3-M5 底层 loop/plumbing 可审计之后执行；不等待 P3-M4 Renderer。
+
+目标：
+  用 default 或 workspace materialized research skill 证明 magipi 自己能完成一轮
+  bounded scientific workflow，而不是由人类或 Codex 手动主持流程。
+  Beads dependency workflow 调研作为 P3-M6 graph 设计参考，见
+  `design_docs/references/reference_beads_dependency_workflow.md`；这是参考，
+  不是引入 Beads/Dolt 作为依赖。
 
 验收：
-  anchor 能被判定 "agent 自主闭合了实验循环且结果客观可复现"。
+  magipi 通过正常 skill discovery 读取 research skill / runbook / prior findings。
+  magipi 创建或维护一个 typed directed workflow state graph：
+    action node 表示 bounded work，gate node 表示 code-checked condition，
+    edge 使用明确依赖方向；P3-M6 默认采用 dependent -> prerequisite。
+    节点状态和 gate 结果不能只存在于 prompt 计划中。
+  workflow code 能阻止依赖未满足的 node 进入 ready/running，并记录每个
+    completed node 的 evidence refs 或 structured gate decision。
+  ready / blocked 是从 dependency edges 和 gate outcomes 派生的状态；
+    magipi 不能靠写入 `ready=true` 自证可运行。
+  第一版 graph 可用 JSON snapshot + TaskRun events / records 表达；
+    dedicated graph table 后置，除非最小路径不够。
+  node 可写 executor/tool policy contract；实际 executor、tool、model、
+    command、transcript、elapsed time 写入 TaskRun events / records。
+  workflow graph 更新在执行前需要 machine-readable apply step：
+    validate / dry-run、拒绝 blocking edge 的 self-dependency / cycle，
+    然后持久化到 TaskRun truth 或等价可重建记录。
+  magipi 自主提出一个 bounded hypothesis 或 experiment plan。
+  magipi 通过 audit adapter 调用 Claude Code CLI 或等价 read-only auditor，
+    并保存 prompt、输入引用、stdout/stderr、exit code、model、effort、
+    elapsed time 和 transcript ref。
+  magipi 对 Claude audit findings 写结构化 adjudication：
+    accept / reject / modify / defer，并给出简短理由和 action ref。
+  如果 auditor-assigned P0/P1 blocker 存在，magipi 先修订计划并请求复审；
+    magipi 可以写 rebuttal，但不能自行解除 blocker；解除只能来自复审清除或
+    human explicit override。
+  magipi 通过 TaskRun / extension tools / governed execution surface 执行实验，
+    直接 shell debug 不能替代 magipi 路径。
+  M6 使用 single magipi conductor 和最多一个 active writing executor。
+    read-only auditor / analysis agent 可作为证据来源；多个 writing agents
+    同时领取图上独立任务推迟到 lease / workspace isolation 成熟后。
+  magipi 基于 DB truth / records / metric evidence 决定：
+    continue、stop_negative、fix_infra、blocked 或 success。
+  findings 写入直接引用：skill path、audit transcript、adjudication record、
+    TaskRun / records / DB truth、final decision。
+
+通过口径：
+  metric improvement 有用但不是必需。负结果、方向停止或先修 infra 都可通过，
+  前提是流程由 magipi 自主完成且证据可审计。
+
+非目标：
+  不要求候选池、mutation/crossover、遗传式搜索或多 agent 协同进化。
+  不允许多个 writing agents 并发修改同一 workflow workspace / records。
+  不要求 P3-M5 Parameter Golf final acceptance。
+```
+
+### P3-M7: Hardening & Scope Review
+
+```text
+执行顺序：
+  在 M6 自主研究流程、M4 Renderer 设计/实现收口后执行。
+
+验收：
+  anchor 能被判定 "magipi 自主闭合了实验流程且结果客观可复现"。
   确认没有偷渡控制面 / 写操作 UI / 知识记忆子系统 / 协同进化 / 第二套 runtime。
   确认 task / artifact / event truth 没有分裂。
   删除未被真实路径使用的代码与接口。
@@ -511,6 +635,11 @@ readiness / plan slice:
 多 agent（P4+）：
   actor-critic 协同进化（用于无法单模型验证的复杂问题）
   跨 agent task DAG / 全局 active skill / 完整 skill marketplace
+  多 writing agents 同时领取 workflow graph 节点
+
+研究策略（discussion only）：
+  候选池 / mutation / crossover / 遗传式实验提案
+  多候选并行搜索与全局探索-利用调度
 
 运行时：
   live session 分支机制（P3 用 parent 指针表达 attempt 树即可）
@@ -528,20 +657,31 @@ readiness / plan slice:
 2. 成功硬指标的显著性口径（多少次 run、什么阈值）如何与 A6000 mini budget 匹配？
 3. task_experiments 差量（parent 指针 / artifact metadata / significance verdict）
    如何落到 schema 或 read model，且不影响 P2 TaskRun 既有验收？
-4. Renderer 在 packages/webui 内采用什么最薄 read model / route / template？
-5. critic 在本 anchor 到底需不需要 LLM？还是 Metric Harness + 一个验证脚本就够？
+4. M6 default research skill 放在哪里、如何通过 workspace materialized skill
+   discovery 被 magipi 正常读取，而不是由用户粘贴流程？
+5. Claude Code audit adapter 如何调用、限权、计时、保存 transcript，并写入
+   TaskRun / records / findings 的可引用证据？
+6. MagIPI adjudication record 的结构放在哪里：TaskRun event、records artifact、
+   findings doc，还是三者组合？
+7. M6 typed workflow state graph 如何存储和重建：TaskRun events、records artifact、
+   dedicated table/read model，还是最小组合？graph apply / ready derivation
+   / gate outcome 是否需要 dedicated helper，参考
+   `design_docs/references/reference_beads_dependency_workflow.md`。
+8. workflow node lease / workspace write lock / records write lock 如果未来要支持
+   多 writing agents，需要哪些最小字段和超时/释放规则？
+9. Renderer 在 packages/webui 内采用什么最薄 read model / route / template？
+10. critic 在本 anchor 到底需不需要 LLM？还是 Metric Harness + 一个验证脚本就够？
    （倾向：能机械验证的尽量不调 LLM）
-6. 【保留讨论】actor-critic 协同进化：对于 QMD 类无法在单一全知模型里直接验证
-   的复杂问题，critic 需要随 actor 一起成长。届时 critic 作为带自己 TaskRun 的
-   独立 agent，与 actor 如何交接、如何避免并发写、如何共享/隔离 context、
-   成长信号从哪来？此问题不在 P3 解决，但其结论会反向影响 P3 的 verdict / artifact
-   语义是否要预留扩展点。
-7. P3 完成后，下一阶段（知识记忆 / 控制面 / 协同进化）的决策依据是什么？
+11. 【保留讨论】actor-critic 协同进化与候选池 / 遗传式搜索：对于 QMD 类无法在
+   单一全知模型里直接验证的复杂问题，critic 需要随 actor 一起成长，实验提案也
+   可能需要 population-style search。此问题不在 P3-M6 解决，但其结论会反向影响
+   verdict / artifact / research skill 语义是否要预留扩展点。
+12. P3 完成后，下一阶段（知识记忆 / 控制面 / 协同进化）的决策依据是什么？
    即：跑完 P3 我们应该已经知道哪些事，才有资格决策这些后置项？
 ```
 
 本文件固定 P3 用户需求口径与 MVP 边界。experiment schema 差量、
-artifact metadata truth、WebUI read model、Metric Harness、critic 调用机制，
+artifact metadata truth、WebUI read model、Metric Harness、audit/adjudication 机制、critic 调用机制，
 进入第二层 architecture 与第三层 implementation。
 
 ---
