@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from urllib.parse import urlparse
 
-from ai_provider.credentials import resolve_api_key
+from ai_provider.credentials import resolve_provider_auth
 from ai_provider.models import OpenAICompletionsCompat, parse_openai_completions_compat
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
 from ai_provider.runtime_types import (
@@ -42,6 +42,7 @@ from ai_provider.usage import normalize_openai_completions_usage
 from ._shared import (
     call_stream_method,
     clone_message,
+    copilot_dynamic_headers,
     event_value,
     iterate_provider_stream,
     maybe_call_payload,
@@ -79,6 +80,7 @@ def build_openai_completions_params(
     headers: dict[str, str] = {}
     _apply_prompt_cache(payload, headers, model, options, compat)
     headers.update(model.headers or {})
+    headers.update(copilot_dynamic_headers(model, context))
     headers.update(options.headers or {})
     return payload, headers
 
@@ -170,10 +172,12 @@ async def _call_openai_completions_stream(
 ) -> object:
     client = options.client
     if client is None:
-        api_key = resolve_api_key(model, options)
+        auth = resolve_provider_auth(model, options)
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=api_key, base_url=model.base_url, default_headers=headers or None)
+        client = AsyncOpenAI(
+            api_key=auth.api_key, base_url=auth.base_url, default_headers=headers or None
+        )
         headers = {}
     return await call_stream_method(client.chat.completions.create, payload, headers=headers)
 

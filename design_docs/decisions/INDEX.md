@@ -36,6 +36,7 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0025 | Use Git as P3 attempt workspace lineage | accepted | 2026-05-29 | `design_docs/decisions/0025-use-git-as-p3-attempt-workspace-lineage.md` |
 | 0026 | Keep P3 attempts inside one TaskRun session | accepted | 2026-05-29 | `design_docs/decisions/0026-keep-p3-attempts-inside-one-taskrun-session.md` |
 | 0027 | Pilot-informed auto research workflow layer | accepted | 2026-06-04 | `design_docs/decisions/0027-pilot-informed-auto-research-workflow-layer.md` |
+| 0028 | Generalize OAuth sync-refresh dispatch (GitHub Copilot) | accepted | 2026-06-10 | `design_docs/decisions/0028-generalize-oauth-sync-refresh-dispatch.md` |
 
 ## Amendments
 

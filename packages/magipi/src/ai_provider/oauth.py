@@ -684,9 +684,21 @@ def _oauth_page(title: str, message: str) -> str:
 
 _oauth_providers: dict[str, OAuthProvider] = {}
 
+# Builtin OAuth provider factories. ``oauth`` ships the OpenAI factory; other
+# modules (e.g. ``oauth_github_copilot``) append their factory at import time so
+# ``reset_oauth_providers_for_tests`` re-registers them. ``oauth`` itself never
+# imports those modules, keeping the dependency one-directional.
+_BUILTIN_OAUTH_PROVIDER_FACTORIES: list[Callable[[], OAuthProvider]] = [OpenAIOAuthProvider]
+
+
+def register_builtin_oauth_provider_factory(factory: Callable[[], OAuthProvider]) -> None:
+    if factory not in _BUILTIN_OAUTH_PROVIDER_FACTORIES:
+        _BUILTIN_OAUTH_PROVIDER_FACTORIES.append(factory)
+
 
 def _register_builtin_oauth_providers() -> None:
-    register_oauth_provider(OpenAIOAuthProvider())
+    for factory in _BUILTIN_OAUTH_PROVIDER_FACTORIES:
+        register_oauth_provider(factory())
 
 
 _register_builtin_oauth_providers()
@@ -713,6 +725,7 @@ __all__ = [
     "list_oauth_providers",
     "parse_and_validate_authorization_input",
     "parse_authorization_input",
+    "register_builtin_oauth_provider_factory",
     "register_oauth_provider",
     "refresh_openai_oauth_credentials_sync",
     "reset_oauth_providers_for_tests",

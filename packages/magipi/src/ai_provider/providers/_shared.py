@@ -9,10 +9,12 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from ai_provider.oauth_github_copilot import GITHUB_COPILOT_PROVIDER_ID
 from ai_provider.runtime_types import ProviderResponse, StreamOptions
 from ai_provider.streaming import AssistantMessageEventStream, create_assistant_message_event_stream
 from ai_provider.types import (
     AssistantMessage,
+    Context,
     Model,
     StreamStart,
     Usage,
@@ -22,6 +24,22 @@ from ai_provider.types import (
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def copilot_dynamic_headers(model: Model, context: Context) -> dict[str, str]:
+    """Per-request GitHub Copilot headers for OpenAI-compatible adapters.
+
+    ``X-Initiator`` distinguishes a human turn from an agent/tool turn (Copilot
+    uses it for billing/policy); ``Openai-Intent`` mirrors the official client.
+    Returns ``{}`` for non-Copilot providers. Vision headers are intentionally
+    deferred (text-only for v1).
+    """
+
+    if model.provider != GITHUB_COPILOT_PROVIDER_ID:
+        return {}
+    last = context.messages[-1] if context.messages else None
+    initiator = "user" if getattr(last, "role", None) == "user" else "agent"
+    return {"X-Initiator": initiator, "Openai-Intent": "conversation-edits"}
 
 
 def empty_usage() -> Usage:
@@ -171,6 +189,7 @@ async def call_stream_method(
 __all__ = [
     "call_stream_method",
     "clone_message",
+    "copilot_dynamic_headers",
     "empty_usage",
     "error_message",
     "event_value",

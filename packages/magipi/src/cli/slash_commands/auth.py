@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_provider.auth_storage import (
+    GITHUB_COPILOT_PROVIDER,
     OPENAI_CODEX_PROVIDER,
     auth_storage_status,
     delete_credential,
@@ -23,6 +24,14 @@ from ai_provider.oauth import (
     parse_and_validate_authorization_input,
     start_openai_oauth_callback_server,
     start_openai_oauth_login,
+)
+from ai_provider.oauth_github_copilot import (
+    GITHUB_COPILOT_DEFAULT_DOMAIN,
+    GitHubCopilotDeviceCode,
+    exchange_github_copilot_token,
+    normalize_domain,
+    poll_github_copilot_access_token,
+    start_github_copilot_device_flow,
 )
 
 from .registry import SlashCommandContext
@@ -39,6 +48,11 @@ _PENDING_OPENAI_CODEX: _PendingOAuth | None = None
 _LAST_OPENAI_CODEX_CALLBACK_ERROR: str | None = None
 _LAST_OPENAI_CODEX_SAVE_PATH: str | None = None
 _OAuthNotify = Callable[[str, str], None]
+
+_GITHUB_COPILOT_LOGIN_LOCK = threading.Lock()
+_github_copilot_login_active = False
+_LAST_GITHUB_COPILOT_ERROR: str | None = None
+_LAST_GITHUB_COPILOT_SAVE_PATH: str | None = None
 
 
 def handle_login(ctx: SlashCommandContext) -> None:
@@ -59,8 +73,16 @@ def handle_login(ctx: SlashCommandContext) -> None:
             save_api_key(provider, key)
             ctx.controller.status.push_notification(f"API key saved: {provider}", level="info")
             return
+        if provider == GITHUB_COPILOT_PROVIDER:
+            message = _start_github_copilot_login(
+                ctx.args[1:], _controller_notifier(ctx.controller)
+            )
+            ctx.controller.push_session_message(message)
+            return
         if provider != OPENAI_CODEX_PROVIDER:
-            raise ValueError("M9 OAuth supports only /login openai-codex")
+            raise ValueError(
+                "OAuth supports only /login openai-codex or /login github-copilot"
+            )
         if len(ctx.args) > 1:
             _finish_openai_codex_login(" ".join(ctx.args[1:]))
             ctx.controller.status.push_notification("OpenAI Codex OAuth credential saved", level="info")
@@ -135,6 +157,79 @@ def _finish_openai_codex_login(value: str) -> None:
     _PENDING_OPENAI_CODEX = None
 
 
+def _start_github_copilot_login(
+    args: list[str],
+    notify: _OAuthNotify | None = None,
+) -> str:
+    global _github_copilot_login_active, _LAST_GITHUB_COPILOT_ERROR
+    enterprise_domain = _parse_github_copilot_enterprise(args)
+    domain = enterprise_domain or GITHUB_COPILOT_DEFAULT_DOMAIN
+    with _GITHUB_COPILOT_LOGIN_LOCK:
+        if _github_copilot_login_active:
+            raise RuntimeError("a GitHub Copilot login is already in progress")
+        device = start_github_copilot_device_flow(domain)
+        _github_copilot_login_active = True
+    _LAST_GITHUB_COPILOT_ERROR = None
+    thread = threading.Thread(
+        target=_complete_github_copilot_login,
+        args=(domain, enterprise_domain, device, notify),
+        name="neomagi-github-copilot-oauth",
+        daemon=True,
+    )
+    thread.start()
+    return (
+        "GitHub Copilot login started.\n"
+        f"Open: {device.verification_uri}\n"
+        f"Enter code: {device.user_code}\n\n"
+        "Authorize in the browser; the credential is saved automatically once "
+        "you approve. The code is shown once in the terminal and is not "
+        "persisted to auth storage or the session log."
+    )
+
+
+def _parse_github_copilot_enterprise(args: list[str]) -> str | None:
+    if not args:
+        return None
+    raw = args[0].strip()
+    if not raw:
+        return None
+    enterprise_domain = normalize_domain(raw)
+    if enterprise_domain is None:
+        raise ValueError("invalid GitHub Enterprise URL/domain")
+    return enterprise_domain
+
+
+def _complete_github_copilot_login(
+    domain: str,
+    enterprise_domain: str | None,
+    device: GitHubCopilotDeviceCode,
+    notify: _OAuthNotify | None = None,
+) -> None:
+    global _github_copilot_login_active, _LAST_GITHUB_COPILOT_ERROR, _LAST_GITHUB_COPILOT_SAVE_PATH
+    try:
+        github_token = poll_github_copilot_access_token(
+            domain,
+            device.device_code,
+            device.interval,
+            device.expires_in,
+        )
+        credentials = exchange_github_copilot_token(github_token, enterprise_domain)
+        save_oauth_credentials(GITHUB_COPILOT_PROVIDER, credentials)
+        _LAST_GITHUB_COPILOT_ERROR = None
+        _LAST_GITHUB_COPILOT_SAVE_PATH = _backend_summary()
+        _notify(
+            notify,
+            f"GitHub Copilot OAuth credential saved: {_LAST_GITHUB_COPILOT_SAVE_PATH}",
+            "info",
+        )
+    except Exception as exc:
+        _LAST_GITHUB_COPILOT_ERROR = f"GitHub Copilot OAuth login failed: {exc}"
+        _notify(notify, _LAST_GITHUB_COPILOT_ERROR, "error")
+    finally:
+        with _GITHUB_COPILOT_LOGIN_LOCK:
+            _github_copilot_login_active = False
+
+
 def _wait_for_callback(pending: _PendingOAuth, notify: _OAuthNotify | None = None) -> None:
     global _LAST_OPENAI_CODEX_CALLBACK_ERROR, _LAST_OPENAI_CODEX_SAVE_PATH, _PENDING_OPENAI_CODEX
     try:
@@ -179,6 +274,10 @@ def _auth_status_lines() -> str:
         diagnostics.append(f"last openai-codex oauth error: {_LAST_OPENAI_CODEX_CALLBACK_ERROR}")
     elif _LAST_OPENAI_CODEX_SAVE_PATH:
         diagnostics.append(f"last openai-codex oauth save: {_LAST_OPENAI_CODEX_SAVE_PATH}")
+    if _LAST_GITHUB_COPILOT_ERROR:
+        diagnostics.append(f"last github-copilot oauth error: {_LAST_GITHUB_COPILOT_ERROR}")
+    elif _LAST_GITHUB_COPILOT_SAVE_PATH:
+        diagnostics.append(f"last github-copilot oauth save: {_LAST_GITHUB_COPILOT_SAVE_PATH}")
     if not credentials:
         return "\n".join(["auth: no stored credentials", *diagnostics])
     lines = ["auth:"]

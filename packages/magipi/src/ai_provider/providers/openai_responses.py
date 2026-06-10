@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from urllib.parse import urlparse
 
-from ai_provider.credentials import resolve_api_key
+from ai_provider.credentials import resolve_provider_auth
+from ai_provider.oauth_github_copilot import GITHUB_COPILOT_PROVIDER_ID
 from ai_provider.prompt_cache import cache_enabled, resolve_cache_retention, sanitize_cache_affinity_id
 from ai_provider.runtime_types import (
     SimpleStreamOptions,
@@ -38,6 +39,7 @@ from ai_provider.usage import normalize_openai_responses_usage
 from ._shared import (
     call_stream_method,
     clone_message,
+    copilot_dynamic_headers,
     event_value,
     iterate_provider_stream,
     maybe_call_payload,
@@ -97,6 +99,7 @@ def build_openai_responses_params(
         if retention == "long" and _is_direct_openai(model.base_url):
             payload["prompt_cache_retention"] = "24h"
     headers.update(model.headers or {})
+    headers.update(copilot_dynamic_headers(model, context))
     headers.update(options.headers or {})
     return payload, headers
 
@@ -162,10 +165,12 @@ async def _call_openai_responses_stream(
 ) -> object:
     client = options.client
     if client is None:
-        api_key = resolve_api_key(model, options)
+        auth = resolve_provider_auth(model, options)
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=api_key, base_url=model.base_url, default_headers=headers or None)
+        client = AsyncOpenAI(
+            api_key=auth.api_key, base_url=auth.base_url, default_headers=headers or None
+        )
         headers = {}
     return await call_stream_method(client.responses.create, payload, headers=headers)
 
@@ -463,7 +468,10 @@ def _apply_reasoning_options(payload: dict[str, object], model: Model, options: 
             "summary": options.metadata.get("reasoning_summary", "auto"),
         }
         payload["include"] = ["reasoning.encrypted_content"]
-    elif options.metadata.get("reasoning_disabled"):
+    elif options.metadata.get("reasoning_disabled") and model.provider != GITHUB_COPILOT_PROVIDER_ID:
+        # GitHub Copilot's responses endpoint rejects an explicit
+        # ``reasoning.effort = "none"`` for its reasoning models; pi-mono skips
+        # the field for this provider, so we mirror that.
         payload["reasoning"] = {"effort": "none"}
 
 

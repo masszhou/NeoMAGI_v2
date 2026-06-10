@@ -70,12 +70,12 @@ def _b64_json(data: Mapping[str, Any]) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def test_builtin_oauth_registry_is_openai_only() -> None:
+def test_builtin_oauth_registry_has_openai_and_github_copilot() -> None:
     reset_oauth_providers_for_tests()
 
-    assert [provider.id for provider in list_oauth_providers()] == [
-        OPENAI_OAUTH_PROVIDER_ID
-    ]
+    ids = [provider.id for provider in list_oauth_providers()]
+    assert OPENAI_OAUTH_PROVIDER_ID in ids
+    assert "github-copilot" in ids
     assert get_oauth_provider("openai").name == "OpenAI (Codex OAuth)"
     with pytest.raises(KeyError):
         get_oauth_provider("anthropic")

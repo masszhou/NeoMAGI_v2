@@ -15,6 +15,7 @@ import os
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TextIO
@@ -22,7 +23,13 @@ from typing import Any, Protocol, TextIO
 from .oauth import (
     OAuthCredentials,
     TOKEN_REFRESH_SKEW_MS,
-    refresh_openai_oauth_credentials_sync,
+    # Resolved at call time via globals() in _resolve_entry_api_key so tests can
+    # monkeypatch the module-level refreshers; imported here to bind the name.
+    refresh_openai_oauth_credentials_sync,  # noqa: F401
+)
+from .oauth_github_copilot import (
+    GITHUB_COPILOT_PROVIDER_ID,
+    refresh_github_copilot_credentials_sync,  # noqa: F401 - resolved via globals() dispatch
 )
 
 AUTH_PATH_ENV = "NEOMAGI_AUTH_PATH"
@@ -31,6 +38,7 @@ AUTH_DIR_MODE = 0o700
 _USER_CONFIG_SUBDIR = "neomagi"
 LEGACY_AUTH_PATH = Path.home() / ".neomagi" / "auth.json"
 OPENAI_CODEX_PROVIDER = "openai-codex"
+GITHUB_COPILOT_PROVIDER = GITHUB_COPILOT_PROVIDER_ID
 KEYRING_SERVICE = "neomagi-pi"
 KEYRING_USERNAME = "auth-storage-v1"
 _MIGRATED_MARKER_KEY = "migrated_to_keyring"
@@ -280,22 +288,72 @@ def redact_credential_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+@dataclass(frozen=True, slots=True)
+class StoredCredential:
+    """A resolved stored credential: the api key plus OAuth ``extra`` metadata.
+
+    ``extra`` carries provider-specific fields (e.g. GitHub Copilot's
+    ``enterpriseUrl``) so callers can derive a base url from the same single
+    resolution without re-reading storage or triggering a second refresh.
+    Empty for api-key entries.
+    """
+
+    api_key: str
+    extra: dict[str, Any]
+
+
+_OAUTH_ENTRY_KNOWN_KEYS = frozenset(
+    {"type", "access", "refresh", "expires", "accountId", "account_id"}
+)
+
+
+def resolve_stored_credential(
+    provider: str,
+    path: str | os.PathLike[str] | None = None,
+    *,
+    now_ms: Callable[[], int] | None = None,
+) -> StoredCredential | None:
+    storage = load_auth_storage(path)
+    entry = storage.get(provider)
+    if not entry:
+        return None
+    resolved = _resolve_entry_api_key(provider, entry, now_ms or _now_ms)
+    if isinstance(resolved, OAuthCredentials):
+        storage[provider] = {"type": "oauth", **resolved.to_mapping()}
+        save_auth_storage(storage, path)
+        return StoredCredential(api_key=resolved.access, extra=dict(resolved.extra))
+    if not resolved:
+        return None
+    return StoredCredential(api_key=resolved, extra=_oauth_entry_extra(entry))
+
+
 def resolve_stored_api_key(
     provider: str,
     path: str | os.PathLike[str] | None = None,
     *,
     now_ms: Callable[[], int] | None = None,
 ) -> str | None:
-    storage = load_auth_storage(path)
-    entry = storage.get(provider)
-    if not entry:
-        return None
-    api_key = _resolve_entry_api_key(provider, entry, now_ms or _now_ms)
-    if isinstance(api_key, OAuthCredentials):
-        storage[provider] = {"type": "oauth", **api_key.to_mapping()}
-        save_auth_storage(storage, path)
-        return api_key.access
-    return api_key
+    resolved = resolve_stored_credential(provider, path, now_ms=now_ms)
+    return resolved.api_key if resolved else None
+
+
+def _oauth_entry_extra(entry: Mapping[str, Any]) -> dict[str, Any]:
+    if entry.get("type") != "oauth":
+        return {}
+    return {key: value for key, value in entry.items() if key not in _OAUTH_ENTRY_KNOWN_KEYS}
+
+
+# Per-provider synchronous OAuth refreshers used by the runtime credential
+# boundary. Mapped by *name* (not function object) so the refresher is resolved
+# from module globals at call time — this keeps monkeypatching the module-level
+# refresher functions working in tests. Each refresher accepts
+# ``(credentials, *, now_ms=...)`` and returns refreshed ``OAuthCredentials``;
+# the ``now_ms`` keyword is required so callers can inject a deterministic clock.
+# Providers absent from this map are not resolvable through the stored path.
+_SYNC_OAUTH_REFRESHER_NAMES: dict[str, str] = {
+    OPENAI_CODEX_PROVIDER: "refresh_openai_oauth_credentials_sync",
+    GITHUB_COPILOT_PROVIDER: "refresh_github_copilot_credentials_sync",
+}
 
 
 def _resolve_entry_api_key(
@@ -307,12 +365,16 @@ def _resolve_entry_api_key(
     if entry_type == "api_key":
         key = entry.get("key")
         return key if isinstance(key, str) and key else None
-    if entry_type != "oauth" or provider != OPENAI_CODEX_PROVIDER:
+    if entry_type != "oauth":
+        return None
+    refresher_name = _SYNC_OAUTH_REFRESHER_NAMES.get(provider)
+    if refresher_name is None:
         return None
 
     credentials = OAuthCredentials.from_mapping(entry)
     if credentials.expires <= now_ms() + TOKEN_REFRESH_SKEW_MS:
-        return refresh_openai_oauth_credentials_sync(credentials, now_ms=now_ms)
+        refresher: Callable[..., OAuthCredentials] = globals()[refresher_name]
+        return refresher(credentials, now_ms=now_ms)
     return credentials.access
 
 
@@ -499,7 +561,9 @@ __all__ = [
     "AUTH_PATH_ENV",
     "AuthStorageError",
     "DEFAULT_AUTH_PATH",
+    "GITHUB_COPILOT_PROVIDER",
     "LEGACY_AUTH_PATH",
+    "OPENAI_CODEX_PROVIDER",
     "credential_status",
     "auth_storage_status",
     "default_auth_path",
@@ -507,8 +571,10 @@ __all__ = [
     "list_credentials",
     "load_auth_storage",
     "redact_credential_entry",
+    "StoredCredential",
     "resolve_auth_path",
     "resolve_stored_api_key",
+    "resolve_stored_credential",
     "save_api_key",
     "save_auth_storage",
     "save_oauth_credentials",

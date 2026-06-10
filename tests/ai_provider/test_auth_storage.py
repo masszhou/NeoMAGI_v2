@@ -196,6 +196,71 @@ def test_resolve_stored_api_key_supports_api_key_entries(tmp_path: Path) -> None
     assert resolve_stored_api_key("openai", auth_path) == "sk-test"
 
 
+def test_resolve_stored_api_key_returns_fresh_github_copilot_access(tmp_path: Path) -> None:
+    auth_path = tmp_path / "auth.json"
+    save_oauth_credentials(
+        "github-copilot",
+        OAuthCredentials(access="copilot-token", refresh="ghu_token", expires=200_000),
+        auth_path,
+    )
+
+    assert (
+        resolve_stored_api_key("github-copilot", auth_path, now_ms=lambda: 1_000)
+        == "copilot-token"
+    )
+
+
+def test_resolve_stored_api_key_refreshes_expired_github_copilot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    auth_path = tmp_path / "auth.json"
+    save_oauth_credentials(
+        "github-copilot",
+        OAuthCredentials(
+            access="old",
+            refresh="ghu_token",
+            expires=1_000,
+            extra={"enterpriseUrl": "company.ghe.com"},
+        ),
+        auth_path,
+    )
+
+    def fake_refresh(credentials: OAuthCredentials, *, now_ms):
+        # The dispatch must preserve the GitHub token and enterprise domain.
+        assert credentials.refresh == "ghu_token"
+        assert credentials.extra["enterpriseUrl"] == "company.ghe.com"
+        return OAuthCredentials(
+            access="fresh-copilot-token",
+            refresh="ghu_token",
+            expires=300_000,
+            extra={"enterpriseUrl": "company.ghe.com"},
+        )
+
+    monkeypatch.setattr(
+        "ai_provider.auth_storage.refresh_github_copilot_credentials_sync",
+        fake_refresh,
+    )
+
+    token = resolve_stored_api_key("github-copilot", auth_path, now_ms=lambda: 200_000)
+
+    assert token == "fresh-copilot-token"
+    stored = load_auth_storage(auth_path)["github-copilot"]
+    assert stored["access"] == "fresh-copilot-token"
+    assert stored["enterpriseUrl"] == "company.ghe.com"
+
+
+def test_resolve_stored_api_key_ignores_unregistered_oauth_provider(tmp_path: Path) -> None:
+    auth_path = tmp_path / "auth.json"
+    save_oauth_credentials(
+        "some-other-oauth",
+        OAuthCredentials(access="tok", refresh="r", expires=200_000),
+        auth_path,
+    )
+
+    assert resolve_stored_api_key("some-other-oauth", auth_path, now_ms=lambda: 1_000) is None
+
+
 def test_default_auth_path_uses_user_config_dir(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     home.mkdir()

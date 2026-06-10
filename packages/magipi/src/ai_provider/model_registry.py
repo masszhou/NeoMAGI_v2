@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from .models import supports_xhigh
+from .oauth_github_copilot import COPILOT_HEADERS, GITHUB_COPILOT_INDIVIDUAL_BASE_URL
 from .types import Model, ModelCost, ThinkingLevel
 
 BUILTIN_SOURCE = "builtin"
@@ -39,6 +40,7 @@ _BUILTIN_PROVIDER_AUTH: dict[str, tuple[str, str]] = {
     "openai-codex": ("openai", "oauth"),
     "anthropic": ("anthropic", "api"),
     "opencode": ("opencode", "api"),
+    "github-copilot": ("github-copilot", "oauth"),
     "faux": ("faux", "local"),
 }
 
@@ -218,6 +220,81 @@ BUILTIN_MODELS: tuple[Model, ...] = (
         context_window=204800,
         max_tokens=131072,
         compat={"sendSessionAffinityHeaders": True},
+    ),
+    _make_model(
+        id="gpt-4.1",
+        name="GPT-4.1 (Copilot)",
+        api="openai-completions",
+        provider="github-copilot",
+        base_url=GITHUB_COPILOT_INDIVIDUAL_BASE_URL,
+        reasoning=False,
+        input=["text", "image"],
+        cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        context_window=128_000,
+        max_tokens=16_384,
+        headers=COPILOT_HEADERS,
+        compat={
+            "supportsStore": False,
+            "supportsDeveloperRole": False,
+            "supportsReasoningEffort": False,
+        },
+    ),
+    _make_model(
+        id="gpt-4o",
+        name="GPT-4o (Copilot)",
+        api="openai-completions",
+        provider="github-copilot",
+        base_url=GITHUB_COPILOT_INDIVIDUAL_BASE_URL,
+        reasoning=False,
+        input=["text", "image"],
+        cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        context_window=128_000,
+        max_tokens=4_096,
+        headers=COPILOT_HEADERS,
+        compat={
+            "supportsStore": False,
+            "supportsDeveloperRole": False,
+            "supportsReasoningEffort": False,
+        },
+    ),
+    _make_model(
+        id="gpt-5",
+        name="GPT-5 (Copilot)",
+        api="openai-responses",
+        provider="github-copilot",
+        base_url=GITHUB_COPILOT_INDIVIDUAL_BASE_URL,
+        reasoning=True,
+        input=["text", "image"],
+        cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        context_window=128_000,
+        max_tokens=128_000,
+        headers=COPILOT_HEADERS,
+    ),
+    _make_model(
+        id="gpt-5.1",
+        name="GPT-5.1 (Copilot)",
+        api="openai-responses",
+        provider="github-copilot",
+        base_url=GITHUB_COPILOT_INDIVIDUAL_BASE_URL,
+        reasoning=True,
+        input=["text", "image"],
+        cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        context_window=264_000,
+        max_tokens=64_000,
+        headers=COPILOT_HEADERS,
+    ),
+    _make_model(
+        id="gpt-5.1-codex",
+        name="GPT-5.1 Codex (Copilot)",
+        api="openai-responses",
+        provider="github-copilot",
+        base_url=GITHUB_COPILOT_INDIVIDUAL_BASE_URL,
+        reasoning=True,
+        input=["text", "image"],
+        cost={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        context_window=400_000,
+        max_tokens=128_000,
+        headers=COPILOT_HEADERS,
     ),
     _make_model(
         id="faux-1",
