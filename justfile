@@ -5,6 +5,9 @@
 lint_paths := "packages/magipi/src packages/webui/src tests packages/webui/tests scripts"
 # Container compose driver; override with `just compose="docker compose" ...` 容器编排驱动，可覆盖
 compose := "podman compose"
+# Direct container CLI for exec; override with `just container_cli=docker ...` 直接进容器的 CLI，可覆盖
+container_cli := "podman"
+postgres_container := "neomagi-postgres"
 
 # List all recipes 列出全部 recipe
 default:
@@ -81,6 +84,19 @@ db-down:
 # Tail Postgres container logs 跟踪 Postgres 容器日志
 db-logs:
     {{compose}} -f docker-compose.yml logs -f postgres
+
+# Dump the local NeoMAGI Postgres schema to a portable archive 导出本地 NeoMAGI Postgres schema
+db-dump output="tmp/neomagi.dump" schema="neomagi":
+    @mkdir -p "$(dirname "{{output}}")"
+    {{container_cli}} exec -i {{postgres_container}} sh -lc 'set -eu; schema="$1"; case "$schema" in ""|[0-9]*|*[!A-Za-z0-9_]*) echo "schema must be a simple PostgreSQL identifier" >&2; exit 2;; esac; pg_dump --format=custom --no-owner --no-privileges --schema "$schema" -U "$POSTGRES_USER" -d "$POSTGRES_DB"' sh "{{schema}}" > "{{output}}"
+    @echo "Wrote {{output}}"
+
+# Restore a NeoMAGI Postgres schema dump; drops the target schema 还原 NeoMAGI schema dump（会先删除目标 schema；需 --yes）
+db-restore input confirm="" schema="neomagi":
+    @test "{{confirm}}" = "--yes" || (echo "Refusing to restore without --yes: just db-restore {{input}} --yes" >&2; exit 2)
+    @test -f "{{input}}" || (echo "Dump file not found: {{input}}" >&2; exit 2)
+    {{container_cli}} exec -i {{postgres_container}} sh -lc 'set -eu; schema="$1"; case "$schema" in ""|[0-9]*|*[!A-Za-z0-9_]*) echo "schema must be a simple PostgreSQL identifier" >&2; exit 2;; esac; psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP SCHEMA IF EXISTS \"$schema\" CASCADE"; pg_restore --no-owner --no-privileges --exit-on-error -U "$POSTGRES_USER" -d "$POSTGRES_DB"' sh "{{schema}}" < "{{input}}"
+    @echo "Restored {{input}} into schema {{schema}}"
 
 # Create missing local session schema objects 创建缺失的本地 session schema/table
 db-session-ensure:
