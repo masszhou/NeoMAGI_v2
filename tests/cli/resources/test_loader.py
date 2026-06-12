@@ -6,6 +6,16 @@ import json
 from cli.resources.loader import ResourceExtensionPaths, ResourceLoader
 
 
+def _workspace_skills(loader: ResourceLoader) -> list:
+    """Skills excluding the package-shipped system skills (ADR-0029)."""
+
+    return [
+        skill
+        for skill in loader.get_skills()
+        if skill.source is None or skill.source.scope != "system"
+    ]
+
+
 def test_loader_discovers_project_resources_and_context_order(tmp_path) -> None:
     agent_dir = tmp_path / "home" / ".magipi" / "agent"
     cwd = tmp_path / "repo" / "sub"
@@ -28,7 +38,7 @@ def test_loader_discovers_project_resources_and_context_order(tmp_path) -> None:
     asyncio.run(loader.reload())
 
     assert [prompt.name for prompt in loader.get_prompts()] == ["review"]
-    assert [skill.name for skill in loader.get_skills()] == ["test-skill"]
+    assert [skill.name for skill in _workspace_skills(loader)] == ["test-skill"]
     assert [extension.name for extension in loader.get_extensions()] == ["demo"]
     assert [file.content for file in loader.get_context_files()] == [
         "global context",
@@ -61,7 +71,7 @@ def test_loader_extend_resources_is_idempotent_and_reports_collision(tmp_path) -
     loader.extend_resources(paths)
     asyncio.run(loader.reload())
 
-    assert loader.get_skills() == ()
+    assert _workspace_skills(loader) == []
     assert any(
         "extension-contributed skill paths are ignored" in diagnostic.message
         for diagnostic in loader.snapshot.diagnostics
@@ -92,8 +102,8 @@ def test_loader_only_exposes_workspace_magipi_skills(tmp_path) -> None:
     loader = ResourceLoader(cwd=cwd, agent_dir=agent_dir)
     asyncio.run(loader.reload())
 
-    assert [skill.name for skill in loader.get_skills()] == ["workspace"]
-    skill = loader.get_skills()[0]
+    assert [skill.name for skill in _workspace_skills(loader)] == ["workspace"]
+    skill = _workspace_skills(loader)[0]
     assert skill.display_location == ".magipi/skills/workspace/SKILL.md"
 
 
@@ -112,7 +122,7 @@ def test_loader_rejects_magipi_skill_symlink_outside_workspace(tmp_path) -> None
     loader = ResourceLoader(cwd=cwd, agent_dir=tmp_path / "agent")
     asyncio.run(loader.reload())
 
-    assert loader.get_skills() == ()
+    assert _workspace_skills(loader) == []
     assert any("resolves outside workspace .magipi/skills" in d.message for d in loader.snapshot.diagnostics)
 
 
@@ -133,7 +143,7 @@ def test_loader_ignores_settings_skill_paths(tmp_path) -> None:
     loader = ResourceLoader(cwd=cwd, agent_dir=tmp_path / "agent", explicit_skills=(explicit,))
     asyncio.run(loader.reload())
 
-    assert loader.get_skills() == ()
+    assert _workspace_skills(loader) == []
     messages = [diagnostic.message for diagnostic in loader.snapshot.diagnostics]
     assert any("resources.skills is ignored" in message for message in messages)
     assert any("explicit skill paths are ignored" in message for message in messages)

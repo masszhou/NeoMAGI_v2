@@ -57,6 +57,7 @@ class ResourceProductSettings(BaseModel):
     prompts: list[str] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     enable_skill_commands: bool = Field(default=True, alias="enableSkillCommands")
+    system_skills: bool = Field(default=True, alias="systemSkills")
     skill_env: dict[str, "SkillEnvSettings"] = Field(default_factory=dict, alias="skillEnv")
 
     @field_validator("packages", "extensions", "skills", "prompts", "themes", mode="before")

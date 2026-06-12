@@ -216,3 +216,6 @@ CLAUDE.md
 AGENTS.md
 .claude
 .DS_Store
+
+# magipi workspace runtime area (host-managed .system skills sync, ADR-0029)
+/.magipi/

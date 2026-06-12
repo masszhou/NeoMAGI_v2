@@ -37,6 +37,7 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 | 0026 | Keep P3 attempts inside one TaskRun session | accepted | 2026-05-29 | `design_docs/decisions/0026-keep-p3-attempts-inside-one-taskrun-session.md` |
 | 0027 | Pilot-informed auto research workflow layer | accepted | 2026-06-04 | `design_docs/decisions/0027-pilot-informed-auto-research-workflow-layer.md` |
 | 0028 | Generalize OAuth sync-refresh dispatch (GitHub Copilot) | accepted | 2026-06-10 | `design_docs/decisions/0028-generalize-oauth-sync-refresh-dispatch.md` |
+| 0029 | Package-shipped system skills | accepted | 2026-06-12 | `design_docs/decisions/0029-package-shipped-system-skills.md` |
 
 ## Amendments
 
@@ -45,3 +46,4 @@ doc_id_assigned_at: 2026-04-07T18:16:50+02:00
 - 2026-05-10: ADR-0019 amended by ADR-0020: the default user database config file is `secrets/database.env`, and the surrounding NeoMAGI user config layout is defined by ADR-0020.
 - 2026-05-10: ADR-0020 amended by ADR-0021: only workspace materialized skills are active runtime skills; skill pool/global skill roots are not provider-visible; `/skill:<name>` is a development/debug shortcut.
 - 2026-05-12: ADR-0018 amended by ADR-0022: the Pi-compatible agent shell source directory is `packages/magipi/`; CLI/import/runtime behavior remains unchanged.
+- 2026-06-12: ADR-0021 amended by ADR-0029: package-shipped system skills are host-materialized into workspace `.magipi/skills/.system/` at each resource snapshot; the workspace-materialized-only contract itself is unchanged.

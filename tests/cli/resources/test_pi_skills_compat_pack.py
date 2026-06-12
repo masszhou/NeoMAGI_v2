@@ -37,7 +37,12 @@ def test_resource_loader_discovers_generated_nested_pack(tmp_path) -> None:
     )
     asyncio.run(loader.reload())
 
-    assert [skill.name for skill in loader.get_skills()] == EXPECTED_SKILLS
+    workspace_skills = [
+        skill.name
+        for skill in loader.get_skills()
+        if skill.source is None or skill.source.scope != "system"
+    ]
+    assert workspace_skills == EXPECTED_SKILLS
     assert not [diagnostic for diagnostic in loader.snapshot.diagnostics if diagnostic.type == "error"]
 
 

@@ -25,6 +25,7 @@ class ResourceSettings:
     prompts: tuple[str, ...] = ()
     themes: tuple[str, ...] = ()
     enable_skill_commands: bool | None = None
+    system_skills: bool = True
     skill_env: dict[str, Any] = field(default_factory=dict)
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -78,6 +79,7 @@ def _settings_from_product(resources: Any) -> ResourceSettings:
         "prompts",
         "themes",
         "enableSkillCommands",
+        "systemSkills",
         "skillEnv",
     }
     return ResourceSettings(
@@ -87,6 +89,7 @@ def _settings_from_product(resources: Any) -> ResourceSettings:
         prompts=tuple(resources.prompts),
         themes=tuple(resources.themes),
         enable_skill_commands=resources.enable_skill_commands,
+        system_skills=resources.system_skills,
         skill_env=dumped.get("skillEnv") if isinstance(dumped.get("skillEnv"), dict) else {},
         extras={key: value for key, value in dumped.items() if key not in known},
     )

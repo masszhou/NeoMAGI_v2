@@ -15,6 +15,7 @@ from .settings import ResourceSettings, load_resource_settings
 from .skills import Skill, SkillSearchRoot, load_skills
 from .source_info import ResourceInfo, SourceInfo
 from .system_prompt import load_prompt_file
+from .system_skills import sync_system_skills, workspace_system_skills_dir
 from .themes import ThemeResource, load_themes
 
 
@@ -105,6 +106,7 @@ class ResourceLoader:
         )
         self._settings = loaded_settings.settings
         diagnostics = list(loaded_settings.diagnostics)
+        diagnostics.extend(sync_system_skills(self.cwd, enabled=self._settings.system_skills))
         extensions = self._discover_extensions(diagnostics)
         diagnostics.extend(self._inactive_skill_source_diagnostics())
         skills = load_skills(self._skill_roots())
@@ -150,7 +152,7 @@ class ResourceLoader:
 
     def _skill_roots(self) -> list[SkillSearchRoot]:
         root = self.cwd / ".magipi" / "skills"
-        return [
+        roots = [
             SkillSearchRoot(
                 root,
                 allow_root_markdown=True,
@@ -159,6 +161,20 @@ class ResourceLoader:
                 display_root=self.cwd,
             )
         ]
+        if self._settings.system_skills:
+            # The project root walker skips dot-directories, so the host-managed
+            # `.system` materialization area (ADR-0029) needs its own root. It comes
+            # after the project root: a same-name workspace skill wins the collision.
+            system_root = workspace_system_skills_dir(self.cwd)
+            roots.append(
+                SkillSearchRoot(
+                    system_root,
+                    source=SourceInfo("system", "auto", system_root, self.cwd / ".magipi", 2),
+                    containment_root=system_root,
+                    display_root=self.cwd,
+                )
+            )
+        return roots
 
     def _prompt_paths(self) -> list[Path]:
         return [

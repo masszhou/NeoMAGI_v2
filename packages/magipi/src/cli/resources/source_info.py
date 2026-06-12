@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-ResourceScope = Literal["project", "user", "temporary", "package", "explicit"]
+ResourceScope = Literal["project", "user", "temporary", "package", "explicit", "system"]
 ResourceOrigin = Literal["settings", "auto", "extension", "package", "explicit"]
 
 
