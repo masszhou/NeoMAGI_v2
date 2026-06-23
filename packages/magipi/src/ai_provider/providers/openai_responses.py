@@ -190,6 +190,14 @@ async def _parse_response_events(
         "tool_indexes": {},
         "tool_json": {},
         "stop_reason": "stop",
+        # Tracks the call_id of the most recently opened tool call.  Some
+        # proxies (e.g. GitHub Copilot Business) send a unique encrypted token
+        # as ``item_id`` in every ``function_call_arguments.delta`` event
+        # instead of a stable item identifier, so the delta cannot be matched
+        # against ``tool_indexes`` by value.  Falling back to the last opened
+        # call handles the common case where only one tool call is in-flight at
+        # a time (the proxy serialises them).
+        "last_tool_call_id": None,
     }
     handlers = {
         "response.created": _handle_response_created,
@@ -252,6 +260,7 @@ def _start_response_tool_call(
         if alias:
             state["tool_indexes"][alias] = index
             state["tool_json"][alias] = arguments
+    state["last_tool_call_id"] = call_id or item_id or None
     partial.content.append(
         ToolCall(
             id=call_id,
@@ -302,7 +311,20 @@ def _handle_response_tool_delta(
 ) -> None:
     call_id = str(event_value(event, "call_id") or event_value(event, "item_id"))
     if call_id not in state["tool_indexes"]:
-        _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
+        # GitHub Copilot Business sends a unique encrypted token as ``item_id``
+        # in every delta event instead of a stable item identifier.  For this
+        # provider only, fall back to the most recently opened tool call rather
+        # than creating a ghost slot.  Standard OpenAI keeps the original
+        # behaviour (create a new slot) so unexpected call_ids still surface.
+        fallback = state.get("last_tool_call_id")
+        if (
+            model.provider == GITHUB_COPILOT_PROVIDER_ID
+            and fallback
+            and fallback in state["tool_indexes"]
+        ):
+            call_id = str(fallback)
+        else:
+            _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
     text = event_value(event, "delta", "") or ""
     index = state["tool_indexes"][call_id]
     for alias in _tool_aliases_for_index(state, index):
@@ -325,7 +347,16 @@ def _handle_response_tool_done(
 ) -> None:
     call_id = str(event_value(event, "call_id") or event_value(event, "item_id"))
     if call_id not in state["tool_indexes"]:
-        _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
+        # Same Copilot Business fallback as the delta handler.
+        fallback = state.get("last_tool_call_id")
+        if (
+            model.provider == GITHUB_COPILOT_PROVIDER_ID
+            and fallback
+            and fallback in state["tool_indexes"]
+        ):
+            call_id = str(fallback)
+        else:
+            _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
     arguments = event_value(event, "arguments", "") or ""
     index = state["tool_indexes"][call_id]
     previous = state["tool_json"].get(call_id, "")
