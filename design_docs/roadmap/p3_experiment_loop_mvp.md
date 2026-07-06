@@ -31,6 +31,10 @@ doc_id_assigned_at: 2026-05-28T21:16:23+02:00
   - `dev_docs/discussions/p3_m5_parameter_golf_smoke_revision.md`
   - `dev_docs/discussions/p3_m5_autonomous_research_workflow_retro.md`
   - `dev_docs/user_tests/p3_m6_magipi_autonomous_research_acceptance_runbook.md`
+  - `dev_docs/logs/p3_m6_magipi_autonomous_research_findings.md`
+    （P3-M6 于 2026-07-06 验收通过：magipi 自主完成 audited two-attempt A6000
+    cycle，informed-iteration gate 满足，终局决策 continue；M4 Renderer 与
+    M7 收口仍待执行）
 - Discussion stage: accepted，第一层（用户需求口径），不含 architecture / implementation。
 
 ### 2026-05-31 执行顺序修订

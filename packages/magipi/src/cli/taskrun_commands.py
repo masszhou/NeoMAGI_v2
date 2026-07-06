@@ -38,6 +38,12 @@ from cli.core.taskrun_parameter_golf_loop import (
 )
 from cli.core.taskrun_projection import task_event_to_dict
 from cli.core.taskrun_runner import TaskRunHeadlessRunner
+from cli.taskrun_research_commands import (
+    ResearchCommandResult,
+    add_research_command,
+    execute_research_command,
+    print_research_result,
+)
 from cli.core.taskrun_service import (
     TaskRunResult,
     TaskRunRuntimeOptions,
@@ -80,6 +86,7 @@ TaskRunCommandResult = (
     | TaskRunNextResult
     | TaskRunTrajectoryResult
     | TaskRunEventsResult
+    | ResearchCommandResult
 )
 
 
@@ -184,6 +191,7 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
     _add_run_command(sub)
     _add_attempt_command(sub)
     _add_attempt_loop_command(sub)
+    add_research_command(sub)
     _add_cancel_command(sub)
     _add_close_command(sub)
     return parser
@@ -545,6 +553,8 @@ def _dispatch(
     runner: TaskRunHeadlessRunner | None,
 ) -> TaskRunCommandResult:
     match args.cmd:
+        case "research":
+            return execute_research_command(args, service, cwd)
         case "start":
             goal = " ".join(args.goal).strip()
             return service.start(goal, cwd, permission_profile=permission_profile)
@@ -751,6 +761,9 @@ def _print_result(
     *,
     include_summary: bool,
 ) -> None:
+    if isinstance(result, ResearchCommandResult):
+        print_research_result(result)
+        return
     if isinstance(result, TaskRunListResult):
         _print_list_result(result)
         return
