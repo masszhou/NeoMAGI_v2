@@ -190,6 +190,15 @@ async def _parse_response_events(
         "tool_indexes": {},
         "tool_json": {},
         "stop_reason": "stop",
+        # Maps output_index (int) → call_id (str) for tool calls registered via
+        # response.output_item.added.  Some proxies (e.g. GitHub Copilot
+        # Business) send a unique encrypted token as ``item_id`` in every
+        # ``function_call_arguments.delta`` event instead of a stable item
+        # identifier, so deltas cannot be matched against ``tool_indexes`` by
+        # value.  Using output_index — a stable positional field present in
+        # both the added and delta events — correctly routes each delta even
+        # when multiple tool calls are announced before their deltas arrive.
+        "output_index_to_call_id": {},
     }
     handlers = {
         "response.created": _handle_response_created,
@@ -236,6 +245,10 @@ def _handle_response_output_item_added(
         state["text_phase"] = event_value(item, "phase")
     elif event_value(item, "type") == "function_call":
         _start_response_tool_call(stream, partial, item, state)
+        output_index = event_value(event, "output_index")
+        call_id = str(event_value(item, "call_id") or event_value(item, "id") or "")
+        if output_index is not None and call_id:
+            state["output_index_to_call_id"][output_index] = call_id
 
 
 def _start_response_tool_call(
@@ -302,7 +315,20 @@ def _handle_response_tool_delta(
 ) -> None:
     call_id = str(event_value(event, "call_id") or event_value(event, "item_id"))
     if call_id not in state["tool_indexes"]:
-        _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
+        # GitHub Copilot Business sends a unique encrypted token as ``item_id``
+        # in every delta event instead of a stable item identifier.  Look up
+        # the call_id by output_index, which is stable and present in both
+        # response.output_item.added and response.function_call_arguments.delta.
+        output_index = event_value(event, "output_index")
+        fallback = state["output_index_to_call_id"].get(output_index) if output_index is not None else None
+        if (
+            model.provider == GITHUB_COPILOT_PROVIDER_ID
+            and fallback
+            and fallback in state["tool_indexes"]
+        ):
+            call_id = str(fallback)
+        else:
+            _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
     text = event_value(event, "delta", "") or ""
     index = state["tool_indexes"][call_id]
     for alias in _tool_aliases_for_index(state, index):
@@ -325,7 +351,17 @@ def _handle_response_tool_done(
 ) -> None:
     call_id = str(event_value(event, "call_id") or event_value(event, "item_id"))
     if call_id not in state["tool_indexes"]:
-        _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
+        # Same Copilot Business fallback as the delta handler.
+        output_index = event_value(event, "output_index")
+        fallback = state["output_index_to_call_id"].get(output_index) if output_index is not None else None
+        if (
+            model.provider == GITHUB_COPILOT_PROVIDER_ID
+            and fallback
+            and fallback in state["tool_indexes"]
+        ):
+            call_id = str(fallback)
+        else:
+            _start_response_tool_call(stream, partial, {"id": call_id, "call_id": call_id}, state)
     arguments = event_value(event, "arguments", "") or ""
     index = state["tool_indexes"][call_id]
     previous = state["tool_json"].get(call_id, "")

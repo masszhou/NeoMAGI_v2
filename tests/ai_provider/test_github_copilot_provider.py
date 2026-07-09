@@ -28,7 +28,7 @@ def test_copilot_models_resolve_to_correct_api_family() -> None:
     assert completions.auth_channel == "oauth"
     assert get_model("github-copilot", "gpt-4o").api == "openai-completions"
 
-    responses = parse_model_ref("github-copilot/oauth/gpt-5.1")
+    responses = parse_model_ref("github-copilot/oauth/gpt-5.4-mini")
     assert get_model("github-copilot", responses.model_id).api == "openai-responses"
 
 
@@ -45,7 +45,7 @@ def test_resolve_provider_auth_derives_base_url_from_token_proxy_ep() -> None:
 
 
 def test_resolve_provider_auth_falls_back_to_individual_without_proxy_ep() -> None:
-    model = resolve_model("github-copilot/oauth/gpt-5.1")
+    model = resolve_model("github-copilot/oauth/gpt-5.4-mini")
 
     auth = resolve_provider_auth(model, StreamOptions(api_key="opaque-token"))
 
@@ -149,7 +149,7 @@ def test_completions_copilot_request_carries_static_and_dynamic_headers() -> Non
 
 
 def test_responses_copilot_request_marks_agent_initiator_on_assistant_turn() -> None:
-    model = resolve_model("github-copilot/oauth/gpt-5.1")
+    model = resolve_model("github-copilot/oauth/gpt-5.4-mini")
 
     _payload, headers = build_openai_responses_params(model, _agent_last_context(), StreamOptions())
 
@@ -172,7 +172,7 @@ def test_non_copilot_request_has_no_copilot_dynamic_headers() -> None:
 def test_responses_copilot_skips_effort_none_reasoning() -> None:
     # pi-mono never sends reasoning.effort="none" to github-copilot; gpt-5.x
     # Copilot would otherwise be rejected on the default (reasoning_disabled) path.
-    model = resolve_model("github-copilot/oauth/gpt-5.1")
+    model = resolve_model("github-copilot/oauth/gpt-5.4-mini")
 
     payload, _headers = build_openai_responses_params(
         model, _user_context(), StreamOptions(metadata={"reasoning_disabled": True})
